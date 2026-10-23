@@ -1,5 +1,7 @@
 //! The engine: owns settings, per-site checker workers and recorder processes.
 
+// Any changes to the engine should first be approved by the owner.
+
 mod checker;
 mod recorder;
 mod sampler;

@@ -27,7 +27,7 @@ pub fn install_event_stream(rx: UnboundedReceiver<Event>) {
 
 pub fn run(client: EngineClient) -> iced::Result {
     iced::application(move || App::new(client.clone()), App::update, App::view)
-        .title("Stream Recorder")
+        .title("jj-dlp")
         .subscription(App::subscription)
         .theme(App::theme)
         .window_size((1180.0, 820.0))
@@ -38,6 +38,7 @@ pub fn run(client: EngineClient) -> iced::Result {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Monitor,
+    Processes,
     Sites,
     Log,
 }
@@ -97,6 +98,7 @@ pub enum Msg {
     SetTab(Tab),
     ThemeChosen(ThemeKind),
     OpenConfigDir,
+    OpenOutputDir(SiteId),
     NewStreamerName(SiteId, String),
     NewStreamerUrl(SiteId, String),
     AddStreamer(SiteId),
@@ -189,6 +191,11 @@ impl App {
                 self.client.send(Command::SetTheme(k.name().to_string()));
             }
             Msg::OpenConfigDir => self.client.send(Command::OpenConfigDir),
+            Msg::OpenOutputDir(site_id) => {
+                let site_dir = self.settings.sites.iter().find(|x| x.id == site_id).map(|x| x.output_dir.trim());
+                let dir = site_dir.filter(|d| !d.is_empty()).unwrap_or(&self.settings.default_output_dir);
+                let _ = open::that_detached(dir);
+            }
             Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
             Msg::NewStreamerUrl(id, v) => self.new_streamer.entry(id).or_default().1 = v,
             Msg::AddStreamer(id) => {

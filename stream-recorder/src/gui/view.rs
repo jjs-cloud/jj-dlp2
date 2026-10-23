@@ -3,7 +3,7 @@
 use super::skin::{self, pulse, BtnKind, Skin, ThemeKind};
 use super::{App, DraftField, Msg, Preset, SiteDraft, Tab};
 use crate::api::*;
-use iced::widget::text::IntoFragment;
+use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, text_input, toggler, Column, Space, Text,
 };
@@ -64,6 +64,7 @@ impl App {
         let s = self.skin();
         let body: Element<'_, Msg> = match self.tab {
             Tab::Monitor => self.monitor(s),
+            Tab::Processes => self.processes(s),
             Tab::Sites => self.sites(s),
             Tab::Log => self.log_view(s),
         };
@@ -81,7 +82,7 @@ impl App {
         let p = pulse(self.phase);
         let title = row![
             dot(s, s.accent, 0.4 + 0.6 * p),
-            iced::widget::text("STREAM RECORDER").font(s.font).size(22).color(s.accent2),
+            iced::widget::text("jj-dlp").font(s.font).size(22).color(s.accent2),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
@@ -114,7 +115,14 @@ impl App {
                 .padding([7.0, 18.0])
                 .style(skin::btn(s, kind))
         };
-        row![tab("Monitor", Tab::Monitor), tab("Sites", Tab::Sites), tab("Log", Tab::Log)].spacing(8).into()
+        row![
+            tab("Monitor", Tab::Monitor),
+            tab("Processes", Tab::Processes),
+            tab("Sites", Tab::Sites),
+            tab("Log", Tab::Log)
+        ]
+        .spacing(8)
+        .into()
     }
 
     fn section_title<'a>(&self, s: Skin, label: &'a str) -> Element<'a, Msg> {
@@ -123,19 +131,7 @@ impl App {
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
-        col = col.push(self.section_title(s, "RECORDINGS"));
-        if self.processes.is_empty() {
-            col = col.push(
-                container(muted(&s, "No active recordings. Streams are recorded automatically when they go live."))
-                    .padding(16)
-                    .width(Length::Fill)
-                    .style(skin::card(s, None)),
-            );
-        }
-        for p in self.processes.values() {
-            col = col.push(self.process_card(s, p));
-        }
-        col = col.push(Space::new().height(4)).push(self.section_title(s, "STREAMERS"));
+        col = col.push(self.section_title(s, "STREAMERS"));
         if self.settings.sites.is_empty() {
             col = col.push(
                 container(
@@ -156,6 +152,23 @@ impl App {
         }
         for site in &self.settings.sites {
             col = col.push(self.site_block(s, site));
+        }
+        scrollable(col).height(Length::Fill).into()
+    }
+
+    fn processes(&self, s: Skin) -> Element<'_, Msg> {
+        let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
+        col = col.push(self.section_title(s, "PROCESSES"));
+        if self.processes.is_empty() {
+            col = col.push(
+                container(muted(&s, "No active recordings. Streams are recorded automatically when they go live."))
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(skin::card(s, None)),
+            );
+        }
+        for p in self.processes.values() {
+            col = col.push(self.process_card(s, p));
         }
         scrollable(col).height(Length::Fill).into()
     }
@@ -218,9 +231,16 @@ impl App {
         let mut card = Column::new().spacing(10).push(top).push(body);
         if !p.last_line.is_empty() {
             card = card.push(
-                container(iced::widget::text(clip(&p.last_line, 180)).font(s.font).size(12).color(s.text))
-                    .padding([6.0, 10.0])
-                    .width(Length::Fill)
+                container(
+                    iced::widget::text(clip(&p.last_line, 180))
+                        .font(s.font)
+                        .size(12)
+                        .color(s.text)
+                        .wrapping(Wrapping::None),
+                )
+                .clip(true)
+                .padding([6.0, 10.0])
+                .width(Length::Fill)
                     .style(skin::inset(s)),
             );
         }
@@ -296,10 +316,6 @@ impl App {
         };
         let glow = if status.live || status.recording { 0.4 + 0.6 * ph } else { 0.0 };
         let id = st.id;
-        let checked = match status.last_checked {
-            Some(at) => format!("{}s ago", self.now.saturating_sub(at)),
-            None => "not checked".into(),
-        };
         let mut chips = row![chip(s, label, color)].spacing(6);
         if !st.enabled {
             chips = chips.push(chip(s, "PAUSED", s.warn));
@@ -313,8 +329,11 @@ impl App {
             .spacing(2)
             .width(Length::Fill),
             chips,
-            container(muted(&s, checked)).width(84),
             toggler(st.enabled).label("Record").on_toggle(move |v| Msg::ToggleStreamer(id, v)).text_size(12),
+            button(t(&s, "Open").size(12))
+                .on_press(Msg::OpenOutputDir(st.site_id))
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
             button(t(&s, "Remove").size(12))
                 .on_press(Msg::RemoveStreamer(id))
                 .padding([5.0, 10.0])

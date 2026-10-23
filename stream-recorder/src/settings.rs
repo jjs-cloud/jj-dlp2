@@ -5,7 +5,7 @@ use directories::{ProjectDirs, UserDirs};
 use std::path::PathBuf;
 
 pub fn config_dir() -> PathBuf {
-    ProjectDirs::from("", "", "stream-recorder")
+    ProjectDirs::from("", "", "jj-dlp")
         .map(|d| d.config_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -16,7 +16,7 @@ pub fn settings_path() -> PathBuf {
 
 fn default_output_dir() -> String {
     UserDirs::new()
-        .and_then(|u| u.video_dir().map(|p| p.join("stream-recorder")))
+        .and_then(|u| u.video_dir().map(|p| p.join("jj-dlp")))
         .unwrap_or_else(|| PathBuf::from("recordings"))
         .to_string_lossy()
         .into_owned()
