@@ -1,9 +1,11 @@
-//! The iced GUI. It only talks to the engine through `crate::api`.
+//! The iced GUI. It only talks to the policy layer through `crate::policy`.
 
+mod prefs;
 mod skin;
 mod view;
 
 use crate::api::*;
+use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent};
 use iced::futures::{SinkExt, Stream};
 use iced::{Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
@@ -18,14 +20,14 @@ pub const DEFAULT_SIM_ARGS: &str =
     "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s|%(id)s|%(title)s\" {urls}";
 pub const DEFAULT_DL_ARGS: &str = "--newline --no-colors -o \"{name} - %(title)s [%(id)s].%(ext)s\" {url}";
 
-static EVENTS: Mutex<Option<UnboundedReceiver<Event>>> = Mutex::new(None);
+static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
 
-/// Hands the engine's event stream to the GUI subscription.
-pub fn install_event_stream(rx: UnboundedReceiver<Event>) {
+/// Hands the policy event stream to the GUI subscription.
+pub fn install_event_stream(rx: UnboundedReceiver<PolicyEvent>) {
     *EVENTS.lock().unwrap() = Some(rx);
 }
 
-pub fn run(client: EngineClient) -> iced::Result {
+pub fn run(client: PolicyClient) -> iced::Result {
     iced::application(move || App::new(client.clone()), App::update, App::view)
         .title("jj-dlp")
         .subscription(App::subscription)
@@ -93,7 +95,7 @@ pub enum DraftField {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
-    Engine(Event),
+    Policy(PolicyEvent),
     Tick(#[allow(dead_code)] Instant),
     SetTab(Tab),
     ThemeChosen(ThemeKind),
@@ -121,7 +123,7 @@ pub struct CheckInfo {
 }
 
 pub struct App {
-    client: EngineClient,
+    client: PolicyClient,
     settings: Settings,
     kind: ThemeKind,
     tab: Tab,
@@ -137,12 +139,12 @@ pub struct App {
 }
 
 impl App {
-    fn new(client: EngineClient) -> (App, Task<Msg>) {
-        client.send(Command::RequestSnapshot);
+    fn new(client: PolicyClient) -> (App, Task<Msg>) {
+        client.send(PolicyCommand::RequestSnapshot);
         let app = App {
             client,
             settings: crate::settings::default_settings(),
-            kind: ThemeKind::Neon,
+            kind: prefs::load_theme(),
             tab: Tab::Monitor,
             statuses: HashMap::new(),
             checks: HashMap::new(),
@@ -180,7 +182,7 @@ impl App {
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
-            Msg::Engine(ev) => self.on_event(ev),
+            Msg::Policy(ev) => self.on_event(ev),
             Msg::Tick(_) => {
                 self.phase = (self.phase + 0.04) % 1.0;
                 self.now = now_secs();
@@ -188,29 +190,25 @@ impl App {
             Msg::SetTab(t) => self.tab = t,
             Msg::ThemeChosen(k) => {
                 self.kind = k;
-                self.client.send(Command::SetTheme(k.name().to_string()));
+                prefs::save_theme(k);
             }
-            Msg::OpenConfigDir => self.client.send(Command::OpenConfigDir),
-            Msg::OpenOutputDir(site_id) => {
-                let site_dir = self.settings.sites.iter().find(|x| x.id == site_id).map(|x| x.output_dir.trim());
-                let dir = site_dir.filter(|d| !d.is_empty()).unwrap_or(&self.settings.default_output_dir);
-                let _ = open::that_detached(dir);
-            }
+            Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
+            Msg::OpenOutputDir(site_id) => self.client.send(PolicyCommand::OpenOutputDir(site_id)),
             Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
             Msg::NewStreamerUrl(id, v) => self.new_streamer.entry(id).or_default().1 = v,
             Msg::AddStreamer(id) => {
                 if let Some((name, url)) = self.new_streamer.remove(&id) {
                     if !url.trim().is_empty() {
-                        self.client.send(Command::AddStreamer { site_id: id, name, url });
+                        self.client.send(PolicyCommand::AddStreamer { site_id: id, name, url });
                     } else {
                         self.new_streamer.insert(id, (name, url));
                     }
                 }
             }
-            Msg::RemoveStreamer(id) => self.client.send(Command::RemoveStreamer(id)),
-            Msg::ToggleStreamer(id, enabled) => self.client.send(Command::SetStreamerEnabled { id, enabled }),
-            Msg::AddSite(preset) => self.client.send(Command::AddSite(new_site(preset))),
-            Msg::RemoveSite(id) => self.client.send(Command::RemoveSite(id)),
+            Msg::RemoveStreamer(id) => self.client.send(PolicyCommand::RemoveStreamer(id)),
+            Msg::ToggleStreamer(id, enabled) => self.client.send(PolicyCommand::SetStreamerEnabled { id, enabled }),
+            Msg::AddSite(preset) => self.client.send(PolicyCommand::AddSite(new_site(preset))),
+            Msg::RemoveSite(id) => self.client.send(PolicyCommand::RemoveSite(id)),
             Msg::Draft(id, field) => {
                 if let Some(d) = self.drafts.get_mut(&id) {
                     match field {
@@ -237,7 +235,7 @@ impl App {
             Msg::SaveSite(id) => {
                 if let Some(d) = self.drafts.get(&id) {
                     if let Some(interval) = d.interval_secs() {
-                        self.client.send(Command::UpdateSite(Site {
+                        self.client.send(PolicyCommand::UpdateSite(Site {
                             id,
                             name: d.name.trim().to_string(),
                             exe_path: d.exe.trim().to_string(),
@@ -256,47 +254,51 @@ impl App {
                 }
             }
             Msg::GlobalOutEdit(v) => self.global_out = v,
-            Msg::GlobalOutSave => self.client.send(Command::SetGlobalOutputDir(self.global_out.trim().to_string())),
+            Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
         }
         Task::none()
     }
 
-    fn on_event(&mut self, ev: Event) {
+    fn on_event(&mut self, ev: PolicyEvent) {
         match ev {
-            Event::Snapshot(s) => {
-                self.kind = ThemeKind::from_name(&s.theme);
-                if self.global_out.is_empty() || self.global_out == self.settings.default_output_dir {
-                    self.global_out = s.default_output_dir.clone();
+            PolicyEvent::Settings(s) => self.on_settings(s),
+            PolicyEvent::Log(line) => self.push_log(line),
+            PolicyEvent::Engine(ev) => match ev {
+                Event::StreamerStatus { id, status } => {
+                    self.statuses.insert(id, status);
                 }
-                self.drafts.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
-                for site in &s.sites {
-                    let old = self.settings.sites.iter().find(|o| o.id == site.id);
-                    let editing = match (self.drafts.get(&site.id), old) {
-                        (Some(d), Some(old)) => *d != SiteDraft::from_site(old),
-                        _ => false,
-                    };
-                    if !editing {
-                        self.drafts.insert(site.id, SiteDraft::from_site(site));
-                    }
+                Event::SiteChecked { id, at, ok, message } => {
+                    self.checks.insert(id, CheckInfo { at, ok, message });
                 }
-                self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
-                self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
-                self.settings = s;
-            }
-            Event::StreamerStatus { id, status } => {
-                self.statuses.insert(id, status);
-            }
-            Event::SiteChecked { id, at, ok, message } => {
-                self.checks.insert(id, CheckInfo { at, ok, message });
-            }
-            Event::ProcessUpdate(p) => {
-                self.processes.insert(p.id, p);
-            }
-            Event::ProcessRemoved(id) => {
-                self.processes.remove(&id);
-            }
-            Event::Log(line) => self.push_log(line),
+                Event::ProcessUpdate(p) => {
+                    self.processes.insert(p.id, p);
+                }
+                Event::ProcessRemoved(id) => {
+                    self.processes.remove(&id);
+                }
+                Event::Log(line) => self.push_log(line),
+            },
         }
+    }
+
+    fn on_settings(&mut self, s: Settings) {
+        if self.global_out.is_empty() || self.global_out == self.settings.default_output_dir {
+            self.global_out = s.default_output_dir.clone();
+        }
+        self.drafts.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
+        for site in &s.sites {
+            let old = self.settings.sites.iter().find(|o| o.id == site.id);
+            let editing = match (self.drafts.get(&site.id), old) {
+                (Some(d), Some(old)) => *d != SiteDraft::from_site(old),
+                _ => false,
+            };
+            if !editing {
+                self.drafts.insert(site.id, SiteDraft::from_site(site));
+            }
+        }
+        self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
+        self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
+        self.settings = s;
     }
 }
 
@@ -322,7 +324,7 @@ fn engine_stream() -> impl Stream<Item = Msg> {
         let rx = EVENTS.lock().unwrap().take();
         if let Some(mut rx) = rx {
             while let Some(ev) = rx.recv().await {
-                if out.send(Msg::Engine(ev)).await.is_err() {
+                if out.send(Msg::Policy(ev)).await.is_err() {
                     return;
                 }
             }

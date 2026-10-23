@@ -1,4 +1,4 @@
-//! Public API between the GUI and the engine: commands in, events out.
+//! Engine API: commands in, events out.
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
@@ -55,36 +55,23 @@ pub struct Streamer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub next_id: u64,
-    pub theme: String,
     pub default_output_dir: String,
     pub sites: Vec<Site>,
     pub streamers: Vec<Streamer>,
 }
 
-/// Fields the GUI supplies when creating a site (the engine assigns the id).
-#[derive(Debug, Clone, PartialEq)]
-pub struct NewSite {
-    pub name: String,
-    pub exe_path: String,
-    pub interval_secs: u64,
-    pub check_mode: CheckMode,
-    pub checker_args: String,
-    pub downloader_args: String,
-    pub output_dir: String,
-}
-
 #[derive(Debug, Clone)]
 pub enum Command {
-    RequestSnapshot,
-    AddSite(NewSite),
-    UpdateSite(Site),
-    RemoveSite(SiteId),
-    AddStreamer { site_id: SiteId, name: String, url: String },
-    RemoveStreamer(StreamerId),
+    /// Re-reads settings.json and applies it; keeps the current settings if the file is invalid.
+    Reload,
+    /// Starts or stops recording a streamer without changing settings.json.
     SetStreamerEnabled { id: StreamerId, enabled: bool },
-    SetGlobalOutputDir(String),
-    SetTheme(String),
-    OpenConfigDir,
+    /// Replaces a site's checker_args until cleared with `None`.
+    #[allow(dead_code)]
+    SetCheckerOverride { site_id: SiteId, args: Option<String> },
+    /// Replaces a streamer's downloader_args for new recordings until cleared with `None`.
+    #[allow(dead_code)]
+    SetDownloaderOverride { streamer_id: StreamerId, args: Option<String> },
     /// Stops all recorders gracefully, then ends the engine.
     Shutdown,
 }
@@ -134,7 +121,6 @@ pub struct ProcessInfo {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    Snapshot(Settings),
     StreamerStatus { id: StreamerId, status: StreamerStatus },
     SiteChecked { id: SiteId, at: u64, ok: bool, message: String },
     ProcessUpdate(ProcessInfo),
@@ -142,7 +128,7 @@ pub enum Event {
     Log(String),
 }
 
-/// Cheap handle the GUI uses to send commands to the engine.
+/// Cheap handle for sending commands to the engine.
 #[derive(Clone)]
 pub struct EngineClient {
     tx: UnboundedSender<Command>,

@@ -11,7 +11,7 @@ use crate::api::*;
 use crate::settings;
 use checker::{CheckReport, LiveEntry, SiteSnapshot, SiteWorker};
 use recorder::{RecorderHandle, RecorderSpec, SharedTracked};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -71,6 +71,9 @@ struct Engine {
     states: HashMap<StreamerId, StreamState>,
     tracked: SharedTracked,
     shutting_down: bool,
+    next_recorder_id: RecorderId,
+    checker_overrides: HashMap<SiteId, String>,
+    downloader_overrides: HashMap<StreamerId, String>,
 }
 
 impl Engine {
@@ -86,13 +89,15 @@ impl Engine {
             states: HashMap::new(),
             tracked: Arc::new(Mutex::new(HashMap::new())),
             shutting_down: false,
+            next_recorder_id: 1,
+            checker_overrides: HashMap::new(),
+            downloader_overrides: HashMap::new(),
         }
     }
 
     async fn run(mut self, mut cmd_rx: UnboundedReceiver<Command>) {
         let mut internal_rx = self.internal_rx.take().expect("internal rx");
         sampler::spawn_sampler(self.tracked.clone(), self.events.clone(), self.internal_tx.clone());
-        self.emit(Event::Snapshot(self.settings.clone()));
         self.sync_workers();
         loop {
             tokio::select! {
@@ -119,17 +124,10 @@ impl Engine {
         self.emit(Event::Log(msg.into()));
     }
 
-    fn alloc_id(&mut self) -> u64 {
-        let id = self.settings.next_id;
-        self.settings.next_id += 1;
+    fn alloc_recorder_id(&mut self) -> RecorderId {
+        let id = self.next_recorder_id;
+        self.next_recorder_id += 1;
         id
-    }
-
-    fn persist(&self) {
-        if let Err(e) = settings::save(&self.settings) {
-            self.log(format!("failed to save settings: {e}"));
-        }
-        self.emit(Event::Snapshot(self.settings.clone()));
     }
 
     fn begin_shutdown(&mut self) {
@@ -142,91 +140,70 @@ impl Engine {
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::RequestSnapshot => self.emit(Event::Snapshot(self.settings.clone())),
-            Command::AddSite(n) => {
-                let id = self.alloc_id();
-                self.settings.sites.push(Site {
-                    id,
-                    name: n.name,
-                    exe_path: n.exe_path,
-                    interval_secs: n.interval_secs,
-                    check_mode: n.check_mode,
-                    checker_args: n.checker_args,
-                    downloader_args: n.downloader_args,
-                    output_dir: n.output_dir,
-                });
-                self.persist();
-                self.sync_workers();
-            }
-            Command::UpdateSite(site) => {
-                if let Some(slot) = self.settings.sites.iter_mut().find(|s| s.id == site.id) {
-                    *slot = site;
-                    self.persist();
-                    self.sync_workers();
-                }
-            }
-            Command::RemoveSite(id) => {
-                let doomed: Vec<StreamerId> =
-                    self.settings.streamers.iter().filter(|s| s.site_id == id).map(|s| s.id).collect();
-                for sid in &doomed {
-                    self.stop_streamer_recorders(*sid);
-                    self.states.remove(sid);
-                }
-                self.settings.streamers.retain(|s| s.site_id != id);
-                self.settings.sites.retain(|s| s.id != id);
-                self.persist();
-                self.sync_workers();
-            }
-            Command::AddStreamer { site_id, name, url } => {
-                let url = url.trim().to_string();
-                if url.is_empty() || !self.settings.sites.iter().any(|s| s.id == site_id) {
-                    return;
-                }
-                if self.settings.streamers.iter().any(|s| s.site_id == site_id && s.url == url) {
-                    self.log(format!("{url} is already monitored"));
-                    return;
-                }
-                let name = if name.trim().is_empty() { derive_name(&url) } else { name.trim().to_string() };
-                let id = self.alloc_id();
-                self.settings.streamers.push(Streamer { id, site_id, name, url, enabled: true });
-                self.persist();
-                self.sync_workers();
-            }
-            Command::RemoveStreamer(id) => {
-                self.stop_streamer_recorders(id);
-                self.states.remove(&id);
-                self.settings.streamers.retain(|s| s.id != id);
-                self.persist();
-                self.sync_workers();
-            }
+            Command::Reload => self.reload(),
             Command::SetStreamerEnabled { id, enabled } => {
                 if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
                     s.enabled = enabled;
+                    if enabled {
+                        self.maybe_start_recording(id);
+                    } else {
+                        self.stop_streamer_recorders(id);
+                    }
+                    self.emit_status(id);
                 }
-                if enabled {
-                    self.maybe_start_recording(id);
-                } else {
-                    self.stop_streamer_recorders(id);
+            }
+            Command::SetCheckerOverride { site_id, args } => {
+                if !self.settings.sites.iter().any(|s| s.id == site_id) {
+                    self.log(format!("checker override ignored: unknown site {site_id}"));
+                    return;
                 }
-                self.persist();
-                self.emit_status(id);
+                set_or_clear(&mut self.checker_overrides, site_id, args);
+                self.sync_workers();
             }
-            Command::SetGlobalOutputDir(dir) => {
-                self.settings.default_output_dir = dir;
-                self.persist();
-            }
-            Command::SetTheme(name) => {
-                self.settings.theme = name;
-                self.persist();
-            }
-            Command::OpenConfigDir => {
-                let dir = settings::config_dir();
-                let _ = std::fs::create_dir_all(&dir);
-                if let Err(e) = open::that_detached(&dir) {
-                    self.log(format!("could not open {}: {e}", dir.display()));
+            Command::SetDownloaderOverride { streamer_id, args } => {
+                if !self.settings.streamers.iter().any(|s| s.id == streamer_id) {
+                    self.log(format!("downloader override ignored: unknown streamer {streamer_id}"));
+                    return;
                 }
+                set_or_clear(&mut self.downloader_overrides, streamer_id, args);
             }
             Command::Shutdown => self.begin_shutdown(),
+        }
+    }
+
+    /// Applies settings.json: stops recorders for removed or disabled streamers and resyncs checkers.
+    fn reload(&mut self) {
+        let new = match settings::try_load() {
+            Ok(s) => s,
+            Err(e) => {
+                self.log(format!("reload failed, keeping current settings: {e}"));
+                return;
+            }
+        };
+        let kept: HashSet<StreamerId> = new
+            .streamers
+            .iter()
+            .filter(|s| new.sites.iter().any(|x| x.id == s.site_id))
+            .map(|s| s.id)
+            .collect();
+        let dropped: Vec<StreamerId> =
+            self.settings.streamers.iter().map(|s| s.id).filter(|id| !kept.contains(id)).collect();
+        for id in dropped {
+            self.stop_streamer_recorders(id);
+            self.states.remove(&id);
+        }
+        self.settings = new;
+        self.checker_overrides.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
+        self.downloader_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
+        self.sync_workers();
+        let streamers = self.settings.streamers.clone();
+        for s in streamers.iter().filter(|s| kept.contains(&s.id)) {
+            if s.enabled {
+                self.maybe_start_recording(s.id);
+            } else {
+                self.stop_streamer_recorders(s.id);
+            }
+            self.emit_status(s.id);
         }
     }
 
@@ -283,7 +260,11 @@ impl Engine {
 
     fn snapshot_for(&self, site: &Site) -> SiteSnapshot {
         let urls = self.settings.streamers.iter().filter(|s| s.site_id == site.id).map(|s| s.url.clone()).collect();
-        SiteSnapshot { site: site.clone(), urls }
+        let mut site = site.clone();
+        if let Some(args) = self.checker_overrides.get(&site.id) {
+            site.checker_args = args.clone();
+        }
+        SiteSnapshot { site, urls }
     }
 
     fn on_check_result(&mut self, site_id: SiteId, at: u64, result: Result<CheckReport, String>) {
@@ -383,8 +364,9 @@ impl Engine {
             ("title", template::sanitize(&entry.title)),
             ("name", template::sanitize(&streamer.name)),
         ];
-        let args = template::expand(&site.downloader_args, &vars, None);
-        let id = self.alloc_id();
+        let template = self.downloader_overrides.get(&streamer_id).unwrap_or(&site.downloader_args);
+        let args = template::expand(template, &vars, None);
+        let id = self.alloc_recorder_id();
         let spec = RecorderSpec {
             id,
             streamer_id,
@@ -419,119 +401,97 @@ impl Engine {
     }
 }
 
-/// Uses the last meaningful path segment of a URL as a display name.
-fn derive_name(url: &str) -> String {
-    let trimmed = url.trim_end_matches('/');
-    let mut segs: Vec<&str> = trimmed.split('/').collect();
-    while segs.len() > 3 && matches!(segs.last(), Some(&"live") | Some(&"streams")) {
-        segs.pop();
+fn set_or_clear<K: std::hash::Hash + Eq>(map: &mut HashMap<K, String>, key: K, value: Option<String>) {
+    match value {
+        Some(v) => {
+            map.insert(key, v);
+        }
+        None => {
+            map.remove(&key);
+        }
     }
-    let last = segs.last().copied().unwrap_or(url);
-    last.trim_start_matches('@').split(['?', '#']).next().unwrap_or(last).to_string()
 }
 
 #[cfg(all(test, unix))]
 mod e2e {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use crate::testutil::Sandbox;
     use std::time::Duration;
 
-    const FAKE: &str = r#"#!/bin/bash
-case "$1" in
-  --dump-json)
-    for u in "$@"; do
-      if [[ $u == *live1* ]]; then
-        echo "{\"id\":\"vid1\",\"title\":\"T\",\"is_live\":true,\"webpage_url\":\"https://x.test/watch/vid1\",\"original_url\":\"$u\"}"
-      fi
-    done
-    exit 1;;
-  RECORD)
-    if [[ -z "$BOOT" ]]; then BOOT=1 "$0" "$@" & wait; exit $?; fi
-    "$(dirname "$0")/ffmpeg" 300 & FF=$!
-    trap 'kill $FF 2>/dev/null; sleep 1; exit 0' INT TERM
-    wait;;
-esac
-"#;
-
-    #[test]
-    fn records_and_confirms_exit() {
-        let dir = std::env::temp_dir().join(format!("sr-e2e-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", dir.join("cfg"));
-            std::env::set_var("HOME", &dir);
-        }
-        let script = dir.join("fake-ytdlp");
-        std::fs::write(&script, FAKE).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::copy("/bin/sleep", dir.join("ffmpeg")).unwrap();
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut p = start();
-            p.client.send(Command::AddSite(NewSite {
+    fn write_settings(dir: &std::path::Path, script: &std::path::Path, enabled: bool) {
+        let settings = Settings {
+            next_id: 10,
+            default_output_dir: dir.join("out").to_string_lossy().into(),
+            sites: vec![Site {
+                id: 1,
                 name: "Fake".into(),
                 exe_path: script.to_string_lossy().into(),
                 interval_secs: 5,
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
                 downloader_args: "RECORD {url} {id}".into(),
-                output_dir: dir.join("out").to_string_lossy().into(),
-            }));
-            let mut site_id = None;
-            let mut seen_pids: Vec<u32> = Vec::new();
-            let mut full_tree = false;
-            let mut disabled = false;
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-            let mut removed = false;
-            while tokio::time::Instant::now() < deadline && !removed {
-                let ev = tokio::time::timeout(Duration::from_secs(5), p.events.recv()).await;
-                let Ok(Some(ev)) = ev else { continue };
-                match ev {
-                    Event::Snapshot(s) => {
-                        if site_id.is_none() {
-                            if let Some(site) = s.sites.first() {
-                                site_id = Some(site.id);
-                                p.client.send(Command::AddStreamer {
-                                    site_id: site.id,
-                                    name: String::new(),
-                                    url: "https://x.test/live1".into(),
-                                });
-                            }
-                        }
-                    }
-                    Event::ProcessUpdate(info) => {
-                        for s in info.root.iter().chain(info.ytdlp.iter()).chain(info.ffmpeg.iter()) {
-                            if !seen_pids.contains(&s.pid) {
-                                seen_pids.push(s.pid);
-                            }
-                        }
-                        if info.has_bootloader && info.ytdlp.is_some() && !info.ffmpeg.is_empty() {
-                            assert_ne!(info.root.as_ref().unwrap().pid, info.ytdlp.as_ref().unwrap().pid);
-                            full_tree = true;
-                            if !disabled {
-                                disabled = true;
-                                let sid = info.streamer_id;
-                                p.client.send(Command::SetStreamerEnabled { id: sid, enabled: false });
-                            }
-                        }
-                    }
-                    Event::ProcessRemoved(_) => {
-                        for pid in &seen_pids {
-                            let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|t| t.rsplit(") ").next().and_then(|r| r.chars().next()));
-                            assert!(matches!(state, None | Some('Z')), "pid {pid} still alive at removal (state {state:?})");
-                        }
-                        removed = true;
-                    }
-                    _ => {}
+                output_dir: String::new(),
+            }],
+            streamers: vec![Streamer {
+                id: 2,
+                site_id: 1,
+                name: "live1".into(),
+                url: "https://x.test/live1".into(),
+                enabled,
+            }],
+        };
+        std::fs::create_dir_all(settings::config_dir()).unwrap();
+        std::fs::write(settings::settings_path(), serde_json::to_string(&settings).unwrap()).unwrap();
+    }
+
+    async fn wait_for(p: &mut EngineParts, secs: u64, mut pred: impl FnMut(&Event) -> bool) -> Event {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(1), p.events.recv()).await {
+                if pred(&ev) {
+                    return ev;
                 }
             }
-            assert!(full_tree, "never saw bootloader + yt-dlp + ffmpeg");
-            assert!(removed, "recorder was never removed after disable");
+        }
+        panic!("timed out waiting for event");
+    }
+
+    #[test]
+    fn records_reloads_and_confirms_exit() {
+        let sb = Sandbox::new("engine");
+        let (dir, script) = (sb.dir.clone(), sb.script.clone());
+        write_settings(&dir, &script, true);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut p = start();
+            let mut seen_pids: Vec<u32> = Vec::new();
+            let full = |info: &ProcessInfo| info.has_bootloader && info.ytdlp.is_some() && !info.ffmpeg.is_empty();
+            let ev = wait_for(&mut p, 60, |e| matches!(e, Event::ProcessUpdate(i) if full(i))).await;
+            let Event::ProcessUpdate(info) = ev else { unreachable!() };
+            assert_ne!(info.root.as_ref().unwrap().pid, info.ytdlp.as_ref().unwrap().pid);
+            for s in info.root.iter().chain(info.ytdlp.iter()).chain(info.ffmpeg.iter()) {
+                seen_pids.push(s.pid);
+            }
+
+            p.client.send(Command::SetStreamerEnabled { id: info.streamer_id, enabled: false });
+            wait_for(&mut p, 30, |e| matches!(e, Event::ProcessRemoved(_))).await;
+            for pid in &seen_pids {
+                let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|t| t.rsplit(") ").next().and_then(|r| r.chars().next()));
+                assert!(matches!(state, None | Some('Z')), "pid {pid} still alive at removal (state {state:?})");
+            }
+
+            std::fs::write(settings::settings_path(), "{ not json").unwrap();
+            p.client.send(Command::Reload);
+            wait_for(&mut p, 10, |e| matches!(e, Event::Log(m) if m.contains("reload failed"))).await;
+
+            write_settings(&dir, &script, true);
+            p.client.send(Command::Reload);
+            wait_for(&mut p, 40, |e| matches!(e, Event::ProcessUpdate(i) if full(i))).await;
+
             p.client.send(Command::Shutdown);
             let thread = p.thread;
             tokio::task::spawn_blocking(move || thread.join()).await.unwrap().unwrap();
         });
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
