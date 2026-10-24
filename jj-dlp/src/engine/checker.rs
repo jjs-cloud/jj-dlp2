@@ -37,7 +37,6 @@ impl LiveEntry {
 #[derive(Debug, Clone)]
 pub struct CheckReport {
     pub entries: Vec<LiveEntry>,
-    pub message: String,
 }
 
 pub struct SiteWorker {
@@ -88,21 +87,7 @@ async fn run_check(snap: &SiteSnapshot) -> Result<CheckReport, String> {
     log_output(&snap.site, &args, &output, started.elapsed());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let entries = parse_output(snap.site.check_mode, &stdout);
-    let last_err = String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let message = format!(
-        "{} live of {} urls (exit {}){}",
-        entries.len(),
-        snap.urls.len(),
-        output.status.code().map_or("?".into(), |c| c.to_string()),
-        if last_err.is_empty() { String::new() } else { format!(" | {last_err}") }
-    );
-    Ok(CheckReport { entries, message })
+    Ok(CheckReport { entries })
 }
 
 /// Appends this check's command, exit code and the enabled output streams to the site's checker log.

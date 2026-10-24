@@ -140,7 +140,7 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone)]
 pub enum Event {
     StreamerStatus { id: StreamerId, status: StreamerStatus },
-    SiteChecked { id: SiteId, at: u64, ok: bool, message: String },
+    SiteChecked { id: SiteId, at: u64, ok: bool },
     ProcessUpdate(ProcessInfo),
     ProcessRemoved(RecorderId),
     Log(String),

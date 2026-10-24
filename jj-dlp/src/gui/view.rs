@@ -5,7 +5,7 @@ use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text_input, toggler, Column, Space, Text,
+    button, column, container, pick_list, row, scrollable, text_input, toggler, Column, Row, Space, Text,
 };
 use iced::{Alignment, Color, Element, Length};
 
@@ -65,7 +65,7 @@ impl App {
         let body: Element<'_, Msg> = match self.tab {
             Tab::Monitor => self.monitor(s),
             Tab::Processes => self.processes(s),
-            Tab::Sites => self.sites(s),
+            Tab::Settings => self.settings_tab(s),
             Tab::Log => self.log_view(s),
         };
         container(column![self.header(s), self.tabs(s), body].spacing(14))
@@ -93,10 +93,6 @@ impl App {
         .spacing(8);
         let right = row![
             pick_list(ThemeKind::ALL, Some(self.kind), Msg::ThemeChosen).padding(8),
-            button(t(&s, "Open settings folder").size(13))
-                .on_press(Msg::OpenConfigDir)
-                .padding([8.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
@@ -118,7 +114,7 @@ impl App {
         row![
             tab("Monitor", Tab::Monitor),
             tab("Processes", Tab::Processes),
-            tab("Sites", Tab::Sites),
+            tab("Settings", Tab::Settings),
             tab("Log", Tab::Log)
         ]
         .spacing(8)
@@ -139,7 +135,7 @@ impl App {
                         t(&s, "No sites configured yet."),
                         muted(&s, "A site holds the yt-dlp path plus the checker and downloader commands for a group of streamers."),
                         button(t(&s, "Add a site").size(13))
-                            .on_press(Msg::SetTab(Tab::Sites))
+                            .on_press(Msg::SetTab(Tab::Settings))
                             .padding([8.0, 14.0])
                             .style(skin::btn(s, BtnKind::Primary)),
                     ]
@@ -254,22 +250,21 @@ impl App {
                 let color = if c.ok { s.live } else { s.danger };
                 row![
                     iced::widget::text(if c.ok { "●" } else { "✕" }).font(s.font).size(12).color(color),
-                    muted(&s, format!("{}s ago · {}", self.now.saturating_sub(c.at), clip(&c.message, 110))),
+                    muted(&s, format!("{}s ago", self.now.saturating_sub(c.at))),
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
             }
             None => row![muted(&s, "waiting for first check")],
         };
-        let head = row![
-            iced::widget::text(clip(&site.name, 30)).font(s.font).size(18).color(s.accent2),
-            chip(s, format!("every {}s", site.interval_secs), s.muted),
-            chip(s, site.check_mode.to_string(), s.muted),
-            Space::new().width(Length::Fill),
-            check,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
+        let mut head: Row<'_, Msg> = Row::new()
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .push(iced::widget::text(clip(&site.name, 30)).font(s.font).size(18).color(s.accent2));
+        if site.log_checker_stdout || site.log_checker_stderr {
+            head = head.push(chip(s, "logging", s.muted));
+        }
+        let head = head.push(Space::new().width(Length::Fill)).push(check);
 
         let mut col = Column::new().spacing(8).push(head);
         let streamers: Vec<&Streamer> = self.settings.streamers.iter().filter(|x| x.site_id == site.id).collect();
@@ -307,18 +302,32 @@ impl App {
     fn streamer_row<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
         let status = self.statuses.get(&st.id).copied().unwrap_or_default();
         let ph = pulse(self.phase);
-        let (label, color) = if status.recording {
-            ("RECORDING", s.accent)
+        let color = if status.live && !st.enabled {
+            s.muted
+        } else if status.recording {
+            s.accent
         } else if status.live {
-            ("LIVE", s.live)
+            s.live
         } else {
-            ("OFFLINE", s.muted)
+            s.muted
         };
         let glow = if status.live || status.recording { 0.4 + 0.6 * ph } else { 0.0 };
         let id = st.id;
-        let mut chips = row![chip(s, label, color)].spacing(6);
+        let mut chips: Row<'_, Msg> = Row::new().spacing(6);
+        if status.recording {
+            chips = chips.push(chip(s, "RECORDING", s.accent));
+        }
+        if status.live {
+            chips = chips.push(chip(s, "LIVE", s.live));
+        }
+        if !status.live && !status.recording {
+            chips = chips.push(chip(s, "OFFLINE", s.muted));
+        }
         if !st.enabled {
             chips = chips.push(chip(s, "PAUSED", s.warn));
+        }
+        if st.options.log_stdout || st.options.log_stderr {
+            chips = chips.push(chip(s, "logging", s.muted));
         }
         let line = row![
             dot(s, color, glow),
@@ -346,13 +355,13 @@ impl App {
         .spacing(12)
         .align_y(Alignment::Center);
         let mut body = Column::new().spacing(10).push(line);
-        if self.open_settings.contains(&id) {
-            body = body.push(self.streamer_settings(s, st));
+        if self.open_streamer_settings.contains(&id) {
+            body = body.push(self.streamer_settings_panel(s, st));
         }
         container(body).padding([8.0, 12.0]).width(Length::Fill).style(skin::inset(s)).into()
     }
 
-    fn streamer_settings<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
+    fn streamer_settings_panel<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
         let id = st.id;
         let log = |label: &'static str, on: bool, f: fn(bool) -> OptionField| {
             toggler(on).label(label).on_toggle(move |v| Msg::StreamerOption(id, f(v))).text_size(12)
@@ -369,11 +378,19 @@ impl App {
         .into()
     }
 
-    fn sites(&self, s: Skin) -> Element<'_, Msg> {
+    fn settings_tab(&self, s: Skin) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
 
         let global = column![
-            self.section_title(s, "GLOBAL OUTPUT FOLDER"),
+            row![
+                self.section_title(s, "GLOBAL OUTPUT FOLDER"),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Open settings folder").size(13))
+                    .on_press(Msg::OpenConfigDir)
+                    .padding([8.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
             row![
                 text_input("Recordings folder", &self.global_out)
                     .on_input(Msg::GlobalOutEdit)

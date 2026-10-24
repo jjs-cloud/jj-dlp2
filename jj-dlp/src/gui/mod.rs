@@ -7,7 +7,7 @@ mod view;
 use crate::api::*;
 use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent};
 use iced::futures::{SinkExt, Stream};
-use iced::{Subscription, Task, Theme};
+use iced::{window, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -32,16 +32,21 @@ pub fn run(client: PolicyClient) -> iced::Result {
         .title("jj-dlp")
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size((1180.0, 820.0))
+        .window(window::Settings { size: Size::new(1180.0, 820.0), icon: app_icon(), ..Default::default() })
         .antialiasing(true)
         .run()
+}
+
+/// Loads the embedded 128x128 RGBA window icon.
+fn app_icon() -> Option<window::Icon> {
+    window::icon::from_rgba(include_bytes!("../../assets/icon_128.rgba").to_vec(), 128, 128).ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Monitor,
     Processes,
-    Sites,
+    Settings,
     Log,
 }
 
@@ -134,7 +139,6 @@ pub enum Msg {
 pub struct CheckInfo {
     pub at: u64,
     pub ok: bool,
-    pub message: String,
 }
 
 pub struct App {
@@ -148,7 +152,7 @@ pub struct App {
     log: VecDeque<String>,
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
-    open_settings: HashSet<StreamerId>,
+    open_streamer_settings: HashSet<StreamerId>,
     global_out: String,
     phase: f32,
     now: u64,
@@ -168,7 +172,7 @@ impl App {
             log: VecDeque::new(),
             drafts: HashMap::new(),
             new_streamer: HashMap::new(),
-            open_settings: HashSet::new(),
+            open_streamer_settings: HashSet::new(),
             global_out: String::new(),
             phase: 0.0,
             now: now_secs(),
@@ -225,8 +229,8 @@ impl App {
             Msg::RemoveStreamer(id) => self.client.send(PolicyCommand::RemoveStreamer(id)),
             Msg::ToggleStreamer(id, enabled) => self.client.send(PolicyCommand::SetStreamerEnabled { id, enabled }),
             Msg::ToggleStreamerSettings(id) => {
-                if !self.open_settings.remove(&id) {
-                    self.open_settings.insert(id);
+                if !self.open_streamer_settings.remove(&id) {
+                    self.open_streamer_settings.insert(id);
                 }
             }
             Msg::StreamerOption(id, field) => {
@@ -303,8 +307,8 @@ impl App {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
                 }
-                Event::SiteChecked { id, at, ok, message } => {
-                    self.checks.insert(id, CheckInfo { at, ok, message });
+                Event::SiteChecked { id, at, ok } => {
+                    self.checks.insert(id, CheckInfo { at, ok });
                 }
                 Event::ProcessUpdate(p) => {
                     self.processes.insert(p.id, p);
@@ -333,7 +337,7 @@ impl App {
             }
         }
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
-        self.open_settings.retain(|id| s.streamers.iter().any(|x| x.id == *id));
+        self.open_streamer_settings.retain(|id| s.streamers.iter().any(|x| x.id == *id));
         self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
         self.settings = s;
     }

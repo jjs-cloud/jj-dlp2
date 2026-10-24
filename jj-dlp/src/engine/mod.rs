@@ -273,11 +273,11 @@ impl Engine {
             Ok(r) => r,
             Err(message) => {
                 self.log(format!("[{}] check failed: {message}", self.site_name(site_id)));
-                self.emit(Event::SiteChecked { id: site_id, at, ok: false, message });
+                self.emit(Event::SiteChecked { id: site_id, at, ok: false });
                 return;
             }
         };
-        self.emit(Event::SiteChecked { id: site_id, at, ok: true, message: report.message.clone() });
+        self.emit(Event::SiteChecked { id: site_id, at, ok: true });
         let streamers: Vec<Streamer> =
             self.settings.streamers.iter().filter(|s| s.site_id == site_id).cloned().collect();
         let single = streamers.len() == 1;
