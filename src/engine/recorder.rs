@@ -1,4 +1,4 @@
-//! Launches a yt-dlp recorder, captures its output, and stops it gracefully.
+//! Launches a yt-dlp recorder, captures its output, and stops it (SIGINT on Unix, taskkill on Windows).
 
 use super::{hide_window, logfile};
 use crate::api::{RecorderId, StreamerId};
@@ -6,12 +6,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
-const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(unix)]
+const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub struct RecorderSpec {
     pub id: RecorderId,
@@ -104,16 +105,7 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     tokio::spawn(async move {
         let status = tokio::select! {
             s = child.wait() => s,
-            _ = &mut stop_rx => {
-                interrupt(pid);
-                match tokio::time::timeout(GRACEFUL_STOP_TIMEOUT, child.wait()).await {
-                    Ok(s) => s,
-                    Err(_) => {
-                        force_kill(pid);
-                        child.wait().await
-                    }
-                }
-            }
+            _ = &mut stop_rx => stop_child(&mut child, pid).await,
         };
         let code = status.ok().and_then(|s| s.code());
         if let Some(t) = tracked.lock().unwrap().get_mut(&id) {
@@ -127,6 +119,26 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     });
 
     Ok(RecorderHandle { streamer_id: spec.streamer_id, stop_tx: Some(stop_tx) })
+}
+
+/// Sends SIGINT to the process group, then SIGKILL if it is still running after the timeout.
+#[cfg(unix)]
+async fn stop_child(child: &mut tokio::process::Child, pid: u32) -> std::io::Result<std::process::ExitStatus> {
+    interrupt(pid);
+    match tokio::time::timeout(GRACEFUL_STOP_TIMEOUT, child.wait()).await {
+        Ok(s) => s,
+        Err(_) => {
+            force_kill(pid);
+            child.wait().await
+        }
+    }
+}
+
+/// Kills the whole process tree immediately.
+#[cfg(windows)]
+async fn stop_child(child: &mut tokio::process::Child, pid: u32) -> std::io::Result<std::process::ExitStatus> {
+    let _ = tokio::task::spawn_blocking(move || force_kill(pid)).await;
+    child.wait().await
 }
 
 /// Marks the recorder as stopping and signals its task to interrupt the process.
@@ -187,12 +199,6 @@ fn interrupt(pid: u32) {
 #[cfg(unix)]
 fn force_kill(pid: u32) {
     unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-}
-
-#[cfg(windows)]
-fn interrupt(pid: u32) {
-    use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
-    unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) };
 }
 
 #[cfg(windows)]
