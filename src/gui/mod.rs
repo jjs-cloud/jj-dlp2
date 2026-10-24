@@ -18,7 +18,6 @@ const LOG_LIMIT: usize = 500;
 pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
 pub const DEFAULT_SIM_ARGS: &str =
     "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s|%(id)s|%(title)s\" {urls}";
-pub const DEFAULT_DL_ARGS: &str = "--newline --no-colors -o \"{name} - %(title)s [%(id)s].%(ext)s\" {url}";
 
 static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
 
@@ -52,8 +51,10 @@ pub enum Tab {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Preset {
-    YouTube,
     Twitch,
+    Tiktok,
+    Cb,
+    Kick,
     Blank,
 }
 
@@ -343,15 +344,44 @@ impl App {
     }
 }
 
+/// Default yt-dlp path for new sites: the bundled binary on Windows/Linux, else PATH.
+fn default_exe() -> &'static str {
+    if cfg!(windows) {
+        r"bin\windows\yt-dlp\yt-dlp.exe"
+    } else if cfg!(target_os = "linux") {
+        "bin/linux/yt-dlp/yt-dlp"
+    } else {
+        "yt-dlp"
+    }
+}
+
 fn new_site(preset: Preset) -> NewSite {
     let (name, checker, recorder) = match preset {
-        Preset::YouTube => ("YouTube", DEFAULT_JSON_ARGS, DEFAULT_DL_ARGS),
-        Preset::Twitch => ("Twitch", DEFAULT_JSON_ARGS, DEFAULT_DL_ARGS),
+        Preset::Twitch => (
+            "Twitch",
+            "--cookies-from-browser firefox --dump-json {urls}",
+            r#"--cookies-from-browser firefox --fixup never --no-part -o "%(title)s [%(id)s].%(ext)s" {url}"#,
+        ),
+        Preset::Tiktok => (
+            "Tiktok",
+            "--cookies-from-browser firefox --dump-json {urls}",
+            r#"--cookies-from-browser firefox --no-part --retries 0 -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
+        ),
+        Preset::Cb => (
+            "CB",
+            "--dump-json {urls}",
+            r#"--fixup never --no-part --downloader-args ffmpeg:"-fps_mode passthrough -copyts -avoid_negative_ts make_zero" -o "%(title)s.%(ext)s" {url}"#,
+        ),
+        Preset::Kick => (
+            "Kick",
+            "--dump-json {urls}",
+            r#"--fixup never --no-part -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
+        ),
         Preset::Blank => ("New site", "", ""),
     };
     NewSite {
         name: name.into(),
-        exe_path: "yt-dlp".into(),
+        exe_path: default_exe().into(),
         interval_secs: 60,
         check_mode: CheckMode::DumpJson,
         checker_args: checker.into(),

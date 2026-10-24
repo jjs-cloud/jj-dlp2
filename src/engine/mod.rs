@@ -3,6 +3,7 @@
 // Any changes to the engine should first be approved by the owner.
 
 mod checker;
+mod exepath;
 mod logfile;
 mod recorder;
 mod sampler;
@@ -21,6 +22,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 pub(crate) enum Internal {
     CheckResult { site_id: SiteId, at: u64, result: Result<CheckReport, String> },
     RecorderGone(RecorderId),
+    Log(String),
 }
 
 /// Prevents a console window from flashing up on Windows.
@@ -211,6 +213,7 @@ impl Engine {
     fn handle_internal(&mut self, msg: Internal) {
         match msg {
             Internal::CheckResult { site_id, at, result } => self.on_check_result(site_id, at, result),
+            Internal::Log(msg) => self.log(msg),
             Internal::RecorderGone(id) => {
                 let streamer = self.recorders.remove(&id).map(|h| h.streamer_id);
                 self.tracked.lock().unwrap().remove(&id);
@@ -368,13 +371,17 @@ impl Engine {
         let template = self.recorder_overrides.get(&streamer_id).unwrap_or(&site.recorder_args);
         let args = template::expand(template, &vars, None);
         let log_path = |on: bool, kind: &str| on.then(|| logfile::stream_path(&site.name, &streamer.name, kind));
+        let exe = exepath::resolve(&site.exe_path);
+        if let Some(note) = exe.note {
+            self.log(note);
+        }
         let id = self.alloc_recorder_id();
         let spec = RecorderSpec {
             id,
             streamer_id,
             streamer_name: streamer.name.clone(),
             site_name: site.name.clone(),
-            exe: site.exe_path.trim().to_string(),
+            exe: exe.exe,
             args,
             cwd: PathBuf::from(out_dir),
             log_stdout: log_path(streamer.options.log_stdout, "stdout"),

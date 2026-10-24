@@ -1,6 +1,6 @@
 //! Per-site checker: runs yt-dlp for all of a site's URLs and detects live streams.
 
-use super::{hide_window, logfile, template, Internal};
+use super::{exepath, hide_window, logfile, template, Internal};
 use crate::api::{now_secs, CheckMode, Site};
 use serde_json::Value;
 use std::process::Stdio;
@@ -55,7 +55,7 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
         let snap = rx.borrow_and_update().clone();
         let started = Instant::now();
         if !snap.urls.is_empty() && !snap.site.exe_path.trim().is_empty() {
-            let result = run_check(&snap).await;
+            let result = run_check(&snap, &internal).await;
             let msg = Internal::CheckResult { site_id: snap.site.id, at: now_secs(), result };
             if internal.send(msg).is_err() {
                 return;
@@ -70,9 +70,13 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
     }
 }
 
-async fn run_check(snap: &SiteSnapshot) -> Result<CheckReport, String> {
+async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) -> Result<CheckReport, String> {
     let args = template::expand(&snap.site.checker_args, &[], Some(&snap.urls));
-    let mut cmd = Command::new(snap.site.exe_path.trim());
+    let exe = exepath::resolve(&snap.site.exe_path);
+    if let Some(note) = exe.note {
+        let _ = internal.send(Internal::Log(note));
+    }
+    let mut cmd = Command::new(&exe.exe);
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -83,15 +87,15 @@ async fn run_check(snap: &SiteSnapshot) -> Result<CheckReport, String> {
     let output = tokio::time::timeout(CHECK_TIMEOUT, cmd.output())
         .await
         .map_err(|_| format!("checker timed out after {}s", CHECK_TIMEOUT.as_secs()))?
-        .map_err(|e| format!("failed to start '{}': {e}", snap.site.exe_path))?;
-    log_output(&snap.site, &args, &output, started.elapsed());
+        .map_err(|e| format!("failed to start '{}': {e}", exe.exe))?;
+    log_output(&snap.site, &exe.exe, &args, &output, started.elapsed());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let entries = parse_output(snap.site.check_mode, &stdout);
     Ok(CheckReport { entries })
 }
 
 /// Appends this check's command, exit code and the enabled output streams to the site's checker log.
-fn log_output(site: &Site, args: &[String], output: &std::process::Output, elapsed: Duration) {
+fn log_output(site: &Site, exe: &str, args: &[String], output: &std::process::Output, elapsed: Duration) {
     if !site.log_checker_stdout && !site.log_checker_stderr {
         return;
     }
@@ -99,7 +103,7 @@ fn log_output(site: &Site, args: &[String], output: &std::process::Output, elaps
     let mut block = format!(
         "{}  {} (exit {code}, {:.1}s)\n",
         logfile::stamp(),
-        logfile::cmdline(site.exe_path.trim(), args),
+        logfile::cmdline(exe, args),
         elapsed.as_secs_f32()
     );
     for (on, label, bytes) in [

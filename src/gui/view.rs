@@ -419,12 +419,20 @@ impl App {
 
         let add = row![
             iced::widget::text("ADD SITE").font(s.font).size(13).color(s.accent2),
-            button(t(&s, "YouTube").size(13))
-                .on_press(Msg::AddSite(Preset::YouTube))
-                .padding([7.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
             button(t(&s, "Twitch").size(13))
                 .on_press(Msg::AddSite(Preset::Twitch))
+                .padding([7.0, 14.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "Tiktok").size(13))
+                .on_press(Msg::AddSite(Preset::Tiktok))
+                .padding([7.0, 14.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "CB").size(13))
+                .on_press(Msg::AddSite(Preset::Cb))
+                .padding([7.0, 14.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "Kick").size(13))
+                .on_press(Msg::AddSite(Preset::Kick))
                 .padding([7.0, 14.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
             button(t(&s, "Blank").size(13))
