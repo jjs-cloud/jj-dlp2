@@ -1,6 +1,6 @@
 //! Launches a yt-dlp recorder, captures its output, and stops it gracefully.
 
-use super::hide_window;
+use super::{hide_window, logfile};
 use crate::api::{RecorderId, StreamerId};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,6 +21,9 @@ pub struct RecorderSpec {
     pub exe: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,
+    /// Files that receive the process's stdout/stderr lines when logging is enabled.
+    pub log_stdout: Option<PathBuf>,
+    pub log_stderr: Option<PathBuf>,
 }
 
 /// State shared between the recorder tasks, the engine and the sampler thread.
@@ -63,7 +66,11 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     let mut child = cmd.spawn().map_err(|e| format!("failed to start '{}': {e}", spec.exe))?;
     let pid = child.id().ok_or("process exited immediately")?;
 
-    let cmdline = std::iter::once(spec.exe.clone()).chain(spec.args.iter().cloned()).collect::<Vec<_>>().join(" ");
+    let cmdline = logfile::cmdline(&spec.exe, &spec.args);
+    let logs: Vec<PathBuf> = [&spec.log_stdout, &spec.log_stderr].into_iter().flatten().cloned().collect();
+    for path in &logs {
+        logfile::line(path, &format!("start: {cmdline} (cwd {}, pid {pid})", spec.cwd.display()));
+    }
     tracked.lock().unwrap().insert(
         spec.id,
         Tracked {
@@ -84,15 +91,16 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     );
 
     if let Some(out) = child.stdout.take() {
-        tokio::spawn(read_lines(out, spec.id, tracked.clone()));
+        tokio::spawn(read_lines(out, spec.id, tracked.clone(), spec.log_stdout.clone()));
     }
     if let Some(err) = child.stderr.take() {
-        tokio::spawn(read_lines(err, spec.id, tracked.clone()));
+        tokio::spawn(read_lines(err, spec.id, tracked.clone(), spec.log_stderr.clone()));
     }
 
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
     let tracked = tracked.clone();
     let id = spec.id;
+    let started = Instant::now();
     tokio::spawn(async move {
         let status = tokio::select! {
             s = child.wait() => s,
@@ -112,6 +120,10 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
             t.root_exit = Some(code);
             t.root_exited_at = Some(Instant::now());
         }
+        for path in &logs {
+            let code = code.map_or("none".to_string(), |c| c.to_string());
+            logfile::line(path, &format!("exit: code {code} after {}s", started.elapsed().as_secs()));
+        }
     });
 
     Ok(RecorderHandle { streamer_id: spec.streamer_id, stop_tx: Some(stop_tx) })
@@ -127,28 +139,38 @@ pub fn request_stop(handle: &mut RecorderHandle, id: RecorderId, tracked: &Share
     }
 }
 
-/// Keeps the newest output line, splitting on both '\n' and '\r' (progress bars).
-async fn read_lines<R: tokio::io::AsyncRead + Unpin>(mut r: R, id: RecorderId, tracked: SharedTracked) {
+/// Keeps the newest output line (split on '\n' and '\r') and appends each '\n'-ended line to `log`.
+async fn read_lines<R: tokio::io::AsyncRead + Unpin>(mut r: R, id: RecorderId, tracked: SharedTracked, log: Option<PathBuf>) {
     let mut buf = [0u8; 4096];
     let mut line = Vec::<u8>::new();
+    // Text ended by a '\r'; it counts as a real line only if a '\n' follows at once (CRLF).
+    let mut after_cr: Option<String> = None;
     loop {
         let n = match r.read(&mut buf).await {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
         for &b in &buf[..n] {
-            if b == b'\n' || b == b'\r' {
-                if !line.is_empty() {
-                    let text = String::from_utf8_lossy(&line).trim().to_string();
-                    if !text.is_empty() {
-                        if let Some(t) = tracked.lock().unwrap().get_mut(&id) {
-                            t.last_line = text;
-                        }
-                    }
-                    line.clear();
-                }
-            } else {
+            if b != b'\n' && b != b'\r' {
+                after_cr = None;
                 line.push(b);
+                continue;
+            }
+            let text = String::from_utf8_lossy(&line).trim().to_string();
+            line.clear();
+            if !text.is_empty() {
+                if let Some(t) = tracked.lock().unwrap().get_mut(&id) {
+                    t.last_line = text.clone();
+                }
+            }
+            let finished = if b == b'\n' {
+                if text.is_empty() { after_cr.take() } else { Some(text) }
+            } else {
+                after_cr = (!text.is_empty()).then_some(text);
+                None
+            };
+            if let (Some(path), Some(text)) = (&log, finished) {
+                logfile::line(path, &text);
             }
         }
         if line.len() > 8192 {
@@ -180,4 +202,22 @@ fn force_kill(pid: u32) {
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .creation_flags(0x0800_0000)
         .status();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn logs_only_newline_ended_lines() {
+        let path = std::env::temp_dir().join(format!("jj-readlines-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let input: &[u8] = b"one\r\ntwo\rthree\n\nfour";
+        let tracked: SharedTracked = Arc::new(Mutex::new(HashMap::new()));
+        read_lines(input, 1, tracked, Some(path.clone())).await;
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().map(|l| l.split_once("  ").unwrap().1).collect();
+        assert_eq!(lines, ["one", "three"]);
+        let _ = std::fs::remove_file(&path);
+    }
 }

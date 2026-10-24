@@ -41,6 +41,12 @@ pub struct Site {
     pub downloader_args: String,
     /// Empty means use the global output directory.
     pub output_dir: String,
+    /// Write the checker's stdout to this site's checker log file.
+    #[serde(default)]
+    pub log_checker_stdout: bool,
+    /// Write the checker's stderr to this site's checker log file.
+    #[serde(default)]
+    pub log_checker_stderr: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,6 +56,18 @@ pub struct Streamer {
     pub name: String,
     pub url: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub options: StreamerOptions,
+}
+
+/// Per-streamer options edited from the streamer's settings panel.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamerOptions {
+    /// Write the downloader's stdout to this streamer's log file.
+    pub log_stdout: bool,
+    /// Write the downloader's stderr to this streamer's log file.
+    pub log_stderr: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

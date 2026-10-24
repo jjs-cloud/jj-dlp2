@@ -1,7 +1,7 @@
 //! View functions for every screen.
 
 use super::skin::{self, pulse, BtnKind, Skin, ThemeKind};
-use super::{App, DraftField, Msg, Preset, SiteDraft, Tab};
+use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
@@ -330,6 +330,10 @@ impl App {
             .width(Length::Fill),
             chips,
             toggler(st.enabled).label("Record").on_toggle(move |v| Msg::ToggleStreamer(id, v)).text_size(12),
+            button(t(&s, "Settings").size(12))
+                .on_press(Msg::ToggleStreamerSettings(id))
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
             button(t(&s, "Open").size(12))
                 .on_press(Msg::OpenOutputDir(st.site_id))
                 .padding([5.0, 10.0])
@@ -341,7 +345,28 @@ impl App {
         ]
         .spacing(12)
         .align_y(Alignment::Center);
-        container(line).padding([8.0, 12.0]).width(Length::Fill).style(skin::inset(s)).into()
+        let mut body = Column::new().spacing(10).push(line);
+        if self.open_settings.contains(&id) {
+            body = body.push(self.streamer_settings(s, st));
+        }
+        container(body).padding([8.0, 12.0]).width(Length::Fill).style(skin::inset(s)).into()
+    }
+
+    fn streamer_settings<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
+        let id = st.id;
+        let log = |label: &'static str, on: bool, f: fn(bool) -> OptionField| {
+            toggler(on).label(label).on_toggle(move |v| Msg::StreamerOption(id, f(v))).text_size(12)
+        };
+        column![
+            muted(&s, "Output is appended to the logs folder next to settings.json."),
+            row![
+                log("Log downloader stdout", st.options.log_stdout, OptionField::LogStdout),
+                log("Log downloader stderr", st.options.log_stderr, OptionField::LogStderr),
+            ]
+            .spacing(24),
+        ]
+        .spacing(8)
+        .into()
     }
 
     fn sites(&self, s: Skin) -> Element<'_, Msg> {
@@ -452,12 +477,22 @@ impl App {
         .spacing(10)
         .align_y(Alignment::Center);
 
+        let log = |label: &'static str, on: bool, f: fn(bool) -> DraftField| {
+            toggler(on).label(label).on_toggle(move |v| Msg::Draft(id, f(v))).text_size(12)
+        };
+        let logging = row![
+            log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
+            log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
+        ]
+        .spacing(24);
+
         let form = column![
             top,
             labeled("Path to yt-dlp executable", field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)),
             labeled("Checker command arguments", field("--dump-json {urls}", &d.checker, DraftField::Checker)),
             labeled("Downloader command arguments", field("-o \"%(title)s.%(ext)s\" {url}", &d.downloader, DraftField::Downloader)),
             labeled("Output folder (blank = global)", field("Use the global output folder", &d.output, DraftField::Output)),
+            logging,
             actions,
         ]
         .spacing(10);

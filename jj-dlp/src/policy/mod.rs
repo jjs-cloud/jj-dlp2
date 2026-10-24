@@ -1,6 +1,8 @@
 //! Policy layer: owns settings.json, applies edits and tells the engine to reload.
 
-use crate::api::{CheckMode, Command, EngineClient, Event, Settings, Site, SiteId, Streamer, StreamerId};
+use crate::api::{
+    CheckMode, Command, EngineClient, Event, Settings, Site, SiteId, Streamer, StreamerId, StreamerOptions,
+};
 use crate::engine::EngineParts;
 use crate::settings;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -27,6 +29,7 @@ pub enum PolicyCommand {
     AddStreamer { site_id: SiteId, name: String, url: String },
     RemoveStreamer(StreamerId),
     SetStreamerEnabled { id: StreamerId, enabled: bool },
+    SetStreamerOptions { id: StreamerId, options: StreamerOptions },
     SetGlobalOutputDir(String),
     OpenConfigDir,
     OpenOutputDir(SiteId),
@@ -170,6 +173,8 @@ impl Policy {
                     checker_args: n.checker_args,
                     downloader_args: n.downloader_args,
                     output_dir: n.output_dir,
+                    log_checker_stdout: false,
+                    log_checker_stderr: false,
                 });
                 self.commit();
             }
@@ -195,7 +200,14 @@ impl Policy {
                 }
                 let name = if name.trim().is_empty() { derive_name(&url) } else { name.trim().to_string() };
                 let id = self.alloc_id();
-                self.settings.streamers.push(Streamer { id, site_id, name, url, enabled: true });
+                self.settings.streamers.push(Streamer {
+                    id,
+                    site_id,
+                    name,
+                    url,
+                    enabled: true,
+                    options: StreamerOptions::default(),
+                });
                 self.commit();
             }
             PolicyCommand::RemoveStreamer(id) => {
@@ -209,6 +221,12 @@ impl Policy {
                         self.engine.send(Command::SetStreamerEnabled { id, enabled });
                     }
                     self.emit_settings();
+                }
+            }
+            PolicyCommand::SetStreamerOptions { id, options } => {
+                if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
+                    s.options = options;
+                    self.commit();
                 }
             }
             PolicyCommand::SetGlobalOutputDir(dir) => {
@@ -271,6 +289,8 @@ mod tests {
             checker_args: String::new(),
             downloader_args: String::new(),
             output_dir: output_dir.into(),
+            log_checker_stdout: false,
+            log_checker_stderr: false,
         }
     }
 
@@ -287,6 +307,14 @@ mod tests {
         assert_eq!(output_dir(&s, 99), "/global");
         s.default_output_dir = "/other".into();
         assert_eq!(output_dir(&s, 2), "/other");
+    }
+
+    #[test]
+    fn settings_without_log_fields_still_load() {
+        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","downloader_args":"","output_dir":""}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
+        assert_eq!(s.streamers[0].options, StreamerOptions::default());
     }
 
     #[test]
@@ -339,6 +367,11 @@ mod e2e {
             assert_eq!(info.streamer_name, "live1");
             let saved = settings::try_load().unwrap();
             assert_eq!(saved.streamers.len(), 1);
+
+            let options = StreamerOptions { log_stdout: true, log_stderr: false };
+            p.client.send(PolicyCommand::SetStreamerOptions { id: info.streamer_id, options: options.clone() });
+            wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if s.streamers[0].options == options)).await;
+            assert_eq!(settings::try_load().unwrap().streamers[0].options, options);
 
             p.client.send(PolicyCommand::SetStreamerEnabled { id: info.streamer_id, enabled: false });
             wait_for(&mut p, 30, |e| matches!(e, PolicyEvent::Engine(Event::ProcessRemoved(_)))).await;

@@ -1,6 +1,6 @@
 //! Per-site checker: runs yt-dlp for all of a site's URLs and detects live streams.
 
-use super::{hide_window, template, Internal};
+use super::{hide_window, logfile, template, Internal};
 use crate::api::{now_secs, CheckMode, Site};
 use serde_json::Value;
 use std::process::Stdio;
@@ -80,10 +80,12 @@ async fn run_check(snap: &SiteSnapshot) -> Result<CheckReport, String> {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     hide_window(&mut cmd);
+    let started = Instant::now();
     let output = tokio::time::timeout(CHECK_TIMEOUT, cmd.output())
         .await
         .map_err(|_| format!("checker timed out after {}s", CHECK_TIMEOUT.as_secs()))?
         .map_err(|e| format!("failed to start '{}': {e}", snap.site.exe_path))?;
+    log_output(&snap.site, &args, &output, started.elapsed());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let entries = parse_output(snap.site.check_mode, &stdout);
     let last_err = String::from_utf8_lossy(&output.stderr)
@@ -101,6 +103,30 @@ async fn run_check(snap: &SiteSnapshot) -> Result<CheckReport, String> {
         if last_err.is_empty() { String::new() } else { format!(" | {last_err}") }
     );
     Ok(CheckReport { entries, message })
+}
+
+/// Appends this check's command, exit code and the enabled output streams to the site's checker log.
+fn log_output(site: &Site, args: &[String], output: &std::process::Output, elapsed: Duration) {
+    if !site.log_checker_stdout && !site.log_checker_stderr {
+        return;
+    }
+    let code = output.status.code().map_or("?".to_string(), |c| c.to_string());
+    let mut block = format!(
+        "{}  {} (exit {code}, {:.1}s)\n",
+        logfile::stamp(),
+        logfile::cmdline(site.exe_path.trim(), args),
+        elapsed.as_secs_f32()
+    );
+    for (on, label, bytes) in [
+        (site.log_checker_stdout, "stdout", &output.stdout),
+        (site.log_checker_stderr, "stderr", &output.stderr),
+    ] {
+        if on {
+            block.push_str(&format!("--- {label} ---\n{}\n", String::from_utf8_lossy(bytes).trim_end()));
+        }
+    }
+    block.push('\n');
+    logfile::append(&logfile::checker_path(&site.name), &block);
 }
 
 fn parse_output(mode: CheckMode, stdout: &str) -> Vec<LiveEntry> {

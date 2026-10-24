@@ -9,7 +9,7 @@ use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent};
 use iced::futures::{SinkExt, Stream};
 use iced::{Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -62,6 +62,8 @@ pub struct SiteDraft {
     pub checker: String,
     pub downloader: String,
     pub output: String,
+    pub log_stdout: bool,
+    pub log_stderr: bool,
 }
 
 impl SiteDraft {
@@ -74,6 +76,8 @@ impl SiteDraft {
             checker: s.checker_args.clone(),
             downloader: s.downloader_args.clone(),
             output: s.output_dir.clone(),
+            log_stdout: s.log_checker_stdout,
+            log_stderr: s.log_checker_stderr,
         }
     }
 
@@ -91,6 +95,15 @@ pub enum DraftField {
     Checker(String),
     Downloader(String),
     Output(String),
+    LogStdout(bool),
+    LogStderr(bool),
+}
+
+/// A single option changed in a streamer's settings panel.
+#[derive(Debug, Clone, Copy)]
+pub enum OptionField {
+    LogStdout(bool),
+    LogStderr(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +119,8 @@ pub enum Msg {
     AddStreamer(SiteId),
     RemoveStreamer(StreamerId),
     ToggleStreamer(StreamerId, bool),
+    ToggleStreamerSettings(StreamerId),
+    StreamerOption(StreamerId, OptionField),
     AddSite(Preset),
     RemoveSite(SiteId),
     Draft(SiteId, DraftField),
@@ -133,6 +148,7 @@ pub struct App {
     log: VecDeque<String>,
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
+    open_settings: HashSet<StreamerId>,
     global_out: String,
     phase: f32,
     now: u64,
@@ -152,6 +168,7 @@ impl App {
             log: VecDeque::new(),
             drafts: HashMap::new(),
             new_streamer: HashMap::new(),
+            open_settings: HashSet::new(),
             global_out: String::new(),
             phase: 0.0,
             now: now_secs(),
@@ -207,6 +224,21 @@ impl App {
             }
             Msg::RemoveStreamer(id) => self.client.send(PolicyCommand::RemoveStreamer(id)),
             Msg::ToggleStreamer(id, enabled) => self.client.send(PolicyCommand::SetStreamerEnabled { id, enabled }),
+            Msg::ToggleStreamerSettings(id) => {
+                if !self.open_settings.remove(&id) {
+                    self.open_settings.insert(id);
+                }
+            }
+            Msg::StreamerOption(id, field) => {
+                if let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) {
+                    let mut options = st.options.clone();
+                    match field {
+                        OptionField::LogStdout(v) => options.log_stdout = v,
+                        OptionField::LogStderr(v) => options.log_stderr = v,
+                    }
+                    self.client.send(PolicyCommand::SetStreamerOptions { id, options });
+                }
+            }
             Msg::AddSite(preset) => self.client.send(PolicyCommand::AddSite(new_site(preset))),
             Msg::RemoveSite(id) => self.client.send(PolicyCommand::RemoveSite(id)),
             Msg::Draft(id, field) => {
@@ -229,6 +261,8 @@ impl App {
                         DraftField::Checker(v) => d.checker = v,
                         DraftField::Downloader(v) => d.downloader = v,
                         DraftField::Output(v) => d.output = v,
+                        DraftField::LogStdout(v) => d.log_stdout = v,
+                        DraftField::LogStderr(v) => d.log_stderr = v,
                     }
                 }
             }
@@ -244,6 +278,8 @@ impl App {
                             checker_args: d.checker.trim().to_string(),
                             downloader_args: d.downloader.trim().to_string(),
                             output_dir: d.output.trim().to_string(),
+                            log_checker_stdout: d.log_stdout,
+                            log_checker_stderr: d.log_stderr,
                         }));
                     }
                 }
@@ -297,6 +333,7 @@ impl App {
             }
         }
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
+        self.open_settings.retain(|id| s.streamers.iter().any(|x| x.id == *id));
         self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
         self.settings = s;
     }

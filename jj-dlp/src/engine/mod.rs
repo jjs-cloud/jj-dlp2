@@ -3,6 +3,7 @@
 // Any changes to the engine should first be approved by the owner.
 
 mod checker;
+mod logfile;
 mod recorder;
 mod sampler;
 mod template;
@@ -366,6 +367,7 @@ impl Engine {
         ];
         let template = self.downloader_overrides.get(&streamer_id).unwrap_or(&site.downloader_args);
         let args = template::expand(template, &vars, None);
+        let log_path = |on: bool, kind: &str| on.then(|| logfile::stream_path(&site.name, &streamer.name, kind));
         let id = self.alloc_recorder_id();
         let spec = RecorderSpec {
             id,
@@ -375,6 +377,8 @@ impl Engine {
             exe: site.exe_path.trim().to_string(),
             args,
             cwd: PathBuf::from(out_dir),
+            log_stdout: log_path(streamer.options.log_stdout, "stdout"),
+            log_stderr: log_path(streamer.options.log_stderr, "stderr"),
         };
         match recorder::spawn_recorder(spec, &self.tracked) {
             Ok(handle) => {
@@ -431,6 +435,8 @@ mod e2e {
                 checker_args: "--dump-json {urls}".into(),
                 downloader_args: "RECORD {url} {id}".into(),
                 output_dir: String::new(),
+                log_checker_stdout: true,
+                log_checker_stderr: true,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -438,6 +444,7 @@ mod e2e {
                 name: "live1".into(),
                 url: "https://x.test/live1".into(),
                 enabled,
+                options: StreamerOptions { log_stdout: true, log_stderr: true },
             }],
         };
         std::fs::create_dir_all(settings::config_dir()).unwrap();
@@ -474,8 +481,25 @@ mod e2e {
                 seen_pids.push(s.pid);
             }
 
+            let logs = settings::config_dir().join("logs");
+            let checker_log = std::fs::read_to_string(logs.join("fake.checker.log")).unwrap();
+            assert!(checker_log.contains("--- stdout ---") && checker_log.contains("vid1"), "{checker_log}");
+            assert!(checker_log.contains("--- stderr ---"), "{checker_log}");
+
             p.client.send(Command::SetStreamerEnabled { id: info.streamer_id, enabled: false });
             wait_for(&mut p, 30, |e| matches!(e, Event::ProcessRemoved(_))).await;
+            for kind in ["stdout", "stderr"] {
+                let path = logs.join(format!("fake.live1.{kind}.log"));
+                let mut text = String::new();
+                for _ in 0..20 {
+                    text = std::fs::read_to_string(&path).unwrap();
+                    if text.contains("exit: code") {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                assert!(text.contains("start: ") && text.contains("exit: code"), "{kind}: {text}");
+            }
             for pid in &seen_pids {
                 let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|t| t.rsplit(") ").next().and_then(|r| r.chars().next()));
                 assert!(matches!(state, None | Some('Z')), "pid {pid} still alive at removal (state {state:?})");
