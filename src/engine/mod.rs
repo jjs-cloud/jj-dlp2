@@ -3,8 +3,10 @@
 // Any changes to the engine should first be approved by the owner.
 
 mod checker;
+mod diagnose;
 mod exepath;
 mod logfile;
+mod preflight;
 mod recorder;
 mod sampler;
 mod template;
@@ -12,17 +14,24 @@ mod template;
 use crate::api::*;
 use crate::settings;
 use checker::{CheckReport, LiveEntry, SiteSnapshot, SiteWorker};
-use recorder::{RecorderHandle, RecorderSpec, SharedTracked};
+use diagnose::Problem;
+use recorder::{RecorderHandle, RecorderSpec, SharedTracked, Tracked};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+
+/// How long a recorder must run before its streamer's recording problem is cleared.
+const HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Messages from engine background tasks back to the engine loop.
 pub(crate) enum Internal {
     CheckResult { site_id: SiteId, at: u64, result: Result<CheckReport, String> },
     RecorderGone(RecorderId),
     Log(String),
+    /// An informational line from a recorder, logged once per live session.
+    Note { streamer_id: StreamerId, text: String },
+    Preflight { notices: Vec<Notice>, manual: bool },
 }
 
 /// Prevents a console window from flashing up on Windows.
@@ -64,6 +73,14 @@ struct StreamState {
     entry: Option<LiveEntry>,
 }
 
+/// Recording health of one streamer during the current live session.
+#[derive(Default)]
+struct Health {
+    restarts: u32,
+    issue: Option<String>,
+    last_exit: Option<String>,
+}
+
 struct Engine {
     settings: Settings,
     events: UnboundedSender<Event>,
@@ -77,6 +94,10 @@ struct Engine {
     next_recorder_id: RecorderId,
     checker_overrides: HashMap<SiteId, String>,
     recorder_overrides: HashMap<StreamerId, String>,
+    health: HashMap<StreamerId, Health>,
+    site_problems: HashMap<SiteId, String>,
+    session_notes: HashSet<(StreamerId, String)>,
+    notices: Vec<Notice>,
 }
 
 impl Engine {
@@ -95,6 +116,10 @@ impl Engine {
             next_recorder_id: 1,
             checker_overrides: HashMap::new(),
             recorder_overrides: HashMap::new(),
+            health: HashMap::new(),
+            site_problems: HashMap::new(),
+            session_notes: HashSet::new(),
+            notices: Vec::new(),
         }
     }
 
@@ -102,6 +127,7 @@ impl Engine {
         let mut internal_rx = self.internal_rx.take().expect("internal rx");
         sampler::spawn_sampler(self.tracked.clone(), self.events.clone(), self.internal_tx.clone());
         self.sync_workers();
+        self.start_preflight(false);
         loop {
             tokio::select! {
                 cmd = cmd_rx.recv() => match cmd {
@@ -170,6 +196,18 @@ impl Engine {
                 }
                 set_or_clear(&mut self.recorder_overrides, streamer_id, args);
             }
+            Command::Recheck => {
+                let ids: Vec<StreamerId> = self.health.keys().copied().collect();
+                for id in ids {
+                    if let Some(h) = self.health.get_mut(&id) {
+                        h.last_exit = None;
+                        if h.issue.take().is_some() {
+                            self.emit(Event::StreamerIssue { id, issue: None });
+                        }
+                    }
+                }
+                self.start_preflight(true);
+            }
             Command::Shutdown => self.begin_shutdown(),
         }
     }
@@ -194,11 +232,15 @@ impl Engine {
         for id in dropped {
             self.stop_streamer_recorders(id);
             self.states.remove(&id);
+            self.health.remove(&id);
+            self.session_notes.retain(|(sid, _)| *sid != id);
         }
         self.settings = new;
         self.checker_overrides.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
         self.recorder_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
+        self.site_problems.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
         self.sync_workers();
+        self.start_preflight(false);
         let streamers = self.settings.streamers.clone();
         for s in streamers.iter().filter(|s| kept.contains(&s.id)) {
             if s.enabled {
@@ -214,10 +256,20 @@ impl Engine {
         match msg {
             Internal::CheckResult { site_id, at, result } => self.on_check_result(site_id, at, result),
             Internal::Log(msg) => self.log(msg),
+            Internal::Note { streamer_id, text } => {
+                if self.session_notes.insert((streamer_id, text.clone())) {
+                    let name = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.name.clone());
+                    self.log(format!("{}: {text}", name.unwrap_or_default()));
+                }
+            }
+            Internal::Preflight { notices, manual } => self.on_preflight(notices, manual),
             Internal::RecorderGone(id) => {
                 let streamer = self.recorders.remove(&id).map(|h| h.streamer_id);
-                self.tracked.lock().unwrap().remove(&id);
+                let done = self.tracked.lock().unwrap().remove(&id);
                 self.emit(Event::ProcessRemoved(id));
+                if let (Some(sid), Some(t)) = (streamer, done) {
+                    self.on_recorder_exit(sid, t);
+                }
                 if let Some(sid) = streamer {
                     if let Some(st) = self.states.get_mut(&sid) {
                         st.live = false;
@@ -275,12 +327,12 @@ impl Engine {
         let report = match result {
             Ok(r) => r,
             Err(message) => {
-                self.log(format!("[{}] check failed: {message}", self.site_name(site_id)));
-                self.emit(Event::SiteChecked { id: site_id, at, ok: false });
+                self.report_check(site_id, at, Some((message.clone(), message)));
                 return;
             }
         };
-        self.emit(Event::SiteChecked { id: site_id, at, ok: true });
+        let problem = report.problem.as_ref().map(|p| (p.log_text(), p.summary()));
+        self.report_check(site_id, at, problem);
         let streamers: Vec<Streamer> =
             self.settings.streamers.iter().filter(|s| s.site_id == site_id).cloned().collect();
         let single = streamers.len() == 1;
@@ -313,9 +365,125 @@ impl Engine {
             }
         }
         for s in &streamers {
+            self.refresh_health(s.id);
             self.maybe_start_recording(s.id);
             self.emit_status(s.id);
         }
+    }
+
+    /// Reports a check result, logging its problem only when it appears, changes or clears.
+    fn report_check(&mut self, site_id: SiteId, at: u64, problem: Option<(String, String)>) {
+        let name = self.site_name(site_id);
+        let key = problem.as_ref().map(|(log, _)| log.clone());
+        if self.site_problems.get(&site_id) != key.as_ref() {
+            match &key {
+                Some(log) => self.log(format!("[{name}] check problem: {log}")),
+                None => self.log(format!("[{name}] check problem cleared")),
+            }
+            match key {
+                Some(k) => {
+                    self.site_problems.insert(site_id, k);
+                }
+                None => {
+                    self.site_problems.remove(&site_id);
+                }
+            }
+        }
+        self.emit(Event::SiteChecked { id: site_id, at, ok: problem.is_none(), problem: problem.map(|(_, summary)| summary) });
+    }
+
+    /// Clears a streamer's recording problem once a recorder runs healthily; resets session counters while offline.
+    fn refresh_health(&mut self, streamer_id: StreamerId) {
+        let healthy = self
+            .tracked
+            .lock()
+            .unwrap()
+            .values()
+            .any(|t| t.streamer_id == streamer_id && t.root_exit.is_none() && t.started.elapsed() >= HEALTHY_AFTER);
+        if healthy {
+            self.mark_healthy(streamer_id);
+            return;
+        }
+        let live = self.states.get(&streamer_id).is_some_and(|s| s.live);
+        if !live && !self.recording(streamer_id) {
+            if let Some(h) = self.health.get_mut(&streamer_id) {
+                h.restarts = 0;
+                h.last_exit = None;
+            }
+            self.session_notes.retain(|(id, _)| *id != streamer_id);
+        }
+    }
+
+    fn mark_healthy(&mut self, streamer_id: StreamerId) {
+        let Some(h) = self.health.get_mut(&streamer_id) else { return };
+        h.last_exit = None;
+        if h.issue.take().is_some() {
+            self.emit(Event::StreamerIssue { id: streamer_id, issue: None });
+        }
+    }
+
+    /// Classifies a finished recorder: clean ends are healthy, known setup errors raise an issue, others are logged once and retried.
+    fn on_recorder_exit(&mut self, streamer_id: StreamerId, t: Tracked) {
+        if t.stopping {
+            return;
+        }
+        let code = t.root_exit.flatten();
+        if code == Some(0) {
+            self.mark_healthy(streamer_id);
+            return;
+        }
+        let problem = diagnose::find_problem(&t.errors);
+        let key = problem.as_ref().map_or_else(|| diagnose::describe_exit(code), |p| p.line.clone());
+        let new_issue = problem.as_ref().filter(|p| p.hint.is_some()).map(Problem::summary);
+        let repeat = {
+            let h = self.health.entry(streamer_id).or_default();
+            h.restarts += 1;
+            let repeat = h.last_exit.as_deref() == Some(key.as_str());
+            h.last_exit = Some(key);
+            if new_issue.is_some() {
+                h.issue = new_issue.clone();
+            }
+            repeat
+        };
+        if new_issue.is_some() {
+            self.emit(Event::StreamerIssue { id: streamer_id, issue: new_issue });
+        }
+        if !repeat {
+            let detail = problem.map(|p| format!(": {}", p.log_text())).unwrap_or_default();
+            self.log(format!(
+                "{}: recording stopped unexpectedly ({}, after {}s); retrying while live{detail}",
+                t.streamer_name,
+                diagnose::describe_exit(code),
+                t.started.elapsed().as_secs()
+            ));
+        }
+    }
+
+    fn start_preflight(&self, manual: bool) {
+        let sites = self.settings.sites.clone();
+        let tx = self.internal_tx.clone();
+        tokio::spawn(async move {
+            let notices = preflight::run(sites).await;
+            let _ = tx.send(Internal::Preflight { notices, manual });
+        });
+    }
+
+    /// Logs and publishes setup notices when they change (or always after a manual re-check).
+    fn on_preflight(&mut self, notices: Vec<Notice>, manual: bool) {
+        let changed = notices != self.notices;
+        if changed {
+            for n in &notices {
+                let command = n.command.as_ref().map(|c| format!(" Run: {c}")).unwrap_or_default();
+                self.log(format!("setup: {}. {}{command}", n.title, n.steps));
+            }
+        }
+        if manual && notices.is_empty() {
+            self.log("setup re-check: no problems found");
+        }
+        if changed || manual {
+            self.emit(Event::Preflight(notices.clone()));
+        }
+        self.notices = notices;
     }
 
     fn site_name(&self, id: SiteId) -> String {
@@ -337,6 +505,7 @@ impl Engine {
                 live: st.is_some_and(|s| s.live),
                 recording: self.recording(id),
                 last_checked: st.and_then(|s| s.last_checked),
+                restarts: self.health.get(&id).map_or(0, |h| h.restarts),
             },
         });
     }
@@ -386,6 +555,7 @@ impl Engine {
             cwd: PathBuf::from(out_dir),
             log_stdout: log_path(streamer.options.log_stdout, "stdout"),
             log_stderr: log_path(streamer.options.log_stderr, "stderr"),
+            internal: self.internal_tx.clone(),
         };
         match recorder::spawn_recorder(spec, &self.tracked) {
             Ok(handle) => {
@@ -426,7 +596,7 @@ fn set_or_clear<K: std::hash::Hash + Eq>(map: &mut HashMap<K, String>, key: K, v
 #[cfg(all(test, unix))]
 mod e2e {
     use super::*;
-    use crate::testutil::Sandbox;
+    use crate::testutil::{Sandbox, FAKE_FAILING};
     use std::time::Duration;
 
     fn write_settings(dir: &std::path::Path, script: &std::path::Path, enabled: bool) {
@@ -519,6 +689,55 @@ mod e2e {
             write_settings(&dir, &script, true);
             p.client.send(Command::Reload);
             wait_for(&mut p, 40, |e| matches!(e, Event::ProcessUpdate(i) if full(i))).await;
+
+            p.client.send(Command::Shutdown);
+            let thread = p.thread;
+            tokio::task::spawn_blocking(move || thread.join()).await.unwrap().unwrap();
+        });
+    }
+
+    #[test]
+    fn reports_problems_and_ignores_offline_errors() {
+        let sb = Sandbox::with_script("engine-issues", FAKE_FAILING);
+        let streamer = |id: u64, name: &str| Streamer {
+            id,
+            site_id: 1,
+            name: name.into(),
+            url: format!("https://x.test/{name}"),
+            enabled: true,
+            options: StreamerOptions::default(),
+        };
+        let settings = Settings {
+            next_id: 10,
+            default_output_dir: sb.dir.join("out").to_string_lossy().into(),
+            sites: vec![Site {
+                id: 1,
+                name: "Fake".into(),
+                exe_path: sb.script.to_string_lossy().into(),
+                interval_secs: 5,
+                check_mode: CheckMode::DumpJson,
+                checker_args: "--dump-json {urls}".into(),
+                recorder_args: "RECORD {url} {id}".into(),
+                output_dir: String::new(),
+                log_checker_stdout: false,
+                log_checker_stderr: false,
+            }],
+            streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
+        };
+        std::fs::create_dir_all(settings::config_dir()).unwrap();
+        std::fs::write(settings::settings_path(), serde_json::to_string(&settings).unwrap()).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut p = start();
+            let ev = wait_for(&mut p, 30, |e| matches!(e, Event::SiteChecked { ok: false, .. })).await;
+            let Event::SiteChecked { problem, .. } = ev else { unreachable!() };
+            assert!(problem.unwrap().contains("Something unexpected"));
+
+            let ev = wait_for(&mut p, 40, |e| matches!(e, Event::StreamerIssue { issue: Some(m), .. } if m.contains("ffmpeg"))).await;
+            let Event::StreamerIssue { id, .. } = ev else { unreachable!() };
+            assert_eq!(id, 4);
+            wait_for(&mut p, 20, |e| matches!(e, Event::StreamerStatus { status, .. } if status.restarts >= 1)).await;
 
             p.client.send(Command::Shutdown);
             let thread = p.thread;

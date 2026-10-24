@@ -90,6 +90,8 @@ pub enum Command {
     /// Replaces a streamer's recorder_args for new recordings until cleared with `None`.
     #[allow(dead_code)]
     SetRecorderOverride { streamer_id: StreamerId, args: Option<String> },
+    /// Re-runs the setup checks and clears recording problems shown for streamers.
+    Recheck,
     /// Stops all recorders gracefully, then ends the engine.
     Shutdown,
 }
@@ -100,6 +102,8 @@ pub struct StreamerStatus {
     pub recording: bool,
     /// Unix seconds of the last check that covered this streamer.
     pub last_checked: Option<u64>,
+    /// Unexpected recorder exits since the stream went live.
+    pub restarts: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,10 +141,22 @@ pub struct ProcessInfo {
     pub cmdline: String,
 }
 
+/// A setup problem and how to fix it; `command` is shown with a copy button.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Notice {
+    pub title: String,
+    pub steps: String,
+    pub command: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     StreamerStatus { id: StreamerId, status: StreamerStatus },
-    SiteChecked { id: SiteId, at: u64, ok: bool },
+    SiteChecked { id: SiteId, at: u64, ok: bool, problem: Option<String> },
+    /// A setup problem blocking a streamer's recording; `None` clears it.
+    StreamerIssue { id: StreamerId, issue: Option<String> },
+    /// Setup problems found before anything runs; empty means all clear.
+    Preflight(Vec<Notice>),
     ProcessUpdate(ProcessInfo),
     ProcessRemoved(RecorderId),
     Log(String),

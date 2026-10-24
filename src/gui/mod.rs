@@ -134,12 +134,15 @@ pub enum Msg {
     RevertSite(SiteId),
     GlobalOutEdit(String),
     GlobalOutSave,
+    Recheck,
+    CopyText(String),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct CheckInfo {
     pub at: u64,
     pub ok: bool,
+    pub problem: Option<String>,
 }
 
 pub struct App {
@@ -149,6 +152,8 @@ pub struct App {
     tab: Tab,
     statuses: HashMap<StreamerId, StreamerStatus>,
     checks: HashMap<SiteId, CheckInfo>,
+    issues: HashMap<StreamerId, String>,
+    notices: Vec<Notice>,
     processes: BTreeMap<RecorderId, ProcessInfo>,
     log: VecDeque<String>,
     drafts: HashMap<SiteId, SiteDraft>,
@@ -169,6 +174,8 @@ impl App {
             tab: Tab::Monitor,
             statuses: HashMap::new(),
             checks: HashMap::new(),
+            issues: HashMap::new(),
+            notices: Vec::new(),
             processes: BTreeMap::new(),
             log: VecDeque::new(),
             drafts: HashMap::new(),
@@ -296,6 +303,8 @@ impl App {
             }
             Msg::GlobalOutEdit(v) => self.global_out = v,
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
+            Msg::Recheck => self.client.send(PolicyCommand::Recheck),
+            Msg::CopyText(text) => return iced::clipboard::write(text),
         }
         Task::none()
     }
@@ -308,9 +317,18 @@ impl App {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
                 }
-                Event::SiteChecked { id, at, ok } => {
-                    self.checks.insert(id, CheckInfo { at, ok });
+                Event::SiteChecked { id, at, ok, problem } => {
+                    self.checks.insert(id, CheckInfo { at, ok, problem });
                 }
+                Event::StreamerIssue { id, issue } => match issue {
+                    Some(text) => {
+                        self.issues.insert(id, text);
+                    }
+                    None => {
+                        self.issues.remove(&id);
+                    }
+                },
+                Event::Preflight(notices) => self.notices = notices,
                 Event::ProcessUpdate(p) => {
                     self.processes.insert(p.id, p);
                 }
@@ -340,6 +358,7 @@ impl App {
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.open_streamer_settings.retain(|id| s.streamers.iter().any(|x| x.id == *id));
         self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
+        self.issues.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.settings = s;
     }
 }

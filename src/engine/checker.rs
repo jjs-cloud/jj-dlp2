@@ -1,6 +1,6 @@
 //! Per-site checker: runs yt-dlp for all of a site's URLs and detects live streams.
 
-use super::{exepath, hide_window, logfile, template, Internal};
+use super::{diagnose, exepath, hide_window, logfile, template, Internal};
 use crate::api::{now_secs, CheckMode, Site};
 use serde_json::Value;
 use std::process::Stdio;
@@ -37,6 +37,7 @@ impl LiveEntry {
 #[derive(Debug, Clone)]
 pub struct CheckReport {
     pub entries: Vec<LiveEntry>,
+    pub problem: Option<diagnose::Problem>,
 }
 
 pub struct SiteWorker {
@@ -91,7 +92,10 @@ async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) ->
     log_output(&snap.site, &exe.exe, &args, &output, started.elapsed());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let entries = parse_output(snap.site.check_mode, &stdout);
-    Ok(CheckReport { entries })
+    let stderr: Vec<String> = String::from_utf8_lossy(&output.stderr).lines().map(str::to_string).collect();
+    let status = output.status;
+    let problem = diagnose::check_problem(&stderr, status.success(), status.code(), !entries.is_empty());
+    Ok(CheckReport { entries, problem })
 }
 
 /// Appends this check's command, exit code and the enabled output streams to the site's checker log.

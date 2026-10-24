@@ -1,6 +1,6 @@
 //! Launches a yt-dlp recorder, captures its output, and stops it (SIGINT on Unix, taskkill on Windows).
 
-use super::{hide_window, logfile};
+use super::{diagnose, hide_window, logfile, Internal};
 use crate::api::{RecorderId, StreamerId};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,10 +9,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 #[cfg(unix)]
 const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How many recent ERROR lines are kept for the exit report.
+const MAX_ERRORS: usize = 8;
+
+type Notes = Option<(UnboundedSender<Internal>, StreamerId)>;
 
 pub struct RecorderSpec {
     pub id: RecorderId,
@@ -25,6 +31,8 @@ pub struct RecorderSpec {
     /// Files that receive the process's stdout/stderr lines when logging is enabled.
     pub log_stdout: Option<PathBuf>,
     pub log_stderr: Option<PathBuf>,
+    /// Channel for one-off notes found in the process output.
+    pub internal: UnboundedSender<Internal>,
 }
 
 /// State shared between the recorder tasks, the engine and the sampler thread.
@@ -42,6 +50,8 @@ pub struct Tracked {
     pub gone_sent: bool,
     pub last_line: String,
     pub cmdline: String,
+    /// Recent ERROR lines from the process output, oldest first.
+    pub errors: Vec<String>,
 }
 
 pub type SharedTracked = Arc<Mutex<HashMap<RecorderId, Tracked>>>;
@@ -88,14 +98,16 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
             gone_sent: false,
             last_line: String::new(),
             cmdline,
+            errors: Vec::new(),
         },
     );
 
+    let notes: Notes = Some((spec.internal.clone(), spec.streamer_id));
     if let Some(out) = child.stdout.take() {
-        tokio::spawn(read_lines(out, spec.id, tracked.clone(), spec.log_stdout.clone()));
+        tokio::spawn(read_lines(out, spec.id, tracked.clone(), spec.log_stdout.clone(), notes.clone()));
     }
     if let Some(err) = child.stderr.take() {
-        tokio::spawn(read_lines(err, spec.id, tracked.clone(), spec.log_stderr.clone()));
+        tokio::spawn(read_lines(err, spec.id, tracked.clone(), spec.log_stderr.clone(), notes));
     }
 
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
@@ -152,7 +164,13 @@ pub fn request_stop(handle: &mut RecorderHandle, id: RecorderId, tracked: &Share
 }
 
 /// Keeps the newest output line (split on '\n' and '\r') and appends each '\n'-ended line to `log`.
-async fn read_lines<R: tokio::io::AsyncRead + Unpin>(mut r: R, id: RecorderId, tracked: SharedTracked, log: Option<PathBuf>) {
+async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
+    mut r: R,
+    id: RecorderId,
+    tracked: SharedTracked,
+    log: Option<PathBuf>,
+    notes: Notes,
+) {
     let mut buf = [0u8; 4096];
     let mut line = Vec::<u8>::new();
     // Text ended by a '\r'; it counts as a real line only if a '\n' follows at once (CRLF).
@@ -181,13 +199,31 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(mut r: R, id: RecorderId, t
                 after_cr = (!text.is_empty()).then_some(text);
                 None
             };
-            if let (Some(path), Some(text)) = (&log, finished) {
-                logfile::line(path, &text);
+            if let Some(text) = finished {
+                inspect(&text, id, &tracked, &notes);
+                if let Some(path) = &log {
+                    logfile::line(path, &text);
+                }
             }
         }
         if line.len() > 8192 {
             line.clear();
         }
+    }
+}
+
+/// Stores ERROR lines for the exit report and forwards one-off notes to the engine.
+fn inspect(text: &str, id: RecorderId, tracked: &SharedTracked, notes: &Notes) {
+    if diagnose::is_error(text) {
+        if let Some(t) = tracked.lock().unwrap().get_mut(&id) {
+            if t.errors.len() >= MAX_ERRORS {
+                t.errors.remove(0);
+            }
+            t.errors.push(text.to_string());
+        }
+    }
+    if let (Some((tx, streamer_id)), Some(note)) = (notes, diagnose::note(text)) {
+        let _ = tx.send(Internal::Note { streamer_id: *streamer_id, text: note });
     }
 }
 
@@ -220,7 +256,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let input: &[u8] = b"one\r\ntwo\rthree\n\nfour";
         let tracked: SharedTracked = Arc::new(Mutex::new(HashMap::new()));
-        read_lines(input, 1, tracked, Some(path.clone())).await;
+        read_lines(input, 1, tracked, Some(path.clone()), None).await;
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().map(|l| l.split_once("  ").unwrap().1).collect();
         assert_eq!(lines, ["one", "three"]);

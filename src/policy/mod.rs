@@ -33,6 +33,8 @@ pub enum PolicyCommand {
     SetGlobalOutputDir(String),
     OpenConfigDir,
     OpenOutputDir(SiteId),
+    /// Re-runs the engine's setup checks.
+    Recheck,
     /// Stops the engine gracefully, then ends the policy layer.
     Shutdown,
 }
@@ -243,6 +245,7 @@ impl Policy {
             PolicyCommand::OpenOutputDir(site_id) => {
                 let _ = open::that_detached(output_dir(&self.settings, site_id));
             }
+            PolicyCommand::Recheck => self.engine.send(Command::Recheck),
             PolicyCommand::Shutdown => self.engine.send(Command::Shutdown),
         }
     }

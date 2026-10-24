@@ -127,6 +127,9 @@ impl App {
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
+        if !self.notices.is_empty() {
+            col = col.push(self.setup_notices(s));
+        }
         col = col.push(self.section_title(s, "STREAMERS"));
         if self.settings.sites.is_empty() {
             col = col.push(
@@ -150,6 +153,51 @@ impl App {
             col = col.push(self.site_block(s, site));
         }
         scrollable(col).height(Length::Fill).into()
+    }
+
+    fn warning_line<'a>(&self, s: Skin, msg: &str) -> Element<'a, Msg> {
+        row![
+            iced::widget::text("⚠").font(s.font).size(13).color(s.warn),
+            iced::widget::text(clip(msg, 300)).font(s.font).size(12).color(s.warn).width(Length::Fill),
+        ]
+        .spacing(8)
+        .into()
+    }
+
+    fn setup_notices(&self, s: Skin) -> Element<'_, Msg> {
+        let header = row![
+            self.section_title(s, "SETUP NEEDED"),
+            Space::new().width(Length::Fill),
+            button(t(&s, "Re-check").size(13))
+                .on_press(Msg::Recheck)
+                .padding([6.0, 12.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        ]
+        .align_y(Alignment::Center);
+        let mut col = Column::new().spacing(10).push(header);
+        for n in &self.notices {
+            let mut item = Column::new()
+                .spacing(4)
+                .push(iced::widget::text(n.title.as_str()).font(s.font).size(14).color(s.warn))
+                .push(muted(&s, n.steps.as_str()));
+            if let Some(cmd) = &n.command {
+                item = item.push(
+                    row![
+                        container(iced::widget::text(cmd.as_str()).font(iced::Font::MONOSPACE).size(12).color(s.text))
+                            .padding([6.0, 10.0])
+                            .style(skin::inset(s)),
+                        button(t(&s, "Copy").size(12))
+                            .on_press(Msg::CopyText(cmd.clone()))
+                            .padding([5.0, 10.0])
+                            .style(skin::btn(s, BtnKind::Ghost)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            }
+            col = col.push(item);
+        }
+        container(col).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
     }
 
     fn processes(&self, s: Skin) -> Element<'_, Msg> {
@@ -267,6 +315,9 @@ impl App {
         let head = head.push(Space::new().width(Length::Fill)).push(check);
 
         let mut col = Column::new().spacing(8).push(head);
+        if let Some(p) = self.checks.get(&site.id).and_then(|c| c.problem.as_deref()) {
+            col = col.push(self.warning_line(s, p));
+        }
         let streamers: Vec<&Streamer> = self.settings.streamers.iter().filter(|x| x.site_id == site.id).collect();
         if streamers.is_empty() {
             col = col.push(muted(&s, "No streamers yet; add one below."));
@@ -326,6 +377,9 @@ impl App {
         if !st.enabled {
             chips = chips.push(chip(s, "PAUSED", s.warn));
         }
+        if status.restarts > 0 {
+            chips = chips.push(chip(s, format!("restarted {}×", status.restarts), s.warn));
+        }
         if st.options.log_stdout || st.options.log_stderr {
             chips = chips.push(chip(s, "logging", s.muted));
         }
@@ -355,6 +409,9 @@ impl App {
         .spacing(12)
         .align_y(Alignment::Center);
         let mut body = Column::new().spacing(10).push(line);
+        if let Some(msg) = self.issues.get(&id) {
+            body = body.push(self.warning_line(s, msg));
+        }
         if self.open_streamer_settings.contains(&id) {
             body = body.push(self.streamer_settings_panel(s, st));
         }
