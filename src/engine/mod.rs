@@ -74,7 +74,7 @@ struct Engine {
     shutting_down: bool,
     next_recorder_id: RecorderId,
     checker_overrides: HashMap<SiteId, String>,
-    downloader_overrides: HashMap<StreamerId, String>,
+    recorder_overrides: HashMap<StreamerId, String>,
 }
 
 impl Engine {
@@ -92,7 +92,7 @@ impl Engine {
             shutting_down: false,
             next_recorder_id: 1,
             checker_overrides: HashMap::new(),
-            downloader_overrides: HashMap::new(),
+            recorder_overrides: HashMap::new(),
         }
     }
 
@@ -161,12 +161,12 @@ impl Engine {
                 set_or_clear(&mut self.checker_overrides, site_id, args);
                 self.sync_workers();
             }
-            Command::SetDownloaderOverride { streamer_id, args } => {
+            Command::SetRecorderOverride { streamer_id, args } => {
                 if !self.settings.streamers.iter().any(|s| s.id == streamer_id) {
-                    self.log(format!("downloader override ignored: unknown streamer {streamer_id}"));
+                    self.log(format!("recorder override ignored: unknown streamer {streamer_id}"));
                     return;
                 }
-                set_or_clear(&mut self.downloader_overrides, streamer_id, args);
+                set_or_clear(&mut self.recorder_overrides, streamer_id, args);
             }
             Command::Shutdown => self.begin_shutdown(),
         }
@@ -195,7 +195,7 @@ impl Engine {
         }
         self.settings = new;
         self.checker_overrides.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
-        self.downloader_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
+        self.recorder_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
         self.sync_workers();
         let streamers = self.settings.streamers.clone();
         for s in streamers.iter().filter(|s| kept.contains(&s.id)) {
@@ -365,7 +365,7 @@ impl Engine {
             ("title", template::sanitize(&entry.title)),
             ("name", template::sanitize(&streamer.name)),
         ];
-        let template = self.downloader_overrides.get(&streamer_id).unwrap_or(&site.downloader_args);
+        let template = self.recorder_overrides.get(&streamer_id).unwrap_or(&site.recorder_args);
         let args = template::expand(template, &vars, None);
         let log_path = |on: bool, kind: &str| on.then(|| logfile::stream_path(&site.name, &streamer.name, kind));
         let id = self.alloc_recorder_id();
@@ -433,7 +433,7 @@ mod e2e {
                 interval_secs: 5,
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
-                downloader_args: "RECORD {url} {id}".into(),
+                recorder_args: "RECORD {url} {id}".into(),
                 output_dir: String::new(),
                 log_checker_stdout: true,
                 log_checker_stderr: true,

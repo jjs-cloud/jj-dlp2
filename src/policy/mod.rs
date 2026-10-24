@@ -16,7 +16,7 @@ pub struct NewSite {
     pub interval_secs: u64,
     pub check_mode: CheckMode,
     pub checker_args: String,
-    pub downloader_args: String,
+    pub recorder_args: String,
     pub output_dir: String,
 }
 
@@ -171,7 +171,7 @@ impl Policy {
                     interval_secs: n.interval_secs,
                     check_mode: n.check_mode,
                     checker_args: n.checker_args,
-                    downloader_args: n.downloader_args,
+                    recorder_args: n.recorder_args,
                     output_dir: n.output_dir,
                     log_checker_stdout: false,
                     log_checker_stderr: false,
@@ -287,7 +287,7 @@ mod tests {
             interval_secs: 60,
             check_mode: CheckMode::DumpJson,
             checker_args: String::new(),
-            downloader_args: String::new(),
+            recorder_args: String::new(),
             output_dir: output_dir.into(),
             log_checker_stdout: false,
             log_checker_stderr: false,
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn settings_without_log_fields_still_load() {
-        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","downloader_args":"","output_dir":""}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
+        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","output_dir":""}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
         assert_eq!(s.streamers[0].options, StreamerOptions::default());
@@ -354,7 +354,7 @@ mod e2e {
                 interval_secs: 5,
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
-                downloader_args: "RECORD {url} {id}".into(),
+                recorder_args: "RECORD {url} {id}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;

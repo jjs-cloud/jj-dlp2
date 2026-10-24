@@ -65,7 +65,7 @@ pub struct SiteDraft {
     pub interval: String,
     pub mode: CheckMode,
     pub checker: String,
-    pub downloader: String,
+    pub recorder: String,
     pub output: String,
     pub log_stdout: bool,
     pub log_stderr: bool,
@@ -79,7 +79,7 @@ impl SiteDraft {
             interval: s.interval_secs.to_string(),
             mode: s.check_mode,
             checker: s.checker_args.clone(),
-            downloader: s.downloader_args.clone(),
+            recorder: s.recorder_args.clone(),
             output: s.output_dir.clone(),
             log_stdout: s.log_checker_stdout,
             log_stderr: s.log_checker_stderr,
@@ -98,7 +98,7 @@ pub enum DraftField {
     Interval(String),
     Mode(CheckMode),
     Checker(String),
-    Downloader(String),
+    Recorder(String),
     Output(String),
     LogStdout(bool),
     LogStderr(bool),
@@ -263,7 +263,7 @@ impl App {
                             d.mode = m;
                         }
                         DraftField::Checker(v) => d.checker = v,
-                        DraftField::Downloader(v) => d.downloader = v,
+                        DraftField::Recorder(v) => d.recorder = v,
                         DraftField::Output(v) => d.output = v,
                         DraftField::LogStdout(v) => d.log_stdout = v,
                         DraftField::LogStderr(v) => d.log_stderr = v,
@@ -280,7 +280,7 @@ impl App {
                             interval_secs: interval,
                             check_mode: d.mode,
                             checker_args: d.checker.trim().to_string(),
-                            downloader_args: d.downloader.trim().to_string(),
+                            recorder_args: d.recorder.trim().to_string(),
                             output_dir: d.output.trim().to_string(),
                             log_checker_stdout: d.log_stdout,
                             log_checker_stderr: d.log_stderr,
@@ -344,7 +344,7 @@ impl App {
 }
 
 fn new_site(preset: Preset) -> NewSite {
-    let (name, checker, downloader) = match preset {
+    let (name, checker, recorder) = match preset {
         Preset::YouTube => ("YouTube", DEFAULT_JSON_ARGS, DEFAULT_DL_ARGS),
         Preset::Twitch => ("Twitch", DEFAULT_JSON_ARGS, DEFAULT_DL_ARGS),
         Preset::Blank => ("New site", "", ""),
@@ -355,7 +355,7 @@ fn new_site(preset: Preset) -> NewSite {
         interval_secs: 60,
         check_mode: CheckMode::DumpJson,
         checker_args: checker.into(),
-        downloader_args: downloader.into(),
+        recorder_args: recorder.into(),
         output_dir: String::new(),
     }
 }

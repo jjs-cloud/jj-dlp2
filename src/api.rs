@@ -38,7 +38,7 @@ pub struct Site {
     pub interval_secs: u64,
     pub check_mode: CheckMode,
     pub checker_args: String,
-    pub downloader_args: String,
+    pub recorder_args: String,
     /// Empty means use the global output directory.
     pub output_dir: String,
     /// Write the checker's stdout to this site's checker log file.
@@ -64,9 +64,9 @@ pub struct Streamer {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StreamerOptions {
-    /// Write the downloader's stdout to this streamer's log file.
+    /// Write the recorder's stdout to this streamer's log file.
     pub log_stdout: bool,
-    /// Write the downloader's stderr to this streamer's log file.
+    /// Write the recorder's stderr to this streamer's log file.
     pub log_stderr: bool,
 }
 
@@ -87,9 +87,9 @@ pub enum Command {
     /// Replaces a site's checker_args until cleared with `None`.
     #[allow(dead_code)]
     SetCheckerOverride { site_id: SiteId, args: Option<String> },
-    /// Replaces a streamer's downloader_args for new recordings until cleared with `None`.
+    /// Replaces a streamer's recorder_args for new recordings until cleared with `None`.
     #[allow(dead_code)]
-    SetDownloaderOverride { streamer_id: StreamerId, args: Option<String> },
+    SetRecorderOverride { streamer_id: StreamerId, args: Option<String> },
     /// Stops all recorders gracefully, then ends the engine.
     Shutdown,
 }

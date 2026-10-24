@@ -133,7 +133,7 @@ impl App {
                 container(
                     column![
                         t(&s, "No sites configured yet."),
-                        muted(&s, "A site holds the yt-dlp path plus the checker and downloader commands for a group of streamers."),
+                        muted(&s, "A site holds the yt-dlp path plus the checker and recorder commands for a group of streamers."),
                         button(t(&s, "Add a site").size(13))
                             .on_press(Msg::SetTab(Tab::Settings))
                             .padding([8.0, 14.0])
@@ -369,8 +369,8 @@ impl App {
         column![
             muted(&s, "Output is appended to the logs folder next to settings.json."),
             row![
-                log("Log downloader stdout", st.options.log_stdout, OptionField::LogStdout),
-                log("Log downloader stderr", st.options.log_stderr, OptionField::LogStderr),
+                log("Log recorder stdout", st.options.log_stdout, OptionField::LogStdout),
+                log("Log recorder stderr", st.options.log_stderr, OptionField::LogStderr),
             ]
             .spacing(24),
         ]
@@ -411,7 +411,7 @@ impl App {
         let help = column![
             self.section_title(s, "COMMAND PLACEHOLDERS"),
             muted(&s, "Checker: {urls} becomes every URL monitored for the site (appended if missing)."),
-            muted(&s, "Downloader: {url} live stream URL · {streamer_url} the URL you added · {name} streamer name · {title} stream title · {id} video id · {output_dir} output folder."),
+            muted(&s, "Recorder: {url} live stream URL · {streamer_url} the URL you added · {name} streamer name · {title} stream title · {id} video id · {output_dir} output folder."),
             muted(&s, "--simulate mode expects lines like original_url|webpage_url|id|title, e.g. from --print with --match-filter is_live."),
         ]
         .spacing(5);
@@ -507,7 +507,7 @@ impl App {
             top,
             labeled("Path to yt-dlp executable", field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)),
             labeled("Checker command arguments", field("--dump-json {urls}", &d.checker, DraftField::Checker)),
-            labeled("Downloader command arguments", field("-o \"%(title)s.%(ext)s\" {url}", &d.downloader, DraftField::Downloader)),
+            labeled("Recorder command arguments", field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)),
             labeled("Output folder (blank = global)", field("Use the global output folder", &d.output, DraftField::Output)),
             logging,
             actions,

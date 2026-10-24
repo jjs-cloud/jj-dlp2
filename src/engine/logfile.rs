@@ -29,7 +29,7 @@ pub fn checker_path(site: &str) -> PathBuf {
     logs_dir().join(format!("{}.checker.log", slug(site)))
 }
 
-/// Path of a streamer's downloader log; `kind` is "stdout" or "stderr".
+/// Path of a streamer's recorder log; `kind` is "stdout" or "stderr".
 pub fn stream_path(site: &str, streamer: &str, kind: &str) -> PathBuf {
     logs_dir().join(format!("{}.{}.{kind}.log", slug(site), slug(streamer)))
 }
