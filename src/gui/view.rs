@@ -347,15 +347,13 @@ impl App {
             .into()
     }
 
-    /// Picks the column count and row height so every row fits; two columns need a wide enough window.
+    /// Picks two columns when the window is at least the column threshold wide, else one; sizes rows to fit.
     fn compact_layout(&self, rows: usize, extra_h: f32) -> (usize, f32) {
         let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h).max(0.0);
-        let fit = |n: usize| ((avail + ROW_GAP) / n as f32 - ROW_GAP).floor();
-        let one = fit(rows);
-        if one >= self.row_min || self.win_w < self.two_col_w {
-            return (1, one.clamp(self.row_min, self.row_max));
-        }
-        (2, fit(rows.div_ceil(2)).clamp(self.row_min, self.row_max))
+        let cols = if self.win_w >= self.two_col_w { 2 } else { 1 };
+        let per_col = rows.div_ceil(cols).max(1);
+        let fit = ((avail + ROW_GAP) / per_col as f32 - ROW_GAP).floor();
+        (cols, fit.clamp(self.row_min, self.row_max))
     }
 
     fn compact_list<'a>(&'a self, s: Skin, mut col: Column<'a, Msg>) -> Column<'a, Msg> {
@@ -1041,7 +1039,7 @@ impl App {
         let compact = column![
             self.section_title(s, "COMPACT VIEW"),
             muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
-            muted(&s, "Compact view only uses two columns when the window is at least the width set below."),
+            muted(&s, "Compact view shows two columns when the window is at least the column threshold wide, otherwise one."),
             row_size("Row Size Max", self.row_max, Msg::SetRowMax),
             row_size("Row Size Min", self.row_min, Msg::SetRowMin),
             two_col,
