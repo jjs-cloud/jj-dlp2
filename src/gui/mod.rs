@@ -254,7 +254,15 @@ impl App {
                     self.client.send(PolicyCommand::SetStreamerOptions { id, options });
                 }
             }
-            Msg::AddSite(preset) => self.client.send(PolicyCommand::AddSite(new_site(preset))),
+            Msg::AddSite(preset) => {
+                let site = new_site(preset);
+                // Named presets are added once; Blank can repeat.
+                let exists = !matches!(preset, Preset::Blank)
+                    && self.settings.sites.iter().any(|s| s.name.eq_ignore_ascii_case(&site.name));
+                if !exists {
+                    self.client.send(PolicyCommand::AddSite(site));
+                }
+            }
             Msg::RemoveSite(id) => self.client.send(PolicyCommand::RemoveSite(id)),
             Msg::Draft(id, field) => {
                 if let Some(d) = self.drafts.get_mut(&id) {
