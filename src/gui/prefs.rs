@@ -3,11 +3,24 @@
 use super::skin::ThemeKind;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Default)]
+pub const ROW_MIN_LIMIT: f32 = 15.0;
+pub const ROW_MAX_LIMIT: f32 = 48.0;
+pub const ROW_MIN_DEFAULT: f32 = 15.0;
+pub const ROW_MAX_DEFAULT: f32 = 34.0;
+
+#[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Prefs {
     theme: String,
     compact: bool,
+    row_min: f32,
+    row_max: f32,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT }
+    }
 }
 
 fn path() -> std::path::PathBuf {
@@ -47,5 +60,20 @@ pub fn load_compact() -> bool {
 pub fn save_compact(on: bool) {
     let mut prefs = read();
     prefs.compact = on;
+    write(&prefs);
+}
+
+/// Reads the saved compact row-height range, clamped to the allowed limits.
+pub fn load_row_range() -> (f32, f32) {
+    let prefs = read();
+    let min = prefs.row_min.clamp(ROW_MIN_LIMIT, ROW_MAX_LIMIT);
+    (min, prefs.row_max.clamp(min, ROW_MAX_LIMIT))
+}
+
+/// Saves the compact row-height range.
+pub fn save_row_range(min: f32, max: f32) {
+    let mut prefs = read();
+    prefs.row_min = min;
+    prefs.row_max = max;
     write(&prefs);
 }

@@ -1,11 +1,11 @@
 //! View functions for every screen.
 
 use super::skin::{self, pulse, BtnKind, Skin, ThemeKind};
-use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab};
+use super::{prefs, App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text_input, toggler, Column, Row, Space, Text,
+    button, column, container, pick_list, row, scrollable, slider, text_input, toggler, Column, Row, Space, Text,
 };
 use iced::{Alignment, Color, Element, Length};
 
@@ -64,47 +64,86 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
-const ROW_H: f32 = 15.0;
 const ROW_GAP: f32 = 2.0;
-const SITE_W: u32 = 76;
-const NAME_W: u32 = 150;
+const ROW_FLOOR: f32 = 15.0;
+const ROW_CEIL: f32 = 34.0;
 const COMPACT_CHROME_H: f32 = 200.0;
+const COMPACT_SLACK_H: f32 = 16.0;
 const PW_SITE: u32 = 90;
 const PW_STATE: u32 = 110;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
 
-fn mini_dot<'a>(color: Color, glow: f32) -> Element<'a, Msg> {
-    container(Space::new().width(7).height(7)).style(skin::dot(color, glow * 0.5)).into()
+/// Sizes of one compact row, interpolated from its height between ROW_FLOOR and ROW_CEIL.
+#[derive(Clone, Copy)]
+struct RowMetrics {
+    row_h: f32,
+    name: f32,
+    url: f32,
+    chip: f32,
+    chip_pad_v: f32,
+    chip_pad_h: f32,
+    dot: f32,
+    toggler: f32,
+    site_w: f32,
+    name_w: f32,
+    spacing: f32,
+    pad_h: f32,
 }
 
-fn mini_chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
-    container(iced::widget::text(label).font(s.font).size(9).color(color))
-        .padding([0.0, 6.0])
+impl RowMetrics {
+    fn new(row_h: f32) -> RowMetrics {
+        let t = ((row_h - ROW_FLOOR) / (ROW_CEIL - ROW_FLOOR)).max(0.0);
+        let at = |floor: f32, ceil: f32| floor + (ceil - floor) * t;
+        let text = |floor: f32, ceil: f32| (at(floor, ceil) * 2.0).round() / 2.0;
+        RowMetrics {
+            row_h,
+            name: text(11.0, 16.0),
+            url: text(10.0, 12.0),
+            chip: text(9.0, 11.0),
+            chip_pad_v: at(0.0, 4.0),
+            chip_pad_h: at(6.0, 10.0),
+            dot: at(7.0, 10.0).round(),
+            toggler: at(12.0, 18.0).round(),
+            site_w: at(76.0, 110.0).round(),
+            name_w: at(150.0, 220.0).round(),
+            spacing: at(8.0, 12.0),
+            pad_h: at(6.0, 12.0),
+        }
+    }
+}
+
+fn mini_dot<'a>(m: RowMetrics, color: Color, glow: f32) -> Element<'a, Msg> {
+    container(Space::new().width(m.dot).height(m.dot)).style(skin::dot(color, glow * 0.5)).into()
+}
+
+fn mini_chip<'a>(s: Skin, m: RowMetrics, label: impl IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
+    container(iced::widget::text(label).font(s.font).size(m.chip).color(color))
+        .padding([m.chip_pad_v, m.chip_pad_h])
         .style(skin::chip(s, color))
         .into()
 }
 
-fn compact_chips<'a>(s: Skin, st: &Streamer, status: StreamerStatus) -> Row<'a, Msg> {
-    let mut chips: Row<'a, Msg> = Row::new().spacing(4).align_y(Alignment::Center);
+fn compact_chips<'a>(s: Skin, m: RowMetrics, st: &Streamer, status: StreamerStatus) -> Row<'a, Msg> {
+    let mut chips: Row<'a, Msg> = Row::new().spacing(m.spacing / 2.0).align_y(Alignment::Center);
     if status.recording {
-        chips = chips.push(mini_chip(s, "RECORDING", s.accent));
+        chips = chips.push(mini_chip(s, m, "RECORDING", s.accent));
     }
     if status.live {
-        chips = chips.push(mini_chip(s, "LIVE", s.live));
+        chips = chips.push(mini_chip(s, m, "LIVE", s.live));
     }
     if !status.live && !status.recording {
-        chips = chips.push(mini_chip(s, "OFFLINE", s.muted));
+        chips = chips.push(mini_chip(s, m, "OFFLINE", s.muted));
     }
     if !st.enabled {
-        chips = chips.push(mini_chip(s, "PAUSED", s.warn));
+        chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
     }
     if status.restarts > 0 {
-        chips = chips.push(mini_chip(s, format!("restarted {}×", status.restarts), s.warn));
+        chips = chips.push(mini_chip(s, m, format!("restarted {}×", status.restarts), s.warn));
     }
     if st.options.log_stdout || st.options.log_stderr {
-        chips = chips.push(mini_chip(s, "logging", s.muted));
+        chips = chips.push(mini_chip(s, m, "logging", s.muted));
     }
     chips
 }
@@ -238,11 +277,15 @@ impl App {
         column![title, scrollable(col).height(Length::Fill)].spacing(12).into()
     }
 
-    /// One column while every row fits the window height, otherwise two.
-    fn compact_cols(&self, rows: usize, extra_h: f32) -> usize {
-        let avail = self.win_h - COMPACT_CHROME_H - extra_h;
-        let fit = (avail / (ROW_H + ROW_GAP)).floor().max(1.0) as usize;
-        if rows > fit { 2 } else { 1 }
+    /// Picks the column count and row height so every row fits the window height.
+    fn compact_layout(&self, rows: usize, extra_h: f32) -> (usize, f32) {
+        let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h).max(0.0);
+        let fit = |n: usize| ((avail + ROW_GAP) / n as f32 - ROW_GAP).floor();
+        let one = fit(rows);
+        if one >= self.row_min {
+            return (1, one.min(self.row_max));
+        }
+        (2, fit(rows.div_ceil(2)).clamp(self.row_min, self.row_max))
     }
 
     fn compact_list<'a>(&'a self, s: Skin, mut col: Column<'a, Msg>) -> Column<'a, Msg> {
@@ -271,22 +314,23 @@ impl App {
             }
             return col;
         }
-        let notices_h = if self.notices.is_empty() { 0.0 } else { 40.0 + 70.0 * self.notices.len() as f32 };
-        let extra_h = problems.len() as f32 * 28.0 + notices_h;
-        let cols = self.compact_cols(entries.len(), extra_h);
+        let notices_h = if self.notices.is_empty() { 0.0 } else { 48.0 + 80.0 * self.notices.len() as f32 };
+        let extra_h = problems.len() as f32 * 32.0 + notices_h;
+        let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
+        let m = RowMetrics::new(row_h);
         let per_col = entries.len().div_ceil(cols);
         let mut grid = Row::new().spacing(14);
         for chunk in entries.chunks(per_col) {
             let mut c = Column::new().spacing(ROW_GAP).width(Length::Fill);
             for (i, &(site, st)) in chunk.iter().enumerate() {
-                c = c.push(self.compact_row(s, site, st, i % 2 == 1));
+                c = c.push(self.compact_row(s, m, site, st, i % 2 == 1));
             }
             grid = grid.push(c);
         }
         col.push(grid)
     }
 
-    fn compact_row<'a>(&'a self, s: Skin, site: &'a Site, st: &'a Streamer, shaded: bool) -> Element<'a, Msg> {
+    fn compact_row<'a>(&'a self, s: Skin, m: RowMetrics, site: &'a Site, st: &'a Streamer, shaded: bool) -> Element<'a, Msg> {
         let status = self.statuses.get(&st.id).copied().unwrap_or_default();
         let ph = pulse(self.phase);
         let color = if status.live && !st.enabled {
@@ -302,23 +346,23 @@ impl App {
         let id = st.id;
         let name_color = if st.enabled { s.text } else { s.muted };
         let line = row![
-            mini_dot(color, glow),
-            container(mini_chip(s, clip(&site.name, 12), s.accent2)).width(SITE_W).clip(true),
-            container(iced::widget::text(st.name.as_str()).font(s.font).size(11).color(name_color).wrapping(Wrapping::None))
-                .width(NAME_W)
+            mini_dot(m, color, glow),
+            container(mini_chip(s, m, clip(&site.name, 12), s.accent2)).width(m.site_w).clip(true),
+            container(iced::widget::text(st.name.as_str()).font(s.font).size(m.name).color(name_color).wrapping(Wrapping::None))
+                .width(m.name_w)
                 .clip(true),
-            container(iced::widget::text(st.url.as_str()).font(s.font).size(10).color(s.muted).wrapping(Wrapping::None))
+            container(iced::widget::text(st.url.as_str()).font(s.font).size(m.url).color(s.muted).wrapping(Wrapping::None))
                 .width(Length::Fill)
                 .clip(true),
-            compact_chips(s, st, status),
-            toggler(st.enabled).on_toggle(move |v| Msg::ToggleStreamer(id, v)).size(12),
+            compact_chips(s, m, st, status),
+            toggler(st.enabled).on_toggle(move |v| Msg::ToggleStreamer(id, v)).size(m.toggler),
         ]
-        .spacing(8)
+        .spacing(m.spacing)
         .align_y(Alignment::Center);
         container(line)
-            .height(ROW_H)
+            .center_y(m.row_h)
             .width(Length::Fill)
-            .padding([0.0, 6.0])
+            .padding([0.0, m.pad_h])
             .clip(true)
             .style(skin::stripe(s, shaded))
             .into()
@@ -707,6 +751,35 @@ impl App {
         ]
         .spacing(8);
         col = col.push(container(global).padding(14).width(Length::Fill).style(skin::card(s, None)));
+
+        let row_size = |label: &'static str, value: f32, on_change: fn(f32) -> Msg| {
+            row![
+                t(&s, label).size(13).width(80),
+                slider(prefs::ROW_MIN_LIMIT..=prefs::ROW_MAX_LIMIT, value, on_change)
+                    .step(1.0_f32)
+                    .on_release(Msg::SaveRowRange)
+                    .width(260),
+                muted(&s, format!("{value:.0} px")),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center)
+        };
+        let compact = column![
+            self.section_title(s, "COMPACT VIEW ROW SIZE"),
+            row_size("Maximum", self.row_max, Msg::SetRowMax),
+            row_size("Minimum", self.row_min, Msg::SetRowMin),
+            row![
+                muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Reset").size(12))
+                    .on_press(Msg::ResetRowRange)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8);
+        col = col.push(container(compact).padding(14).width(Length::Fill).style(skin::card(s, None)));
 
         let help = column![
             self.section_title(s, "COMMAND PLACEHOLDERS"),

@@ -141,6 +141,10 @@ pub enum Msg {
     CopyText(String),
     ToggleProc(RecorderId),
     SetCompact(bool),
+    SetRowMin(f32),
+    SetRowMax(f32),
+    SaveRowRange,
+    ResetRowRange,
     Resized(Size),
 }
 
@@ -170,12 +174,15 @@ pub struct App {
     now: u64,
     expanded_procs: HashSet<RecorderId>,
     compact: bool,
+    row_min: f32,
+    row_max: f32,
     win_h: f32,
 }
 
 impl App {
     fn new(client: PolicyClient) -> (App, Task<Msg>) {
         client.send(PolicyCommand::RequestSnapshot);
+        let (row_min, row_max) = prefs::load_row_range();
         let app = App {
             client,
             settings: crate::settings::default_settings(),
@@ -195,6 +202,8 @@ impl App {
             now: now_secs(),
             expanded_procs: HashSet::new(),
             compact: prefs::load_compact(),
+            row_min,
+            row_max,
             win_h: 820.0,
         };
         (app, Task::none())
@@ -331,6 +340,20 @@ impl App {
             Msg::SetCompact(on) => {
                 self.compact = on;
                 prefs::save_compact(on);
+            }
+            Msg::SetRowMin(v) => {
+                self.row_min = v.round().clamp(prefs::ROW_MIN_LIMIT, prefs::ROW_MAX_LIMIT);
+                self.row_max = self.row_max.max(self.row_min);
+            }
+            Msg::SetRowMax(v) => {
+                self.row_max = v.round().clamp(prefs::ROW_MIN_LIMIT, prefs::ROW_MAX_LIMIT);
+                self.row_min = self.row_min.min(self.row_max);
+            }
+            Msg::SaveRowRange => prefs::save_row_range(self.row_min, self.row_max),
+            Msg::ResetRowRange => {
+                self.row_min = prefs::ROW_MIN_DEFAULT;
+                self.row_max = prefs::ROW_MAX_DEFAULT;
+                prefs::save_row_range(self.row_min, self.row_max);
             }
             Msg::Resized(size) => self.win_h = size.height,
             Msg::ToggleProc(id) => {
