@@ -53,7 +53,7 @@ pub enum Tab {
 pub enum Preset {
     Twitch,
     Tiktok,
-    Cb,
+    Chaturbate,
     Kick,
     Blank,
 }
@@ -67,6 +67,7 @@ pub struct SiteDraft {
     pub mode: CheckMode,
     pub checker: String,
     pub recorder: String,
+    pub url_template: String,
     pub output: String,
     pub log_stdout: bool,
     pub log_stderr: bool,
@@ -81,6 +82,7 @@ impl SiteDraft {
             mode: s.check_mode,
             checker: s.checker_args.clone(),
             recorder: s.recorder_args.clone(),
+            url_template: s.url_template.clone(),
             output: s.output_dir.clone(),
             log_stdout: s.log_checker_stdout,
             log_stderr: s.log_checker_stderr,
@@ -100,6 +102,7 @@ pub enum DraftField {
     Mode(CheckMode),
     Checker(String),
     Recorder(String),
+    UrlTemplate(String),
     Output(String),
     LogStdout(bool),
     LogStderr(bool),
@@ -121,7 +124,7 @@ pub enum Msg {
     OpenConfigDir,
     OpenOutputDir(SiteId),
     NewStreamerName(SiteId, String),
-    NewStreamerUrl(SiteId, String),
+    NewStreamerUsername(SiteId, String),
     AddStreamer(SiteId),
     RemoveStreamer(StreamerId),
     ToggleStreamer(StreamerId, bool),
@@ -224,13 +227,13 @@ impl App {
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenOutputDir(site_id) => self.client.send(PolicyCommand::OpenOutputDir(site_id)),
             Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
-            Msg::NewStreamerUrl(id, v) => self.new_streamer.entry(id).or_default().1 = v,
+            Msg::NewStreamerUsername(id, v) => self.new_streamer.entry(id).or_default().1 = v,
             Msg::AddStreamer(id) => {
-                if let Some((name, url)) = self.new_streamer.remove(&id) {
-                    if !url.trim().is_empty() {
-                        self.client.send(PolicyCommand::AddStreamer { site_id: id, name, url });
+                if let Some((name, username)) = self.new_streamer.remove(&id) {
+                    if !username.trim().is_empty() {
+                        self.client.send(PolicyCommand::AddStreamer { site_id: id, name, username });
                     } else {
-                        self.new_streamer.insert(id, (name, url));
+                        self.new_streamer.insert(id, (name, username));
                     }
                 }
             }
@@ -272,6 +275,7 @@ impl App {
                         }
                         DraftField::Checker(v) => d.checker = v,
                         DraftField::Recorder(v) => d.recorder = v,
+                        DraftField::UrlTemplate(v) => d.url_template = v,
                         DraftField::Output(v) => d.output = v,
                         DraftField::LogStdout(v) => d.log_stdout = v,
                         DraftField::LogStderr(v) => d.log_stderr = v,
@@ -289,6 +293,7 @@ impl App {
                             check_mode: d.mode,
                             checker_args: d.checker.trim().to_string(),
                             recorder_args: d.recorder.trim().to_string(),
+                            url_template: d.url_template.trim().to_string(),
                             output_dir: d.output.trim().to_string(),
                             log_checker_stdout: d.log_stdout,
                             log_checker_stderr: d.log_stderr,
@@ -375,28 +380,32 @@ fn default_exe() -> &'static str {
 }
 
 fn new_site(preset: Preset) -> NewSite {
-    let (name, checker, recorder) = match preset {
+    let (name, url_template, checker, recorder) = match preset {
         Preset::Twitch => (
             "Twitch",
+            "https://twitch.tv/{username}",
             "--cookies-from-browser firefox --dump-json {urls}",
             r#"--cookies-from-browser firefox --fixup never --no-part -o "%(title)s [%(id)s].%(ext)s" {url}"#,
         ),
         Preset::Tiktok => (
             "Tiktok",
+            "https://tiktok.com/@{username}/live",
             "--cookies-from-browser firefox --dump-json {urls}",
             r#"--cookies-from-browser firefox --no-part --retries 0 -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
         ),
-        Preset::Cb => (
-            "CB",
+        Preset::Chaturbate => (
+            "Chaturbate",
+            "https://chaturbate.com/{username}",
             "--dump-json {urls}",
             r#"--fixup never --no-part --downloader-args ffmpeg:"-fps_mode passthrough -copyts -avoid_negative_ts make_zero" -o "%(title)s.%(ext)s" {url}"#,
         ),
         Preset::Kick => (
             "Kick",
+            "https://kick.com/{username}",
             "--dump-json {urls}",
             r#"--fixup never --no-part -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
         ),
-        Preset::Blank => ("New site", "", ""),
+        Preset::Blank => ("New site", "", "", ""),
     };
     NewSite {
         name: name.into(),
@@ -405,6 +414,7 @@ fn new_site(preset: Preset) -> NewSite {
         check_mode: CheckMode::DumpJson,
         checker_args: checker.into(),
         recorder_args: recorder.into(),
+        url_template: url_template.into(),
         output_dir: String::new(),
     }
 }

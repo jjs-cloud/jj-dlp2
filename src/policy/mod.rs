@@ -17,6 +17,7 @@ pub struct NewSite {
     pub check_mode: CheckMode,
     pub checker_args: String,
     pub recorder_args: String,
+    pub url_template: String,
     pub output_dir: String,
 }
 
@@ -26,7 +27,7 @@ pub enum PolicyCommand {
     AddSite(NewSite),
     UpdateSite(Site),
     RemoveSite(SiteId),
-    AddStreamer { site_id: SiteId, name: String, url: String },
+    AddStreamer { site_id: SiteId, name: String, username: String },
     RemoveStreamer(StreamerId),
     SetStreamerEnabled { id: StreamerId, enabled: bool },
     SetStreamerOptions { id: StreamerId, options: StreamerOptions },
@@ -174,6 +175,7 @@ impl Policy {
                     check_mode: n.check_mode,
                     checker_args: n.checker_args,
                     recorder_args: n.recorder_args,
+                    url_template: n.url_template,
                     output_dir: n.output_dir,
                     log_checker_stdout: false,
                     log_checker_stderr: false,
@@ -191,11 +193,18 @@ impl Policy {
                 self.settings.sites.retain(|s| s.id != id);
                 self.commit();
             }
-            PolicyCommand::AddStreamer { site_id, name, url } => {
-                let url = url.trim().to_string();
-                if url.is_empty() || !self.settings.sites.iter().any(|s| s.id == site_id) {
+            PolicyCommand::AddStreamer { site_id, name, username } => {
+                let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else {
+                    return;
+                };
+                if username.trim().trim_start_matches('@').is_empty() {
                     return;
                 }
+                if site.url_template.trim().is_empty() {
+                    self.log(format!("Set a URL template for {} before adding streamers", site.name));
+                    return;
+                }
+                let url = build_url(&site.url_template, &username);
                 if self.settings.streamers.iter().any(|s| s.site_id == site_id && s.url == url) {
                     self.log(format!("{url} is already monitored"));
                     return;
@@ -257,6 +266,11 @@ fn output_dir(settings: &Settings, site_id: SiteId) -> &str {
     site_dir.filter(|d| !d.is_empty()).unwrap_or(&settings.default_output_dir)
 }
 
+/// Builds a stream URL by replacing `{username}` in the template; a leading `@` is dropped.
+fn build_url(template: &str, username: &str) -> String {
+    template.trim().replace("{username}", username.trim().trim_start_matches('@'))
+}
+
 /// Uses the last meaningful path segment of a URL as a display name.
 fn derive_name(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
@@ -291,6 +305,7 @@ mod tests {
             check_mode: CheckMode::DumpJson,
             checker_args: String::new(),
             recorder_args: String::new(),
+            url_template: String::new(),
             output_dir: output_dir.into(),
             log_checker_stdout: false,
             log_checker_stderr: false,
@@ -314,10 +329,16 @@ mod tests {
 
     #[test]
     fn settings_without_log_fields_still_load() {
-        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","output_dir":""}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
+        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":""}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
         assert_eq!(s.streamers[0].options, StreamerOptions::default());
+    }
+
+    #[test]
+    fn build_url_fills_username() {
+        assert_eq!(build_url("https://tiktok.com/@{username}/live", "@name"), "https://tiktok.com/@name/live");
+        assert_eq!(build_url("https://kick.com/{username}", " name "), "https://kick.com/name");
     }
 
     #[test]
@@ -358,13 +379,14 @@ mod e2e {
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
                 recorder_args: "RECORD {url} {id}".into(),
+                url_template: "https://x.test/{username}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };
             let site_id = s.sites[0].id;
 
-            p.client.send(PolicyCommand::AddStreamer { site_id, name: String::new(), url: "https://x.test/live1".into() });
+            p.client.send(PolicyCommand::AddStreamer { site_id, name: String::new(), username: "live1".into() });
             let ev = wait_for(&mut p, 60, |e| matches!(e, PolicyEvent::Engine(Event::ProcessUpdate(i)) if i.ytdlp.is_some())).await;
             let PolicyEvent::Engine(Event::ProcessUpdate(info)) = ev else { unreachable!() };
             assert_eq!(info.streamer_name, "live1");

@@ -325,17 +325,17 @@ impl App {
         for st in streamers {
             col = col.push(self.streamer_row(s, st));
         }
-        let (name, url) = self.new_streamer.get(&site.id).cloned().unwrap_or_default();
+        let (name, username) = self.new_streamer.get(&site.id).cloned().unwrap_or_default();
         let id = site.id;
         let add = row![
-            text_input("Name (optional)", &name)
+            text_input("Display Name (optional)", &name)
                 .on_input(move |v| Msg::NewStreamerName(id, v))
                 .on_submit(Msg::AddStreamer(id))
                 .padding(8)
-                .width(190)
+                .width(230)
                 .style(skin::input(s)),
-            text_input("Channel or stream URL", &url)
-                .on_input(move |v| Msg::NewStreamerUrl(id, v))
+            text_input("Streamer username", &username)
+                .on_input(move |v| Msg::NewStreamerUsername(id, v))
                 .on_submit(Msg::AddStreamer(id))
                 .padding(8)
                 .width(Length::Fill)
@@ -484,8 +484,8 @@ impl App {
                 .on_press(Msg::AddSite(Preset::Tiktok))
                 .padding([7.0, 14.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "CB").size(13))
-                .on_press(Msg::AddSite(Preset::Cb))
+            button(t(&s, "Chaturbate").size(13))
+                .on_press(Msg::AddSite(Preset::Chaturbate))
                 .padding([7.0, 14.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
             button(t(&s, "Kick").size(13))
@@ -571,6 +571,7 @@ impl App {
         let form = column![
             top,
             labeled("Path to yt-dlp executable", field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)),
+            labeled("URL template", field("https://twitch.tv/{username}", &d.url_template, DraftField::UrlTemplate)),
             labeled("Checker command arguments", field("--dump-json {urls}", &d.checker, DraftField::Checker)),
             labeled("Recorder command arguments", field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)),
             labeled("Output folder (blank = global)", field("Use the global output folder", &d.output, DraftField::Output)),

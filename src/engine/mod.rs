@@ -377,8 +377,8 @@ impl Engine {
         let key = problem.as_ref().map(|(log, _)| log.clone());
         if self.site_problems.get(&site_id) != key.as_ref() {
             match &key {
-                Some(log) => self.log(format!("[{name}] check problem: {log}")),
-                None => self.log(format!("[{name}] check problem cleared")),
+                Some(log) => self.log(format!("[{name}] checker problem: {log}")),
+                None => self.log(format!("[{name}] checker problem cleared")),
             }
             match key {
                 Some(k) => {
@@ -611,6 +611,7 @@ mod e2e {
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
                 recorder_args: "RECORD {url} {id}".into(),
+                url_template: String::new(),
                 output_dir: String::new(),
                 log_checker_stdout: true,
                 log_checker_stderr: true,
@@ -718,6 +719,7 @@ mod e2e {
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
                 recorder_args: "RECORD {url} {id}".into(),
+                url_template: String::new(),
                 output_dir: String::new(),
                 log_checker_stdout: false,
                 log_checker_stderr: false,

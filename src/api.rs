@@ -39,6 +39,8 @@ pub struct Site {
     pub check_mode: CheckMode,
     pub checker_args: String,
     pub recorder_args: String,
+    /// Stream URL pattern; `{username}` is replaced with the name typed when adding a streamer.
+    pub url_template: String,
     /// Empty means use the global output directory.
     pub output_dir: String,
     /// Write the checker's stdout to this site's checker log file.
