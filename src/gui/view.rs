@@ -1,7 +1,7 @@
 //! View functions for every screen.
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
-use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab, prefs};
+use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab, UpdateStage, prefs};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
@@ -218,7 +218,11 @@ impl App {
             Tab::Settings => self.settings_tab(s),
             Tab::Log => self.log_view(s),
         };
-        container(column![self.header(s), self.tabs(s), body].spacing(14))
+        let mut page = Column::new().spacing(14).push(self.header(s));
+        if let Some(banner) = self.update_banner(s) {
+            page = page.push(banner);
+        }
+        container(page.push(self.tabs(s)).push(body))
             .padding(18)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -264,6 +268,67 @@ impl App {
         .width(Length::Fill)
         .style(skin::header(s))
         .into()
+    }
+
+    /// The "Update available!" banner with its confirm step; `None` when up to date.
+    fn update_banner(&self, s: Skin) -> Option<Element<'_, Msg>> {
+        let a = self.update.as_ref()?;
+        let heading = iced::widget::text(format!("Update available! v{} (running v{})", a.version, crate::update::CURRENT))
+            .font(s.font)
+            .size(15)
+            .color(s.accent2);
+        let (detail, buttons): (Option<String>, Element<'_, Msg>) = match self.update_stage {
+            UpdateStage::Idle => (
+                self.update_error.as_ref().map(|e| format!("Last attempt failed: {e}")),
+                button(t(&s, "Update").size(13))
+                    .on_press(Msg::UpdateClicked)
+                    .padding([6.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Primary))
+                    .into(),
+            ),
+            UpdateStage::Confirm => {
+                let n = self.processes.len();
+                let text = if n > 0 {
+                    format!("Installing will stop {n} active recording(s) and restart jj-dlp.")
+                } else {
+                    "jj-dlp will restart to install the update.".to_string()
+                };
+                (
+                    Some(text),
+                    row![
+                        button(t(&s, "Install & restart").size(13))
+                            .on_press(Msg::UpdateConfirm)
+                            .padding([6.0, 14.0])
+                            .style(skin::btn(s, BtnKind::Danger)),
+                        button(t(&s, "Cancel").size(13))
+                            .on_press(Msg::UpdateCancel)
+                            .padding([6.0, 14.0])
+                            .style(skin::btn(s, BtnKind::Ghost)),
+                    ]
+                    .spacing(8)
+                    .into(),
+                )
+            }
+            UpdateStage::Installing => (
+                Some("Downloading the update; jj-dlp restarts when it is ready.".to_string()),
+                Space::new().into(),
+            ),
+        };
+        let mut left = Column::new().spacing(4).push(heading);
+        if let Some(d) = detail {
+            left = left.push(iced::widget::text(d).font(s.font).size(12).color(s.warn));
+        }
+        Some(
+            container(
+                row![left, Space::new().width(Length::Fill), buttons]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+            )
+            .padding([10.0, 14.0])
+            .width(Length::Fill)
+            .style(skin::card(s, Some((s.accent, pulse(self.phase)))))
+            .into(),
+        )
     }
 
     fn tabs(&self, s: Skin) -> Element<'_, Msg> {
@@ -399,7 +464,8 @@ impl App {
         } else {
             48.0 + 80.0 * self.notices.len() as f32
         };
-        let extra_h = problems.len() as f32 * 32.0 + notices_h;
+        let banner_h = if self.update.is_some() { 70.0 } else { 0.0 };
+        let extra_h = problems.len() as f32 * 32.0 + notices_h + banner_h;
         let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
         let longest = entries
             .iter()

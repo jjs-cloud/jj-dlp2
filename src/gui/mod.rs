@@ -6,6 +6,7 @@ mod view;
 
 use crate::api::*;
 use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent};
+use crate::update;
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
@@ -15,6 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const LOG_LIMIT: usize = 500;
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
 pub const DEFAULT_SIM_ARGS: &str =
     "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s|%(id)s|%(title)s\" {urls}";
@@ -47,6 +49,14 @@ pub enum Tab {
     Processes,
     Settings,
     Log,
+}
+
+/// Where the update banner is in its flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateStage {
+    Idle,
+    Confirm,
+    Installing,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +158,12 @@ pub enum Msg {
     SaveTwoColWidth,
     ResetRowRange,
     Resized(Size),
+    CheckUpdate,
+    UpdateChecked(Result<Option<update::Available>, String>),
+    UpdateClicked,
+    UpdateCancel,
+    UpdateConfirm,
+    UpdateStaged(Result<update::Staged, String>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -181,13 +197,16 @@ pub struct App {
     two_col_w: f32,
     win_w: f32,
     win_h: f32,
+    update: Option<update::Available>,
+    update_stage: UpdateStage,
+    update_error: Option<String>,
 }
 
 impl App {
     fn new(client: PolicyClient) -> (App, Task<Msg>) {
         client.send(PolicyCommand::RequestSnapshot);
         let (row_min, row_max) = prefs::load_row_range();
-        let app = App {
+        let mut app = App {
             client,
             settings: crate::settings::default_settings(),
             kind: prefs::load_theme(),
@@ -211,8 +230,14 @@ impl App {
             two_col_w: prefs::load_two_col_width(),
             win_w: 1180.0,
             win_h: 820.0,
+            update: None,
+            update_stage: UpdateStage::Idle,
+            update_error: None,
         };
-        (app, Task::none())
+        if let Some(e) = update::take_last_error() {
+            app.push_log(e);
+        }
+        (app, Task::perform(update::check_async(), Msg::UpdateChecked))
     }
 
     fn skin(&self) -> Skin {
@@ -228,6 +253,7 @@ impl App {
             Subscription::run(engine_stream),
             iced::time::every(Duration::from_millis(100)).map(Msg::Tick),
             window::resize_events().map(on_resize),
+            iced::time::every(UPDATE_CHECK_EVERY).map(|_| Msg::CheckUpdate),
         ])
     }
 
@@ -375,6 +401,43 @@ impl App {
                 if !self.expanded_procs.remove(&id) {
                     self.expanded_procs.insert(id);
                 }
+            }
+            Msg::CheckUpdate => {
+                if self.update_stage != UpdateStage::Installing {
+                    return Task::perform(update::check_async(), Msg::UpdateChecked);
+                }
+            }
+            Msg::UpdateChecked(Ok(found)) => {
+                if let Some(a) = found {
+                    if self.update_stage != UpdateStage::Installing {
+                        self.update = Some(a);
+                    }
+                }
+            }
+            Msg::UpdateChecked(Err(e)) => self.push_log(e),
+            Msg::UpdateClicked => {
+                if self.update.is_some() {
+                    self.update_error = None;
+                    self.update_stage = UpdateStage::Confirm;
+                }
+            }
+            Msg::UpdateCancel => self.update_stage = UpdateStage::Idle,
+            Msg::UpdateConfirm => {
+                if let Some(a) = self.update.clone() {
+                    self.update_stage = UpdateStage::Installing;
+                    self.push_log(format!("downloading update v{}", a.version));
+                    return Task::perform(update::download_async(a), Msg::UpdateStaged);
+                }
+            }
+            Msg::UpdateStaged(Ok(staged)) => {
+                self.push_log(format!("update v{} ready; restarting", staged.version));
+                update::set_pending(staged);
+                return iced::exit();
+            }
+            Msg::UpdateStaged(Err(e)) => {
+                self.push_log(format!("update failed: {e}"));
+                self.update_error = Some(e);
+                self.update_stage = UpdateStage::Idle;
             }
         }
         Task::none()

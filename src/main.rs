@@ -7,6 +7,7 @@ mod policy;
 mod settings;
 #[cfg(all(test, unix))]
 mod testutil;
+mod update;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -51,6 +52,8 @@ fn run_gui() {
     // Stop recorders gracefully before exiting.
     policy.client.send(policy::PolicyCommand::Shutdown);
     let _ = policy.thread.join();
+    // Installs a staged update (if any) now that recorders have stopped.
+    update::finish_pending();
 }
 
 fn run_no_gui() {

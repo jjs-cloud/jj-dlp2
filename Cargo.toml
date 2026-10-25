@@ -1,22 +1,30 @@
 [package]
 name = "jj-dlp"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2024"
+repository = "https://github.com/jjs-cloud/jj-dlp2"
 
 [dependencies]
 directories = "6.0.0"
 iced = { version = "0.14.0", features = ["tokio", "advanced"] }
 open = "5.4.5"
+semver = "1.0"
+self-replace = "1.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.10"
 sysinfo = "0.38.4"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "sync", "time", "macros", "io-util", "signal"] }
+ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+flate2 = "1"
+tar = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3
