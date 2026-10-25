@@ -13,6 +13,11 @@ fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.text)
 }
 
+/// Button label that inherits the button style's text colour.
+fn btn_label<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
+    iced::widget::text(v).font(s.font)
+}
+
 fn muted<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.muted).size(12)
 }
@@ -137,7 +142,7 @@ impl App {
                     column![
                         t(&s, "No sites configured yet."),
                         muted(&s, "A site holds the yt-dlp path plus the checker and recorder commands for a group of streamers."),
-                        button(t(&s, "Add a site").size(13))
+                        button(btn_label(&s, "Add a site").size(13))
                             .on_press(Msg::SetTab(Tab::Settings))
                             .padding([8.0, 14.0])
                             .style(skin::btn(s, BtnKind::Primary)),
@@ -340,7 +345,7 @@ impl App {
                 .padding(8)
                 .width(Length::Fill)
                 .style(skin::input(s)),
-            button(t(&s, "Add streamer").size(13))
+            button(btn_label(&s, "Add streamer").size(13))
                 .on_press(Msg::AddStreamer(id))
                 .padding([8.0, 14.0])
                 .style(skin::btn(s, BtnKind::Primary)),
@@ -454,7 +459,7 @@ impl App {
                     .on_submit(Msg::GlobalOutSave)
                     .padding(8)
                     .style(skin::input(s)),
-                button(t(&s, "Save").size(13))
+                button(btn_label(&s, "Save").size(13))
                     .on_press_maybe((self.global_out.trim() != self.settings.default_output_dir).then_some(Msg::GlobalOutSave))
                     .padding([8.0, 16.0])
                     .style(skin::btn(s, BtnKind::Primary)),
@@ -540,7 +545,7 @@ impl App {
 
         let count = self.settings.streamers.iter().filter(|x| x.site_id == id).count();
         let actions = row![
-            button(t(&s, "Save changes").size(13))
+            button(btn_label(&s, "Save changes").size(13))
                 .on_press_maybe((dirty && valid).then_some(Msg::SaveSite(id)))
                 .padding([8.0, 16.0])
                 .style(skin::btn(s, BtnKind::Primary)),
