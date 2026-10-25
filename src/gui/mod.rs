@@ -139,6 +139,7 @@ pub enum Msg {
     GlobalOutSave,
     Recheck,
     CopyText(String),
+    ToggleProc(RecorderId),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -165,6 +166,7 @@ pub struct App {
     global_out: String,
     phase: f32,
     now: u64,
+    expanded_procs: HashSet<RecorderId>,
 }
 
 impl App {
@@ -187,6 +189,7 @@ impl App {
             global_out: String::new(),
             phase: 0.0,
             now: now_secs(),
+            expanded_procs: HashSet::new(),
         };
         (app, Task::none())
     }
@@ -318,6 +321,11 @@ impl App {
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
             Msg::CopyText(text) => return iced::clipboard::write(text),
+            Msg::ToggleProc(id) => {
+                if !self.expanded_procs.remove(&id) {
+                    self.expanded_procs.insert(id);
+                }
+            }
         }
         Task::none()
     }
@@ -347,6 +355,7 @@ impl App {
                 }
                 Event::ProcessRemoved(id) => {
                     self.processes.remove(&id);
+                    self.expanded_procs.remove(&id);
                 }
                 Event::Log(line) => self.push_log(line),
             },

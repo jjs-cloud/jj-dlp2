@@ -249,6 +249,37 @@ pub fn btn(s: Skin, kind: BtnKind) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
+/// A clickable tile or table row; `color` tints the border when it is not the muted colour.
+pub fn tile(s: Skin, color: Color, selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let tinted = color != s.muted;
+        let background = if selected {
+            with_alpha(s.accent, 0.18)
+        } else if hovered {
+            s.surface_hi
+        } else {
+            s.surface
+        };
+        let border = if selected {
+            s.accent
+        } else if tinted {
+            with_alpha(color, 0.55)
+        } else if hovered {
+            with_alpha(s.accent, 0.6)
+        } else {
+            s.border
+        };
+        button::Style {
+            background: Some(Background::Color(background)),
+            text_color: s.text,
+            border: Border { color: border, width: 1.0, radius: Radius::from(s.radius * 0.5) },
+            shadow: if tinted { s.glow_shadow(color, 0.25, 8.0) } else { Shadow::default() },
+            snap: false,
+        }
+    }
+}
+
 pub fn input(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
         let focused = matches!(status, text_input::Status::Focused { .. });

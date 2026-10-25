@@ -64,6 +64,35 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
+const PW_SITE: u32 = 90;
+const PW_STATE: u32 = 110;
+const PW_UP: u32 = 80;
+const PW_YT: u32 = 140;
+const PW_FF: u32 = 140;
+
+/// Total CPU and memory across every process of one recording.
+fn proc_totals(p: &ProcessInfo) -> (f32, u64) {
+    let mut cpu = 0.0_f32;
+    let mut mem = 0_u64;
+    let mut add = |x: &ProcSample| {
+        cpu += x.cpu_percent;
+        mem += x.mem_bytes;
+    };
+    if p.has_bootloader {
+        if let Some(r) = &p.root {
+            add(r);
+        }
+    }
+    let ytdlp = p.ytdlp.as_ref().or(if p.has_bootloader { None } else { p.root.as_ref() });
+    if let Some(y) = ytdlp {
+        add(y);
+    }
+    for f in &p.ffmpeg {
+        add(f);
+    }
+    (cpu, mem)
+}
+
 impl App {
     pub(super) fn view(&self) -> Element<'_, Msg> {
         let s = self.skin();
@@ -206,7 +235,7 @@ impl App {
     }
 
     fn processes(&self, s: Skin) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
+        let mut col = Column::new().spacing(6).padding(iced::Padding { right: 8.0, ..Default::default() });
         col = col.push(self.section_title(s, "PROCESSES"));
         if self.processes.is_empty() {
             col = col.push(
@@ -215,11 +244,58 @@ impl App {
                     .width(Length::Fill)
                     .style(skin::card(s, None)),
             );
-        }
-        for p in self.processes.values() {
-            col = col.push(self.process_card(s, p));
+        } else {
+            col = col.push(self.proc_summary(s));
+            col = col.push(self.proc_header(s));
+            for p in self.processes.values() {
+                col = col.push(self.proc_line(s, p));
+                if self.expanded_procs.contains(&p.id) {
+                    col = col.push(self.proc_detail(s, p));
+                }
+            }
         }
         scrollable(col).height(Length::Fill).into()
+    }
+
+    fn proc_summary(&self, s: Skin) -> Element<'_, Msg> {
+        let (cpu, mem) = self.processes.values().fold((0.0_f32, 0_u64), |(c, m), p| {
+            let (pc, pm) = proc_totals(p);
+            (c + pc, m + pm)
+        });
+        container(
+            row![
+                t(&s, format!("{} recording(s)", self.processes.len())).size(13),
+                muted(&s, format!("CPU {cpu:.1}% total")),
+                muted(&s, format!("MEM {} total", fmt_mem(mem))),
+                Space::new().width(Length::Fill),
+                muted(&s, "Click a row for PIDs and the full command line."),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+        )
+        .padding([8.0, 14.0])
+        .width(Length::Fill)
+        .style(skin::inset(s))
+        .into()
+    }
+
+    fn proc_header(&self, s: Skin) -> Element<'_, Msg> {
+        let h = |label: &'static str| -> Text<'static> { iced::widget::text(label).font(s.font).size(11).color(s.muted) };
+        container(
+            row![
+                Space::new().width(10),
+                container(h("STREAMER")).width(Length::FillPortion(3)),
+                container(h("SITE")).width(PW_SITE),
+                container(h("STATE")).width(PW_STATE),
+                container(h("UPTIME")).width(PW_UP),
+                container(h("YT-DLP CPU · MEM")).width(PW_YT),
+                container(h("FFMPEG CPU · MEM")).width(PW_FF),
+                container(h("LAST OUTPUT")).width(Length::FillPortion(4)),
+            ]
+            .spacing(8),
+        )
+        .padding([0.0, 12.0])
+        .into()
     }
 
     fn proc_row<'a>(&self, s: Skin, label: &'a str, color: Color, p: &ProcSample) -> Element<'a, Msg> {
@@ -233,33 +309,66 @@ impl App {
         .into()
     }
 
-    fn process_card<'a>(&'a self, s: Skin, p: &'a ProcessInfo) -> Element<'a, Msg> {
+    fn proc_line<'a>(&'a self, s: Skin, p: &'a ProcessInfo) -> Element<'a, Msg> {
         let ph = pulse(self.phase);
         let (state_label, state_color) = match p.state {
             RecorderState::Starting => ("STARTING".to_string(), s.warn),
             RecorderState::Running => ("RECORDING".to_string(), s.live),
             RecorderState::Stopping => ("STOPPING".to_string(), s.warn),
-            RecorderState::Exited(code) => (
-                format!("EXITED {} · CONFIRMING", code.map_or("?".into(), |c| c.to_string())),
-                s.muted,
-            ),
+            RecorderState::Exited(code) => (format!("EXITED {}", code.map_or("?".into(), |c| c.to_string())), s.muted),
         };
         let glow = match p.state {
-            RecorderState::Running => Some((s.accent, ph)),
-            RecorderState::Starting | RecorderState::Stopping => Some((s.warn, ph)),
-            RecorderState::Exited(_) => None,
+            RecorderState::Exited(_) => 0.0,
+            _ => 0.4 + 0.6 * ph,
         };
-        let top = row![
-            dot(s, state_color, if glow.is_some() { 0.4 + 0.6 * ph } else { 0.0 }),
-            iced::widget::text(clip(&p.streamer_name, 40)).font(s.font).size(18).color(s.text),
-            chip(s, p.site_name.clone(), s.accent2),
-            chip(s, state_label, state_color),
-            Space::new().width(Length::Fill),
-            muted(&s, format!("up {}", fmt_dur(p.uptime_secs))),
+        let yt = p.ytdlp.as_ref().or(p.root.as_ref());
+        let yt_text = yt.map_or("—".to_string(), |y| format!("{:.1}% · {}", y.cpu_percent, fmt_mem(y.mem_bytes)));
+        let ff_text = if p.ffmpeg.is_empty() {
+            "—".to_string()
+        } else {
+            let cpu: f32 = p.ffmpeg.iter().map(|f| f.cpu_percent).sum();
+            let mem: u64 = p.ffmpeg.iter().map(|f| f.mem_bytes).sum();
+            format!("{cpu:.1}% · {}", fmt_mem(mem))
+        };
+        let cell = |v: String, w: u32| -> iced::widget::Container<'a, Msg> {
+            container(iced::widget::text(v).font(s.font).size(12).color(s.text).wrapping(Wrapping::None))
+                .width(w)
+                .clip(true)
+        };
+        let line = row![
+            dot(s, state_color, glow),
+            container(
+                iced::widget::text(clip(&p.streamer_name, 28)).font(s.font).size(13).color(s.text).wrapping(Wrapping::None)
+            )
+            .width(Length::FillPortion(3))
+            .clip(true),
+            container(
+                iced::widget::text(clip(&p.site_name, 12)).font(s.font).size(12).color(s.accent2).wrapping(Wrapping::None)
+            )
+            .width(PW_SITE)
+            .clip(true),
+            container(chip(s, state_label, state_color)).width(PW_STATE),
+            cell(fmt_dur(p.uptime_secs), PW_UP),
+            cell(yt_text, PW_YT),
+            cell(ff_text, PW_FF),
+            container(
+                iced::widget::text(p.last_line.as_str()).font(s.font).size(12).color(s.muted).wrapping(Wrapping::None)
+            )
+            .width(Length::FillPortion(4))
+            .clip(true),
         ]
-        .spacing(10)
+        .spacing(8)
         .align_y(Alignment::Center);
+        let open = self.expanded_procs.contains(&p.id);
+        button(line)
+            .on_press(Msg::ToggleProc(p.id))
+            .padding([6.0, 12.0])
+            .width(Length::Fill)
+            .style(skin::tile(s, if matches!(p.state, RecorderState::Exited(_)) { s.muted } else { state_color }, open))
+            .into()
+    }
 
+    fn proc_detail<'a>(&'a self, s: Skin, p: &'a ProcessInfo) -> Element<'a, Msg> {
         let mut body = Column::new().spacing(5);
         if p.has_bootloader {
             if let Some(root) = &p.root {
@@ -276,25 +385,19 @@ impl App {
         if p.ffmpeg.is_empty() && matches!(p.state, RecorderState::Running) {
             body = body.push(muted(&s, "ffmpeg: not running"));
         }
-
-        let mut card = Column::new().spacing(10).push(top).push(body);
+        if matches!(p.state, RecorderState::Exited(_)) {
+            body = body.push(muted(&s, "Root process exited; confirming every child process is gone."));
+        }
         if !p.last_line.is_empty() {
-            card = card.push(
-                container(
-                    iced::widget::text(clip(&p.last_line, 180))
-                        .font(s.font)
-                        .size(12)
-                        .color(s.text)
-                        .wrapping(Wrapping::None),
-                )
-                .clip(true)
+            body = body.push(
+                container(iced::widget::text(p.last_line.as_str()).font(s.font).size(12).color(s.text))
                 .padding([6.0, 10.0])
                 .width(Length::Fill)
-                    .style(skin::inset(s)),
+                .style(skin::inset(s)),
             );
         }
-        card = card.push(muted(&s, p.cmdline.as_str()));
-        container(card).padding(14).width(Length::Fill).style(skin::card(s, glow)).into()
+        body = body.push(muted(&s, p.cmdline.as_str()));
+        container(body).padding([8.0, 14.0]).width(Length::Fill).style(skin::inset(s)).into()
     }
 
     fn site_block<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
