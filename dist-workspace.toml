@@ -11,3 +11,10 @@ ci = "github"
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Extra files placed inside each archive (the bundled yt-dlp binaries)
+include = ["bin"]
+# Write a .sha256 file next to every archive; the in-app updater verifies it
+checksum = "sha256"
+# Archive formats the in-app updater expects
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
