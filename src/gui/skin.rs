@@ -280,6 +280,15 @@ pub fn tile(s: Skin, color: Color, selected: bool) -> impl Fn(&Theme, button::St
     }
 }
 
+/// Faint row background for dense lists; `shaded` alternates rows.
+pub fn stripe(s: Skin, shaded: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: shaded.then(|| Background::Color(with_alpha(s.surface_hi, 0.35))),
+        border: Border { radius: Radius::from(3.0), ..Default::default() },
+        ..Default::default()
+    }
+}
+
 pub fn input(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
         let focused = matches!(status, text_input::Status::Focused { .. });

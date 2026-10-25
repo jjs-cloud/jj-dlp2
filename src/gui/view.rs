@@ -64,11 +64,50 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
+const ROW_H: f32 = 15.0;
+const ROW_GAP: f32 = 2.0;
+const SITE_W: u32 = 76;
+const NAME_W: u32 = 150;
+const COMPACT_CHROME_H: f32 = 200.0;
 const PW_SITE: u32 = 90;
 const PW_STATE: u32 = 110;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
+
+fn mini_dot<'a>(color: Color, glow: f32) -> Element<'a, Msg> {
+    container(Space::new().width(7).height(7)).style(skin::dot(color, glow * 0.5)).into()
+}
+
+fn mini_chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
+    container(iced::widget::text(label).font(s.font).size(9).color(color))
+        .padding([0.0, 6.0])
+        .style(skin::chip(s, color))
+        .into()
+}
+
+fn compact_chips<'a>(s: Skin, st: &Streamer, status: StreamerStatus) -> Row<'a, Msg> {
+    let mut chips: Row<'a, Msg> = Row::new().spacing(4).align_y(Alignment::Center);
+    if status.recording {
+        chips = chips.push(mini_chip(s, "RECORDING", s.accent));
+    }
+    if status.live {
+        chips = chips.push(mini_chip(s, "LIVE", s.live));
+    }
+    if !status.live && !status.recording {
+        chips = chips.push(mini_chip(s, "OFFLINE", s.muted));
+    }
+    if !st.enabled {
+        chips = chips.push(mini_chip(s, "PAUSED", s.warn));
+    }
+    if status.restarts > 0 {
+        chips = chips.push(mini_chip(s, format!("restarted {}×", status.restarts), s.warn));
+    }
+    if st.options.log_stdout || st.options.log_stderr {
+        chips = chips.push(mini_chip(s, "logging", s.muted));
+    }
+    chips
+}
 
 /// Total CPU and memory across every process of one recording.
 fn proc_totals(p: &ProcessInfo) -> (f32, u64) {
@@ -160,11 +199,17 @@ impl App {
     }
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
+        let title = row![
+            self.section_title(s, "STREAMERS"),
+            Space::new().width(Length::Fill),
+            toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12),
+        ]
+        .padding(iced::Padding { right: 8.0, ..Default::default() })
+        .align_y(Alignment::Center);
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
         if !self.notices.is_empty() {
             col = col.push(self.setup_notices(s));
         }
-        col = col.push(self.section_title(s, "STREAMERS"));
         if self.settings.sites.is_empty() {
             col = col.push(
                 container(
@@ -183,10 +228,100 @@ impl App {
                 .style(skin::card(s, None)),
             );
         }
-        for site in &self.settings.sites {
-            col = col.push(self.site_block(s, site));
+        if self.compact {
+            col = self.compact_list(s, col);
+        } else {
+            for site in &self.settings.sites {
+                col = col.push(self.site_block(s, site));
+            }
         }
-        scrollable(col).height(Length::Fill).into()
+        column![title, scrollable(col).height(Length::Fill)].spacing(12).into()
+    }
+
+    /// One column while every row fits the window height, otherwise two.
+    fn compact_cols(&self, rows: usize, extra_h: f32) -> usize {
+        let avail = self.win_h - COMPACT_CHROME_H - extra_h;
+        let fit = (avail / (ROW_H + ROW_GAP)).floor().max(1.0) as usize;
+        if rows > fit { 2 } else { 1 }
+    }
+
+    fn compact_list<'a>(&'a self, s: Skin, mut col: Column<'a, Msg>) -> Column<'a, Msg> {
+        let mut problems: Vec<String> = Vec::new();
+        for site in &self.settings.sites {
+            if let Some(c) = self.checks.get(&site.id) {
+                if let Some(p) = &c.problem {
+                    problems.push(format!("{}: {p}", site.name));
+                } else if !c.ok {
+                    problems.push(format!("{}: last check failed", site.name));
+                }
+            }
+        }
+        for p in &problems {
+            col = col.push(self.warning_line(s, p));
+        }
+        let mut entries: Vec<(&'a Site, &'a Streamer)> = Vec::new();
+        for site in &self.settings.sites {
+            for st in self.settings.streamers.iter().filter(|x| x.site_id == site.id) {
+                entries.push((site, st));
+            }
+        }
+        if entries.is_empty() {
+            if !self.settings.sites.is_empty() {
+                col = col.push(muted(&s, "No streamers yet. Turn off Compact view to add one."));
+            }
+            return col;
+        }
+        let notices_h = if self.notices.is_empty() { 0.0 } else { 40.0 + 70.0 * self.notices.len() as f32 };
+        let extra_h = problems.len() as f32 * 28.0 + notices_h;
+        let cols = self.compact_cols(entries.len(), extra_h);
+        let per_col = entries.len().div_ceil(cols);
+        let mut grid = Row::new().spacing(14);
+        for chunk in entries.chunks(per_col) {
+            let mut c = Column::new().spacing(ROW_GAP).width(Length::Fill);
+            for (i, &(site, st)) in chunk.iter().enumerate() {
+                c = c.push(self.compact_row(s, site, st, i % 2 == 1));
+            }
+            grid = grid.push(c);
+        }
+        col.push(grid)
+    }
+
+    fn compact_row<'a>(&'a self, s: Skin, site: &'a Site, st: &'a Streamer, shaded: bool) -> Element<'a, Msg> {
+        let status = self.statuses.get(&st.id).copied().unwrap_or_default();
+        let ph = pulse(self.phase);
+        let color = if status.live && !st.enabled {
+            s.muted
+        } else if status.recording {
+            s.accent
+        } else if status.live {
+            s.live
+        } else {
+            s.muted
+        };
+        let glow = if status.live || status.recording { 0.4 + 0.6 * ph } else { 0.0 };
+        let id = st.id;
+        let name_color = if st.enabled { s.text } else { s.muted };
+        let line = row![
+            mini_dot(color, glow),
+            container(mini_chip(s, clip(&site.name, 12), s.accent2)).width(SITE_W).clip(true),
+            container(iced::widget::text(st.name.as_str()).font(s.font).size(11).color(name_color).wrapping(Wrapping::None))
+                .width(NAME_W)
+                .clip(true),
+            container(iced::widget::text(st.url.as_str()).font(s.font).size(10).color(s.muted).wrapping(Wrapping::None))
+                .width(Length::Fill)
+                .clip(true),
+            compact_chips(s, st, status),
+            toggler(st.enabled).on_toggle(move |v| Msg::ToggleStreamer(id, v)).size(12),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        container(line)
+            .height(ROW_H)
+            .width(Length::Fill)
+            .padding([0.0, 6.0])
+            .clip(true)
+            .style(skin::stripe(s, shaded))
+            .into()
     }
 
     fn warning_line<'a>(&self, s: Skin, msg: &str) -> Element<'a, Msg> {

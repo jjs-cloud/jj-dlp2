@@ -140,6 +140,8 @@ pub enum Msg {
     Recheck,
     CopyText(String),
     ToggleProc(RecorderId),
+    SetCompact(bool),
+    Resized(Size),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -167,6 +169,8 @@ pub struct App {
     phase: f32,
     now: u64,
     expanded_procs: HashSet<RecorderId>,
+    compact: bool,
+    win_h: f32,
 }
 
 impl App {
@@ -190,6 +194,8 @@ impl App {
             phase: 0.0,
             now: now_secs(),
             expanded_procs: HashSet::new(),
+            compact: prefs::load_compact(),
+            win_h: 820.0,
         };
         (app, Task::none())
     }
@@ -206,6 +212,7 @@ impl App {
         Subscription::batch([
             Subscription::run(engine_stream),
             iced::time::every(Duration::from_millis(100)).map(Msg::Tick),
+            window::resize_events().map(on_resize),
         ])
     }
 
@@ -321,6 +328,11 @@ impl App {
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
             Msg::CopyText(text) => return iced::clipboard::write(text),
+            Msg::SetCompact(on) => {
+                self.compact = on;
+                prefs::save_compact(on);
+            }
+            Msg::Resized(size) => self.win_h = size.height,
             Msg::ToggleProc(id) => {
                 if !self.expanded_procs.remove(&id) {
                     self.expanded_procs.insert(id);
@@ -434,6 +446,10 @@ fn new_site(preset: Preset) -> NewSite {
         url_template: url_template.into(),
         output_dir: String::new(),
     }
+}
+
+fn on_resize((_, size): (window::Id, Size)) -> Msg {
+    Msg::Resized(size)
 }
 
 fn engine_stream() -> impl Stream<Item = Msg> {
