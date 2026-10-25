@@ -72,13 +72,15 @@ const ROW_FLOOR: f32 = 15.0;
 const ROW_CEIL: f32 = 34.0;
 const COMPACT_CHROME_H: f32 = 200.0;
 const COMPACT_SLACK_H: f32 = 16.0;
+const NAME_MAX_CHARS: usize = 20;
+const NAME_CHAR_W: f32 = 0.45;
 const PW_SITE: u32 = 90;
 const PW_STATE: u32 = 110;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
 
-/// Sizes of one compact row, interpolated from its height between ROW_FLOOR and ROW_CEIL.
+/// Sizes of one compact row, interpolated from its height; the name column fits the longest name (max 20 chars).
 #[derive(Clone, Copy)]
 struct RowMetrics {
     row_h: f32,
@@ -96,13 +98,14 @@ struct RowMetrics {
 }
 
 impl RowMetrics {
-    fn new(row_h: f32) -> RowMetrics {
+    fn new(row_h: f32, name_chars: usize) -> RowMetrics {
         let t = ((row_h - ROW_FLOOR) / (ROW_CEIL - ROW_FLOOR)).max(0.0);
         let at = |floor: f32, ceil: f32| floor + (ceil - floor) * t;
         let text = |floor: f32, ceil: f32| (at(floor, ceil) * 2.0).round() / 2.0;
+        let name = text(11.0, 16.0);
         RowMetrics {
             row_h,
-            name: text(11.0, 16.0),
+            name,
             url: text(10.0, 12.0),
             chip: text(9.0, 11.0),
             chip_pad_v: at(0.0, 4.0),
@@ -110,7 +113,7 @@ impl RowMetrics {
             dot: at(7.0, 10.0).round(),
             toggler: at(12.0, 18.0).round(),
             site_w: at(76.0, 110.0).round(),
-            name_w: at(150.0, 220.0).round(),
+            name_w: (name_chars.min(NAME_MAX_CHARS) as f32 * name * NAME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0),
         }
@@ -396,7 +399,12 @@ impl App {
         };
         let extra_h = problems.len() as f32 * 32.0 + notices_h;
         let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
-        let m = RowMetrics::new(row_h);
+        let longest = entries
+            .iter()
+            .map(|(_, st)| st.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        let m = RowMetrics::new(row_h, longest);
         let per_col = entries.len().div_ceil(cols);
         let mut grid = Row::new().spacing(14);
         for chunk in entries.chunks(per_col) {
