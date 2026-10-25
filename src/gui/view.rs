@@ -293,7 +293,7 @@ impl App {
                     .style(skin::inset(s)),
             );
         }
-        card = card.push(muted(&s, clip(&p.cmdline, 200)));
+        card = card.push(muted(&s, p.cmdline.as_str()));
         container(card).padding(14).width(Length::Fill).style(skin::card(s, glow)).into()
     }
 
