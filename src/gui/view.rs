@@ -73,14 +73,16 @@ const ROW_CEIL: f32 = 34.0;
 const COMPACT_CHROME_H: f32 = 200.0;
 const COMPACT_SLACK_H: f32 = 16.0;
 const NAME_MAX_CHARS: usize = 20;
-const NAME_CHAR_W: f32 = 0.45;
+const NAME_CHAR_W: f32 = 0.6;
+const SITE_CLIP_CHARS: usize = 12;
+const SITE_CHAR_W: f32 = 0.6;
 const PW_SITE: u32 = 90;
 const PW_STATE: u32 = 110;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
 
-/// Sizes of one compact row, interpolated from its height; the name column fits the longest name (max 20 chars).
+/// Sizes of one compact row, interpolated from its height; name and site columns fit the longest name and site chip.
 #[derive(Clone, Copy)]
 struct RowMetrics {
     row_h: f32,
@@ -98,21 +100,23 @@ struct RowMetrics {
 }
 
 impl RowMetrics {
-    fn new(row_h: f32, name_chars: usize) -> RowMetrics {
+    fn new(row_h: f32, name_chars: usize, site_chars: usize) -> RowMetrics {
         let t = ((row_h - ROW_FLOOR) / (ROW_CEIL - ROW_FLOOR)).max(0.0);
         let at = |floor: f32, ceil: f32| floor + (ceil - floor) * t;
         let text = |floor: f32, ceil: f32| (at(floor, ceil) * 2.0).round() / 2.0;
         let name = text(11.0, 16.0);
+        let chip = text(9.0, 11.0);
+        let chip_pad_h = at(6.0, 10.0);
         RowMetrics {
             row_h,
             name,
             url: text(10.0, 12.0),
-            chip: text(9.0, 11.0),
+            chip,
             chip_pad_v: at(0.0, 4.0),
-            chip_pad_h: at(6.0, 10.0),
+            chip_pad_h,
             dot: at(7.0, 10.0).round(),
             toggler: at(12.0, 18.0).round(),
-            site_w: at(76.0, 110.0).round(),
+            site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
             name_w: (name_chars.min(NAME_MAX_CHARS) as f32 * name * NAME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0),
@@ -402,7 +406,12 @@ impl App {
             .map(|(_, st)| st.name.chars().count())
             .max()
             .unwrap_or(0);
-        let m = RowMetrics::new(row_h, longest);
+        let longest_site = entries
+            .iter()
+            .map(|(site, _)| clip(&site.name, SITE_CLIP_CHARS).chars().count())
+            .max()
+            .unwrap_or(0);
+        let m = RowMetrics::new(row_h, longest, longest_site);
         let per_col = entries.len().div_ceil(cols);
         let mut grid = Row::new().spacing(14);
         for chunk in entries.chunks(per_col) {
@@ -443,9 +452,14 @@ impl App {
         let name_color = if st.enabled { s.text } else { s.muted };
         let line = row![
             mini_dot(m, color, glow),
-            container(mini_chip(s, m, clip(&site.name, 12), s.accent2))
-                .width(m.site_w)
-                .clip(true),
+            container(mini_chip(
+                s,
+                m,
+                clip(&site.name, SITE_CLIP_CHARS),
+                s.accent2
+            ))
+            .width(m.site_w)
+            .clip(true),
             container(
                 iced::widget::text(st.name.as_str())
                     .font(s.font)
