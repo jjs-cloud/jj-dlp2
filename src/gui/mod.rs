@@ -144,6 +144,8 @@ pub enum Msg {
     SetRowMin(f32),
     SetRowMax(f32),
     SaveRowRange,
+    SetTwoColWidth(f32),
+    SaveTwoColWidth,
     ResetRowRange,
     Resized(Size),
 }
@@ -176,6 +178,8 @@ pub struct App {
     compact: bool,
     row_min: f32,
     row_max: f32,
+    two_col_w: f32,
+    win_w: f32,
     win_h: f32,
 }
 
@@ -204,6 +208,8 @@ impl App {
             compact: prefs::load_compact(),
             row_min,
             row_max,
+            two_col_w: prefs::load_two_col_width(),
+            win_w: 1180.0,
             win_h: 820.0,
         };
         (app, Task::none())
@@ -350,12 +356,21 @@ impl App {
                 self.row_min = self.row_min.min(self.row_max);
             }
             Msg::SaveRowRange => prefs::save_row_range(self.row_min, self.row_max),
+            Msg::SetTwoColWidth(v) => {
+                self.two_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
+            }
+            Msg::SaveTwoColWidth => prefs::save_two_col_width(self.two_col_w),
             Msg::ResetRowRange => {
                 self.row_min = prefs::ROW_MIN_DEFAULT;
                 self.row_max = prefs::ROW_MAX_DEFAULT;
+                self.two_col_w = prefs::TWO_COL_DEFAULT;
                 prefs::save_row_range(self.row_min, self.row_max);
+                prefs::save_two_col_width(self.two_col_w);
             }
-            Msg::Resized(size) => self.win_h = size.height,
+            Msg::Resized(size) => {
+                self.win_w = size.width;
+                self.win_h = size.height;
+            }
             Msg::ToggleProc(id) => {
                 if !self.expanded_procs.remove(&id) {
                     self.expanded_procs.insert(id);

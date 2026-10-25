@@ -1,11 +1,12 @@
 //! View functions for every screen.
 
-use super::skin::{self, pulse, BtnKind, Skin, ThemeKind};
-use super::{prefs, App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab};
+use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
+use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab, prefs};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text_input, toggler, Column, Row, Space, Text,
+    Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
+    text_input, toggler,
 };
 use iced::{Alignment, Color, Element, Length};
 
@@ -31,7 +32,9 @@ fn chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color) -> Element<'a, 
 
 fn dot<'a>(s: Skin, color: Color, glow: f32) -> Element<'a, Msg> {
     let _ = s;
-    container(Space::new().width(10).height(10)).style(skin::dot(color, glow)).into()
+    container(Space::new().width(10).height(10))
+        .style(skin::dot(color, glow))
+        .into()
 }
 
 fn fmt_mem(bytes: u64) -> String {
@@ -115,18 +118,37 @@ impl RowMetrics {
 }
 
 fn mini_dot<'a>(m: RowMetrics, color: Color, glow: f32) -> Element<'a, Msg> {
-    container(Space::new().width(m.dot).height(m.dot)).style(skin::dot(color, glow * 0.5)).into()
-}
-
-fn mini_chip<'a>(s: Skin, m: RowMetrics, label: impl IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
-    container(iced::widget::text(label).font(s.font).size(m.chip).color(color))
-        .padding([m.chip_pad_v, m.chip_pad_h])
-        .style(skin::chip(s, color))
+    container(Space::new().width(m.dot).height(m.dot))
+        .style(skin::dot(color, glow * 0.5))
         .into()
 }
 
-fn compact_chips<'a>(s: Skin, m: RowMetrics, st: &Streamer, status: StreamerStatus) -> Row<'a, Msg> {
-    let mut chips: Row<'a, Msg> = Row::new().spacing(m.spacing / 2.0).align_y(Alignment::Center);
+fn mini_chip<'a>(
+    s: Skin,
+    m: RowMetrics,
+    label: impl IntoFragment<'a>,
+    color: Color,
+) -> Element<'a, Msg> {
+    container(
+        iced::widget::text(label)
+            .font(s.font)
+            .size(m.chip)
+            .color(color),
+    )
+    .padding([m.chip_pad_v, m.chip_pad_h])
+    .style(skin::chip(s, color))
+    .into()
+}
+
+fn compact_chips<'a>(
+    s: Skin,
+    m: RowMetrics,
+    st: &Streamer,
+    status: StreamerStatus,
+) -> Row<'a, Msg> {
+    let mut chips: Row<'a, Msg> = Row::new()
+        .spacing(m.spacing / 2.0)
+        .align_y(Alignment::Center);
     if status.recording {
         chips = chips.push(mini_chip(s, m, "RECORDING", s.accent));
     }
@@ -140,7 +162,12 @@ fn compact_chips<'a>(s: Skin, m: RowMetrics, st: &Streamer, status: StreamerStat
         chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
     }
     if status.restarts > 0 {
-        chips = chips.push(mini_chip(s, m, format!("restarted {}×", status.restarts), s.warn));
+        chips = chips.push(mini_chip(
+            s,
+            m,
+            format!("restarted {}×", status.restarts),
+            s.warn,
+        ));
     }
     if st.options.log_stdout || st.options.log_stderr {
         chips = chips.push(mini_chip(s, m, "logging", s.muted));
@@ -161,7 +188,11 @@ fn proc_totals(p: &ProcessInfo) -> (f32, u64) {
             add(r);
         }
     }
-    let ytdlp = p.ytdlp.as_ref().or(if p.has_bootloader { None } else { p.root.as_ref() });
+    let ytdlp = p.ytdlp.as_ref().or(if p.has_bootloader {
+        None
+    } else {
+        p.root.as_ref()
+    });
     if let Some(y) = ytdlp {
         add(y);
     }
@@ -194,34 +225,55 @@ impl App {
         let p = pulse(self.phase);
         let title = row![
             dot(s, s.accent, 0.4 + 0.6 * p),
-            iced::widget::text("jj-dlp").font(s.font).size(22).color(s.accent2),
+            iced::widget::text("jj-dlp")
+                .font(s.font)
+                .size(22)
+                .color(s.accent2),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
         let chips = row![
-            chip(s, format!("{live} live"), if live > 0 { s.live } else { s.muted }),
-            chip(s, format!("{rec} recording"), if rec > 0 { s.accent } else { s.muted }),
+            chip(
+                s,
+                format!("{live} live"),
+                if live > 0 { s.live } else { s.muted }
+            ),
+            chip(
+                s,
+                format!("{rec} recording"),
+                if rec > 0 { s.accent } else { s.muted }
+            ),
         ]
         .spacing(8);
-        let right = row![
-            pick_list(ThemeKind::ALL, Some(self.kind), Msg::ThemeChosen).padding(8),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-        container(row![title, chips, Space::new().width(Length::Fill), right].spacing(18).align_y(Alignment::Center))
-            .padding([12.0, 18.0])
-            .width(Length::Fill)
-            .style(skin::header(s))
-            .into()
+        let right = row![pick_list(ThemeKind::ALL, Some(self.kind), Msg::ThemeChosen).padding(8),]
+            .spacing(10)
+            .align_y(Alignment::Center);
+        container(
+            row![title, chips, Space::new().width(Length::Fill), right]
+                .spacing(18)
+                .align_y(Alignment::Center),
+        )
+        .padding([12.0, 18.0])
+        .width(Length::Fill)
+        .style(skin::header(s))
+        .into()
     }
 
     fn tabs(&self, s: Skin) -> Element<'_, Msg> {
         let tab = |label: &'static str, which: Tab| {
-            let kind = if self.tab == which { BtnKind::TabActive } else { BtnKind::TabIdle };
-            button(t(&s, label).size(14).color(if self.tab == which { s.bg } else { s.muted }))
-                .on_press(Msg::SetTab(which))
-                .padding([7.0, 18.0])
-                .style(skin::btn(s, kind))
+            let kind = if self.tab == which {
+                BtnKind::TabActive
+            } else {
+                BtnKind::TabIdle
+            };
+            button(
+                t(&s, label)
+                    .size(14)
+                    .color(if self.tab == which { s.bg } else { s.muted }),
+            )
+            .on_press(Msg::SetTab(which))
+            .padding([7.0, 18.0])
+            .style(skin::btn(s, kind))
         };
         row![
             tab("Monitor", Tab::Monitor),
@@ -234,18 +286,31 @@ impl App {
     }
 
     fn section_title<'a>(&self, s: Skin, label: &'a str) -> Element<'a, Msg> {
-        iced::widget::text(label).font(s.font).size(13).color(s.accent2).into()
+        iced::widget::text(label)
+            .font(s.font)
+            .size(13)
+            .color(s.accent2)
+            .into()
     }
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
         let title = row![
             self.section_title(s, "STREAMERS"),
             Space::new().width(Length::Fill),
-            toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12),
+            toggler(self.compact)
+                .label("Compact view")
+                .on_toggle(Msg::SetCompact)
+                .text_size(12),
         ]
-        .padding(iced::Padding { right: 8.0, ..Default::default() })
+        .padding(iced::Padding {
+            right: 8.0,
+            ..Default::default()
+        })
         .align_y(Alignment::Center);
-        let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
+        let mut col = Column::new().spacing(12).padding(iced::Padding {
+            right: 8.0,
+            ..Default::default()
+        });
         if !self.notices.is_empty() {
             col = col.push(self.setup_notices(s));
         }
@@ -274,16 +339,18 @@ impl App {
                 col = col.push(self.site_block(s, site));
             }
         }
-        column![title, scrollable(col).height(Length::Fill)].spacing(12).into()
+        column![title, scrollable(col).height(Length::Fill)]
+            .spacing(12)
+            .into()
     }
 
-    /// Picks the column count and row height so every row fits the window height.
+    /// Picks the column count and row height so every row fits; two columns need a wide enough window.
     fn compact_layout(&self, rows: usize, extra_h: f32) -> (usize, f32) {
         let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h).max(0.0);
         let fit = |n: usize| ((avail + ROW_GAP) / n as f32 - ROW_GAP).floor();
         let one = fit(rows);
-        if one >= self.row_min {
-            return (1, one.min(self.row_max));
+        if one >= self.row_min || self.win_w < self.two_col_w {
+            return (1, one.clamp(self.row_min, self.row_max));
         }
         (2, fit(rows.div_ceil(2)).clamp(self.row_min, self.row_max))
     }
@@ -304,17 +371,29 @@ impl App {
         }
         let mut entries: Vec<(&'a Site, &'a Streamer)> = Vec::new();
         for site in &self.settings.sites {
-            for st in self.settings.streamers.iter().filter(|x| x.site_id == site.id) {
+            for st in self
+                .settings
+                .streamers
+                .iter()
+                .filter(|x| x.site_id == site.id)
+            {
                 entries.push((site, st));
             }
         }
         if entries.is_empty() {
             if !self.settings.sites.is_empty() {
-                col = col.push(muted(&s, "No streamers yet. Turn off Compact view to add one."));
+                col = col.push(muted(
+                    &s,
+                    "No streamers yet. Turn off Compact view to add one.",
+                ));
             }
             return col;
         }
-        let notices_h = if self.notices.is_empty() { 0.0 } else { 48.0 + 80.0 * self.notices.len() as f32 };
+        let notices_h = if self.notices.is_empty() {
+            0.0
+        } else {
+            48.0 + 80.0 * self.notices.len() as f32
+        };
         let extra_h = problems.len() as f32 * 32.0 + notices_h;
         let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
         let m = RowMetrics::new(row_h);
@@ -330,7 +409,14 @@ impl App {
         col.push(grid)
     }
 
-    fn compact_row<'a>(&'a self, s: Skin, m: RowMetrics, site: &'a Site, st: &'a Streamer, shaded: bool) -> Element<'a, Msg> {
+    fn compact_row<'a>(
+        &'a self,
+        s: Skin,
+        m: RowMetrics,
+        site: &'a Site,
+        st: &'a Streamer,
+        shaded: bool,
+    ) -> Element<'a, Msg> {
         let status = self.statuses.get(&st.id).copied().unwrap_or_default();
         let ph = pulse(self.phase);
         let color = if status.live && !st.enabled {
@@ -342,20 +428,40 @@ impl App {
         } else {
             s.muted
         };
-        let glow = if status.live || status.recording { 0.4 + 0.6 * ph } else { 0.0 };
+        let glow = if status.live || status.recording {
+            0.4 + 0.6 * ph
+        } else {
+            0.0
+        };
         let id = st.id;
         let name_color = if st.enabled { s.text } else { s.muted };
         let line = row![
             mini_dot(m, color, glow),
-            container(mini_chip(s, m, clip(&site.name, 12), s.accent2)).width(m.site_w).clip(true),
-            container(iced::widget::text(st.name.as_str()).font(s.font).size(m.name).color(name_color).wrapping(Wrapping::None))
-                .width(m.name_w)
+            container(mini_chip(s, m, clip(&site.name, 12), s.accent2))
+                .width(m.site_w)
                 .clip(true),
-            container(iced::widget::text(st.url.as_str()).font(s.font).size(m.url).color(s.muted).wrapping(Wrapping::None))
-                .width(Length::Fill)
-                .clip(true),
+            container(
+                iced::widget::text(st.name.as_str())
+                    .font(s.font)
+                    .size(m.name)
+                    .color(name_color)
+                    .wrapping(Wrapping::None)
+            )
+            .width(m.name_w)
+            .clip(true),
+            container(
+                iced::widget::text(st.url.as_str())
+                    .font(s.font)
+                    .size(m.url)
+                    .color(s.muted)
+                    .wrapping(Wrapping::None)
+            )
+            .width(Length::Fill)
+            .clip(true),
             compact_chips(s, m, st, status),
-            toggler(st.enabled).on_toggle(move |v| Msg::ToggleStreamer(id, v)).size(m.toggler),
+            toggler(st.enabled)
+                .on_toggle(move |v| Msg::ToggleStreamer(id, v))
+                .size(m.toggler),
         ]
         .spacing(m.spacing)
         .align_y(Alignment::Center);
@@ -371,7 +477,11 @@ impl App {
     fn warning_line<'a>(&self, s: Skin, msg: &str) -> Element<'a, Msg> {
         row![
             iced::widget::text("⚠").font(s.font).size(13).color(s.warn),
-            iced::widget::text(clip(msg, 300)).font(s.font).size(12).color(s.warn).width(Length::Fill),
+            iced::widget::text(clip(msg, 300))
+                .font(s.font)
+                .size(12)
+                .color(s.warn)
+                .width(Length::Fill),
         ]
         .spacing(8)
         .into()
@@ -391,14 +501,24 @@ impl App {
         for n in &self.notices {
             let mut item = Column::new()
                 .spacing(4)
-                .push(iced::widget::text(n.title.as_str()).font(s.font).size(14).color(s.warn))
+                .push(
+                    iced::widget::text(n.title.as_str())
+                        .font(s.font)
+                        .size(14)
+                        .color(s.warn),
+                )
                 .push(muted(&s, n.steps.as_str()));
             if let Some(cmd) = &n.command {
                 item = item.push(
                     row![
-                        container(iced::widget::text(cmd.as_str()).font(iced::Font::MONOSPACE).size(12).color(s.text))
-                            .padding([6.0, 10.0])
-                            .style(skin::inset(s)),
+                        container(
+                            iced::widget::text(cmd.as_str())
+                                .font(iced::Font::MONOSPACE)
+                                .size(12)
+                                .color(s.text)
+                        )
+                        .padding([6.0, 10.0])
+                        .style(skin::inset(s)),
                         button(t(&s, "Copy").size(12))
                             .on_press(Msg::CopyText(cmd.clone()))
                             .padding([5.0, 10.0])
@@ -410,18 +530,28 @@ impl App {
             }
             col = col.push(item);
         }
-        container(col).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
+        container(col)
+            .padding(14)
+            .width(Length::Fill)
+            .style(skin::card(s, None))
+            .into()
     }
 
     fn processes(&self, s: Skin) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(6).padding(iced::Padding { right: 8.0, ..Default::default() });
+        let mut col = Column::new().spacing(6).padding(iced::Padding {
+            right: 8.0,
+            ..Default::default()
+        });
         col = col.push(self.section_title(s, "PROCESSES"));
         if self.processes.is_empty() {
             col = col.push(
-                container(muted(&s, "No active recordings. Streams are recorded automatically when they go live."))
-                    .padding(16)
-                    .width(Length::Fill)
-                    .style(skin::card(s, None)),
+                container(muted(
+                    &s,
+                    "No active recordings. Streams are recorded automatically when they go live.",
+                ))
+                .padding(16)
+                .width(Length::Fill)
+                .style(skin::card(s, None)),
             );
         } else {
             col = col.push(self.proc_summary(s));
@@ -459,7 +589,12 @@ impl App {
     }
 
     fn proc_header(&self, s: Skin) -> Element<'_, Msg> {
-        let h = |label: &'static str| -> Text<'static> { iced::widget::text(label).font(s.font).size(11).color(s.muted) };
+        let h = |label: &'static str| -> Text<'static> {
+            iced::widget::text(label)
+                .font(s.font)
+                .size(11)
+                .color(s.muted)
+        };
         container(
             row![
                 Space::new().width(10),
@@ -477,12 +612,29 @@ impl App {
         .into()
     }
 
-    fn proc_row<'a>(&self, s: Skin, label: &'a str, color: Color, p: &ProcSample) -> Element<'a, Msg> {
+    fn proc_row<'a>(
+        &self,
+        s: Skin,
+        label: &'a str,
+        color: Color,
+        p: &ProcSample,
+    ) -> Element<'a, Msg> {
         row![
             container(iced::widget::text(label).font(s.font).size(12).color(color)).width(88),
-            iced::widget::text(format!("PID {}", p.pid)).font(s.font).size(12).color(s.text).width(96),
-            iced::widget::text(format!("CPU {:.1}%", p.cpu_percent)).font(s.font).size(12).color(s.text).width(96),
-            iced::widget::text(format!("MEM {}", fmt_mem(p.mem_bytes))).font(s.font).size(12).color(s.text),
+            iced::widget::text(format!("PID {}", p.pid))
+                .font(s.font)
+                .size(12)
+                .color(s.text)
+                .width(96),
+            iced::widget::text(format!("CPU {:.1}%", p.cpu_percent))
+                .font(s.font)
+                .size(12)
+                .color(s.text)
+                .width(96),
+            iced::widget::text(format!("MEM {}", fmt_mem(p.mem_bytes)))
+                .font(s.font)
+                .size(12)
+                .color(s.text),
         ]
         .spacing(8)
         .into()
@@ -494,14 +646,19 @@ impl App {
             RecorderState::Starting => ("STARTING".to_string(), s.warn),
             RecorderState::Running => ("RECORDING".to_string(), s.live),
             RecorderState::Stopping => ("STOPPING".to_string(), s.warn),
-            RecorderState::Exited(code) => (format!("EXITED {}", code.map_or("?".into(), |c| c.to_string())), s.muted),
+            RecorderState::Exited(code) => (
+                format!("EXITED {}", code.map_or("?".into(), |c| c.to_string())),
+                s.muted,
+            ),
         };
         let glow = match p.state {
             RecorderState::Exited(_) => 0.0,
             _ => 0.4 + 0.6 * ph,
         };
         let yt = p.ytdlp.as_ref().or(p.root.as_ref());
-        let yt_text = yt.map_or("—".to_string(), |y| format!("{:.1}% · {}", y.cpu_percent, fmt_mem(y.mem_bytes)));
+        let yt_text = yt.map_or("—".to_string(), |y| {
+            format!("{:.1}% · {}", y.cpu_percent, fmt_mem(y.mem_bytes))
+        });
         let ff_text = if p.ffmpeg.is_empty() {
             "—".to_string()
         } else {
@@ -510,19 +667,33 @@ impl App {
             format!("{cpu:.1}% · {}", fmt_mem(mem))
         };
         let cell = |v: String, w: u32| -> iced::widget::Container<'a, Msg> {
-            container(iced::widget::text(v).font(s.font).size(12).color(s.text).wrapping(Wrapping::None))
-                .width(w)
-                .clip(true)
+            container(
+                iced::widget::text(v)
+                    .font(s.font)
+                    .size(12)
+                    .color(s.text)
+                    .wrapping(Wrapping::None),
+            )
+            .width(w)
+            .clip(true)
         };
         let line = row![
             dot(s, state_color, glow),
             container(
-                iced::widget::text(clip(&p.streamer_name, 28)).font(s.font).size(13).color(s.text).wrapping(Wrapping::None)
+                iced::widget::text(clip(&p.streamer_name, 28))
+                    .font(s.font)
+                    .size(13)
+                    .color(s.text)
+                    .wrapping(Wrapping::None)
             )
             .width(Length::FillPortion(3))
             .clip(true),
             container(
-                iced::widget::text(clip(&p.site_name, 12)).font(s.font).size(12).color(s.accent2).wrapping(Wrapping::None)
+                iced::widget::text(clip(&p.site_name, 12))
+                    .font(s.font)
+                    .size(12)
+                    .color(s.accent2)
+                    .wrapping(Wrapping::None)
             )
             .width(PW_SITE)
             .clip(true),
@@ -531,7 +702,11 @@ impl App {
             cell(yt_text, PW_YT),
             cell(ff_text, PW_FF),
             container(
-                iced::widget::text(p.last_line.as_str()).font(s.font).size(12).color(s.muted).wrapping(Wrapping::None)
+                iced::widget::text(p.last_line.as_str())
+                    .font(s.font)
+                    .size(12)
+                    .color(s.muted)
+                    .wrapping(Wrapping::None)
             )
             .width(Length::FillPortion(4))
             .clip(true),
@@ -543,7 +718,15 @@ impl App {
             .on_press(Msg::ToggleProc(p.id))
             .padding([6.0, 12.0])
             .width(Length::Fill)
-            .style(skin::tile(s, if matches!(p.state, RecorderState::Exited(_)) { s.muted } else { state_color }, open))
+            .style(skin::tile(
+                s,
+                if matches!(p.state, RecorderState::Exited(_)) {
+                    s.muted
+                } else {
+                    state_color
+                },
+                open,
+            ))
             .into()
     }
 
@@ -565,18 +748,30 @@ impl App {
             body = body.push(muted(&s, "ffmpeg: not running"));
         }
         if matches!(p.state, RecorderState::Exited(_)) {
-            body = body.push(muted(&s, "Root process exited; confirming every child process is gone."));
+            body = body.push(muted(
+                &s,
+                "Root process exited; confirming every child process is gone.",
+            ));
         }
         if !p.last_line.is_empty() {
             body = body.push(
-                container(iced::widget::text(p.last_line.as_str()).font(s.font).size(12).color(s.text))
+                container(
+                    iced::widget::text(p.last_line.as_str())
+                        .font(s.font)
+                        .size(12)
+                        .color(s.text),
+                )
                 .padding([6.0, 10.0])
                 .width(Length::Fill)
                 .style(skin::inset(s)),
             );
         }
         body = body.push(muted(&s, p.cmdline.as_str()));
-        container(body).padding([8.0, 14.0]).width(Length::Fill).style(skin::inset(s)).into()
+        container(body)
+            .padding([8.0, 14.0])
+            .width(Length::Fill)
+            .style(skin::inset(s))
+            .into()
     }
 
     fn site_block<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
@@ -584,7 +779,10 @@ impl App {
             Some(c) => {
                 let color = if c.ok { s.live } else { s.danger };
                 row![
-                    iced::widget::text(if c.ok { "●" } else { "✕" }).font(s.font).size(12).color(color),
+                    iced::widget::text(if c.ok { "●" } else { "✕" })
+                        .font(s.font)
+                        .size(12)
+                        .color(color),
                     muted(&s, format!("{}s ago", self.now.saturating_sub(c.at))),
                 ]
                 .spacing(6)
@@ -592,10 +790,12 @@ impl App {
             }
             None => row![muted(&s, "waiting for first check")],
         };
-        let mut head: Row<'_, Msg> = Row::new()
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .push(iced::widget::text(clip(&site.name, 30)).font(s.font).size(18).color(s.accent2));
+        let mut head: Row<'_, Msg> = Row::new().spacing(10).align_y(Alignment::Center).push(
+            iced::widget::text(clip(&site.name, 30))
+                .font(s.font)
+                .size(18)
+                .color(s.accent2),
+        );
         if site.log_checker_stdout || site.log_checker_stderr {
             head = head.push(chip(s, "logging", s.muted));
         }
@@ -605,7 +805,12 @@ impl App {
         if let Some(p) = self.checks.get(&site.id).and_then(|c| c.problem.as_deref()) {
             col = col.push(self.warning_line(s, p));
         }
-        let streamers: Vec<&Streamer> = self.settings.streamers.iter().filter(|x| x.site_id == site.id).collect();
+        let streamers: Vec<&Streamer> = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|x| x.site_id == site.id)
+            .collect();
         if streamers.is_empty() {
             col = col.push(muted(&s, "No streamers yet; add one below."));
         }
@@ -634,7 +839,11 @@ impl App {
         ]
         .spacing(8);
         col = col.push(add);
-        container(col).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
+        container(col)
+            .padding(14)
+            .width(Length::Fill)
+            .style(skin::card(s, None))
+            .into()
     }
 
     fn streamer_row<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
@@ -649,7 +858,11 @@ impl App {
         } else {
             s.muted
         };
-        let glow = if status.live || status.recording { 0.4 + 0.6 * ph } else { 0.0 };
+        let glow = if status.live || status.recording {
+            0.4 + 0.6 * ph
+        } else {
+            0.0
+        };
         let id = st.id;
         let mut chips: Row<'_, Msg> = Row::new().spacing(6);
         if status.recording {
@@ -673,13 +886,19 @@ impl App {
         let line = row![
             dot(s, color, glow),
             column![
-                iced::widget::text(clip(&st.name, 40)).font(s.font).size(15).color(if st.enabled { s.text } else { s.muted }),
+                iced::widget::text(clip(&st.name, 40))
+                    .font(s.font)
+                    .size(15)
+                    .color(if st.enabled { s.text } else { s.muted }),
                 muted(&s, clip(&st.url, 70)),
             ]
             .spacing(2)
             .width(Length::Fill),
             chips,
-            toggler(st.enabled).label("Record").on_toggle(move |v| Msg::ToggleStreamer(id, v)).text_size(12),
+            toggler(st.enabled)
+                .label("Record")
+                .on_toggle(move |v| Msg::ToggleStreamer(id, v))
+                .text_size(12),
             button(t(&s, "Settings").size(12))
                 .on_press(Msg::ToggleStreamerSettings(id))
                 .padding([5.0, 10.0])
@@ -702,19 +921,37 @@ impl App {
         if self.open_streamer_settings.contains(&id) {
             body = body.push(self.streamer_settings_panel(s, st));
         }
-        container(body).padding([8.0, 12.0]).width(Length::Fill).style(skin::inset(s)).into()
+        container(body)
+            .padding([8.0, 12.0])
+            .width(Length::Fill)
+            .style(skin::inset(s))
+            .into()
     }
 
     fn streamer_settings_panel<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
         let id = st.id;
         let log = |label: &'static str, on: bool, f: fn(bool) -> OptionField| {
-            toggler(on).label(label).on_toggle(move |v| Msg::StreamerOption(id, f(v))).text_size(12)
+            toggler(on)
+                .label(label)
+                .on_toggle(move |v| Msg::StreamerOption(id, f(v)))
+                .text_size(12)
         };
         column![
-            muted(&s, "Output is appended to the logs folder next to settings.json."),
+            muted(
+                &s,
+                "Output is appended to the logs folder next to settings.json."
+            ),
             row![
-                log("Log recorder stdout", st.options.log_stdout, OptionField::LogStdout),
-                log("Log recorder stderr", st.options.log_stderr, OptionField::LogStderr),
+                log(
+                    "Log recorder stdout",
+                    st.options.log_stdout,
+                    OptionField::LogStdout
+                ),
+                log(
+                    "Log recorder stderr",
+                    st.options.log_stderr,
+                    OptionField::LogStderr
+                ),
             ]
             .spacing(24),
         ]
@@ -723,7 +960,10 @@ impl App {
     }
 
     fn settings_tab(&self, s: Skin) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
+        let mut col = Column::new().spacing(12).padding(iced::Padding {
+            right: 8.0,
+            ..Default::default()
+        });
 
         let global = column![
             row![
@@ -742,7 +982,10 @@ impl App {
                     .padding(8)
                     .style(skin::input(s)),
                 button(btn_label(&s, "Save").size(13))
-                    .on_press_maybe((self.global_out.trim() != self.settings.default_output_dir).then_some(Msg::GlobalOutSave))
+                    .on_press_maybe(
+                        (self.global_out.trim() != self.settings.default_output_dir)
+                            .then_some(Msg::GlobalOutSave)
+                    )
                     .padding([8.0, 16.0])
                     .style(skin::btn(s, BtnKind::Primary)),
             ]
@@ -750,26 +993,51 @@ impl App {
             muted(&s, "Used by any site that has no output folder of its own."),
         ]
         .spacing(8);
-        col = col.push(container(global).padding(14).width(Length::Fill).style(skin::card(s, None)));
+        col = col.push(
+            container(global)
+                .padding(14)
+                .width(Length::Fill)
+                .style(skin::card(s, None)),
+        );
 
         let row_size = |label: &'static str, value: f32, on_change: fn(f32) -> Msg| {
             row![
-                t(&s, label).size(13).width(80),
-                slider(prefs::ROW_MIN_LIMIT..=prefs::ROW_MAX_LIMIT, value, on_change)
-                    .step(1.0_f32)
-                    .on_release(Msg::SaveRowRange)
-                    .width(260),
+                t(&s, label).size(13).width(110),
+                slider(
+                    prefs::ROW_MIN_LIMIT..=prefs::ROW_MAX_LIMIT,
+                    value,
+                    on_change
+                )
+                .step(1.0_f32)
+                .on_release(Msg::SaveRowRange)
+                .width(260),
                 muted(&s, format!("{value:.0} px")),
             ]
             .spacing(12)
             .align_y(Alignment::Center)
         };
+        let two_col = row![
+            t(&s, "Column threshold").size(13).width(110),
+            slider(
+                prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
+                self.two_col_w,
+                Msg::SetTwoColWidth
+            )
+            .step(10.0_f32)
+            .on_release(Msg::SaveTwoColWidth)
+            .width(260),
+            muted(&s, format!("{:.0} px wide", self.two_col_w)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
         let compact = column![
-            self.section_title(s, "COMPACT VIEW ROW SIZE"),
-            row_size("Maximum", self.row_max, Msg::SetRowMax),
-            row_size("Minimum", self.row_min, Msg::SetRowMin),
+            self.section_title(s, "COMPACT VIEW"),
+            muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
+            muted(&s, "Compact view only uses two columns when the window is at least the width set below."),
+            row_size("Row Size Max", self.row_max, Msg::SetRowMax),
+            row_size("Row Size Min", self.row_min, Msg::SetRowMin),
+            two_col,
             row![
-                muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
                 Space::new().width(Length::Fill),
                 button(t(&s, "Reset").size(12))
                     .on_press(Msg::ResetRowRange)
@@ -779,7 +1047,12 @@ impl App {
             .align_y(Alignment::Center),
         ]
         .spacing(8);
-        col = col.push(container(compact).padding(14).width(Length::Fill).style(skin::card(s, None)));
+        col = col.push(
+            container(compact)
+                .padding(14)
+                .width(Length::Fill)
+                .style(skin::card(s, None)),
+        );
 
         let help = column![
             self.section_title(s, "COMMAND PLACEHOLDERS"),
@@ -788,10 +1061,18 @@ impl App {
             muted(&s, "--simulate mode expects lines like original_url|webpage_url|id|title, e.g. from --print with --match-filter is_live."),
         ]
         .spacing(5);
-        col = col.push(container(help).padding(14).width(Length::Fill).style(skin::card(s, None)));
+        col = col.push(
+            container(help)
+                .padding(14)
+                .width(Length::Fill)
+                .style(skin::card(s, None)),
+        );
 
         let add = row![
-            iced::widget::text("ADD SITE").font(s.font).size(13).color(s.accent2),
+            iced::widget::text("ADD SITE")
+                .font(s.font)
+                .size(13)
+                .color(s.accent2),
             button(t(&s, "Twitch").size(13))
                 .on_press(Msg::AddSite(Preset::Twitch))
                 .padding([7.0, 14.0])
@@ -830,7 +1111,10 @@ impl App {
         let labeled = |label: &'static str, input: Element<'a, Msg>| -> Element<'a, Msg> {
             column![muted(&s, label), input].spacing(4).into()
         };
-        let field = |placeholder: &'static str, value: &'a str, f: fn(String) -> DraftField| -> Element<'a, Msg> {
+        let field = |placeholder: &'static str,
+                     value: &'a str,
+                     f: fn(String) -> DraftField|
+         -> Element<'a, Msg> {
             text_input(placeholder, value)
                 .on_input(move |v| Msg::Draft(id, f(v)))
                 .padding(8)
@@ -841,20 +1125,36 @@ impl App {
         let valid = d.interval_secs().is_some() && !d.name.trim().is_empty();
 
         let top = row![
-            container(labeled("Site name", field("Site name", &d.name, DraftField::Name))).width(Length::Fill),
-            container(labeled("Check every (seconds, min 5)", field("60", &d.interval, DraftField::Interval))).width(210),
+            container(labeled(
+                "Site name",
+                field("Site name", &d.name, DraftField::Name)
+            ))
+            .width(Length::Fill),
+            container(labeled(
+                "Check every (seconds, min 5)",
+                field("60", &d.interval, DraftField::Interval)
+            ))
+            .width(210),
             container(labeled(
                 "Checker mode",
-                pick_list(CheckMode::ALL, Some(d.mode), move |m| Msg::Draft(id, DraftField::Mode(m)))
-                    .padding(8)
-                    .width(Length::Fill)
-                    .into(),
+                pick_list(CheckMode::ALL, Some(d.mode), move |m| Msg::Draft(
+                    id,
+                    DraftField::Mode(m)
+                ))
+                .padding(8)
+                .width(Length::Fill)
+                .into(),
             ))
             .width(170),
         ]
         .spacing(10);
 
-        let count = self.settings.streamers.iter().filter(|x| x.site_id == id).count();
+        let count = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|x| x.site_id == id)
+            .count();
         let actions = row![
             button(btn_label(&s, "Save changes").size(13))
                 .on_press_maybe((dirty && valid).then_some(Msg::SaveSite(id)))
@@ -864,7 +1164,11 @@ impl App {
                 .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
                 .padding([8.0, 16.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
-            if dirty { chip(s, "unsaved changes", s.warn) } else { Space::new().into() },
+            if dirty {
+                chip(s, "unsaved changes", s.warn)
+            } else {
+                Space::new().into()
+            },
             Space::new().width(Length::Fill),
             muted(&s, format!("{count} streamer(s)")),
             button(t(&s, "Remove site").size(13))
@@ -876,7 +1180,10 @@ impl App {
         .align_y(Alignment::Center);
 
         let log = |label: &'static str, on: bool, f: fn(bool) -> DraftField| {
-            toggler(on).label(label).on_toggle(move |v| Msg::Draft(id, f(v))).text_size(12)
+            toggler(on)
+                .label(label)
+                .on_toggle(move |v| Msg::Draft(id, f(v)))
+                .text_size(12)
         };
         let logging = row![
             log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
@@ -886,16 +1193,47 @@ impl App {
 
         let form = column![
             top,
-            labeled("Path to yt-dlp executable", field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)),
-            labeled("URL template", field("https://twitch.tv/{username}", &d.url_template, DraftField::UrlTemplate)),
-            labeled("Checker command arguments", field("--dump-json {urls}", &d.checker, DraftField::Checker)),
-            labeled("Recorder command arguments", field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)),
-            labeled("Output folder (blank = global)", field("Use the global output folder", &d.output, DraftField::Output)),
+            labeled(
+                "Path to yt-dlp executable",
+                field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)
+            ),
+            labeled(
+                "URL template",
+                field(
+                    "https://twitch.tv/{username}",
+                    &d.url_template,
+                    DraftField::UrlTemplate
+                )
+            ),
+            labeled(
+                "Checker command arguments",
+                field("--dump-json {urls}", &d.checker, DraftField::Checker)
+            ),
+            labeled(
+                "Recorder command arguments",
+                field(
+                    "-o \"%(title)s.%(ext)s\" {url}",
+                    &d.recorder,
+                    DraftField::Recorder
+                )
+            ),
+            labeled(
+                "Output folder (blank = global)",
+                field(
+                    "Use the global output folder",
+                    &d.output,
+                    DraftField::Output
+                )
+            ),
             logging,
             actions,
         ]
         .spacing(10);
-        container(form).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
+        container(form)
+            .padding(14)
+            .width(Length::Fill)
+            .style(skin::card(s, None))
+            .into()
     }
 
     fn log_view(&self, s: Skin) -> Element<'_, Msg> {
@@ -904,7 +1242,12 @@ impl App {
             col = col.push(muted(&s, "Nothing logged yet."));
         }
         for line in &self.log {
-            col = col.push(iced::widget::text(line.as_str()).font(iced::Font::MONOSPACE).size(12).color(s.text));
+            col = col.push(
+                iced::widget::text(line.as_str())
+                    .font(iced::Font::MONOSPACE)
+                    .size(12)
+                    .color(s.text),
+            );
         }
         let title = row![self.section_title(s, "ENGINE LOG (UTC)")];
         container(column![title, scrollable(col).height(Length::Fill)].spacing(10))

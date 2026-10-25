@@ -7,6 +7,9 @@ pub const ROW_MIN_LIMIT: f32 = 15.0;
 pub const ROW_MAX_LIMIT: f32 = 48.0;
 pub const ROW_MIN_DEFAULT: f32 = 15.0;
 pub const ROW_MAX_DEFAULT: f32 = 34.0;
+pub const TWO_COL_MIN_LIMIT: f32 = 700.0;
+pub const TWO_COL_MAX_LIMIT: f32 = 2600.0;
+pub const TWO_COL_DEFAULT: f32 = 1100.0;
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -15,11 +18,12 @@ struct Prefs {
     compact: bool,
     row_min: f32,
     row_max: f32,
+    two_col_w: f32,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT }
+        Prefs { theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT }
     }
 }
 
@@ -75,5 +79,17 @@ pub fn save_row_range(min: f32, max: f32) {
     let mut prefs = read();
     prefs.row_min = min;
     prefs.row_max = max;
+    write(&prefs);
+}
+
+/// Reads the saved window width from which compact view may use two columns.
+pub fn load_two_col_width() -> f32 {
+    read().two_col_w.clamp(TWO_COL_MIN_LIMIT, TWO_COL_MAX_LIMIT)
+}
+
+/// Saves the window width from which compact view may use two columns.
+pub fn save_two_col_width(width: f32) {
+    let mut prefs = read();
+    prefs.two_col_w = width;
     write(&prefs);
 }
