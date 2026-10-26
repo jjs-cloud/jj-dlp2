@@ -1,7 +1,7 @@
 //! View functions for every screen.
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
-use super::{App, DraftField, Msg, OptionField, Preset, SiteDraft, Tab, UpdateStage, prefs};
+use super::{App, DraftField, Msg, OptionField, Preset, SettingsTab, SiteDraft, Tab, UpdateStage, prefs};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
@@ -398,7 +398,7 @@ impl App {
                         t(&s, "No sites configured yet."),
                         muted(&s, "A site holds the yt-dlp path plus the checker and recorder commands for a group of streamers."),
                         button(btn_label(&s, "Add a site").size(13))
-                            .on_press(Msg::SetTab(Tab::Settings))
+                            .on_press(Msg::OpenAddSite)
                             .padding([8.0, 14.0])
                             .style(skin::btn(s, BtnKind::Primary)),
                     ]
@@ -1051,14 +1051,70 @@ impl App {
     }
 
     fn settings_tab(&self, s: Skin) -> Element<'_, Msg> {
+        let switch = |label: &'static str, which: SettingsTab| {
+            let on = self.settings_tab == which;
+            let kind = if on { BtnKind::TabActive } else { BtnKind::TabIdle };
+            button(t(&s, label).size(13).color(if on { s.bg } else { s.muted }))
+                .on_press(Msg::SetSettingsTab(which))
+                .padding([6.0, 16.0])
+                .style(skin::btn(s, kind))
+        };
+        let switcher = row![
+            switch("Sites", SettingsTab::Sites),
+            switch("General", SettingsTab::General)
+        ]
+        .spacing(8);
+        let body = match self.settings_tab {
+            SettingsTab::Sites => self.settings_sites(s),
+            SettingsTab::General => self.settings_general(s),
+        };
+        column![switcher, body].spacing(12).height(Length::Fill).into()
+    }
+
+    fn settings_sites(&self, s: Skin) -> Element<'_, Msg> {
+        let mut col = Column::new().spacing(12).padding(iced::Padding {
+            right: 8.0,
+            ..Default::default()
+        });
+        let presets = [
+            ("Twitch", Preset::Twitch),
+            ("Tiktok", Preset::Tiktok),
+            ("Chaturbate", Preset::Chaturbate),
+            ("Kick", Preset::Kick),
+            ("Blank", Preset::Blank),
+        ];
+        let mut add = row![self.section_title(s, "ADD SITE")]
+            .spacing(10)
+            .align_y(Alignment::Center);
+        for (label, preset) in presets {
+            add = add.push(
+                button(t(&s, label).size(13))
+                    .on_press(Msg::AddSite(preset))
+                    .padding([7.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            );
+        }
+        col = col.push(add);
+        if self.settings.sites.is_empty() {
+            col = col.push(muted(&s, "Pick a preset to start; every field stays editable afterwards."));
+        }
+        for site in &self.settings.sites {
+            if let Some(d) = self.drafts.get(&site.id) {
+                col = col.push(self.site_editor(s, site, d));
+            }
+        }
+        scrollable(col).height(Length::Fill).into()
+    }
+
+    fn settings_general(&self, s: Skin) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
         });
 
-        let global = column![
+        let folders = column![
             row![
-                self.section_title(s, "GLOBAL OUTPUT FOLDER"),
+                self.section_title(s, "FOLDERS"),
                 Space::new().width(Length::Fill),
                 button(t(&s, "Open settings folder").size(13))
                     .on_press(Msg::OpenConfigDir)
@@ -1066,6 +1122,7 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             ]
             .align_y(Alignment::Center),
+            muted(&s, "Global output folder, used by any site that has no output folder of its own."),
             row![
                 text_input("Recordings folder", &self.global_out)
                     .on_input(Msg::GlobalOutEdit)
@@ -1081,15 +1138,9 @@ impl App {
                     .style(skin::btn(s, BtnKind::Primary)),
             ]
             .spacing(8),
-            muted(&s, "Used by any site that has no output folder of its own."),
         ]
         .spacing(8);
-        col = col.push(
-            container(global)
-                .padding(14)
-                .width(Length::Fill)
-                .style(skin::card(s, None)),
-        );
+        col = col.push(card_box(s, folders));
 
         let row_size = |label: &'static str, value: f32, on_change: fn(f32) -> Msg| {
             row![
@@ -1101,8 +1152,8 @@ impl App {
                 )
                 .step(1.0_f32)
                 .on_release(Msg::SaveRowRange)
-                .width(260),
-                muted(&s, format!("{value:.0} px")),
+                .width(Length::Fill),
+                muted(&s, format!("{value:.0} px")).width(90),
             ]
             .spacing(12)
             .align_y(Alignment::Center)
@@ -1116,19 +1167,14 @@ impl App {
             )
             .step(10.0_f32)
             .on_release(Msg::SaveTwoColWidth)
-            .width(260),
-            muted(&s, format!("{:.0} px wide", self.two_col_w)),
+            .width(Length::Fill),
+            muted(&s, format!("{:.0} px", self.two_col_w)).width(90),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
         let compact = column![
-            self.section_title(s, "COMPACT VIEW"),
-            muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
-            muted(&s, "Compact view shows two columns when the window is at least the column threshold wide, otherwise one."),
-            row_size("Row Size Max", self.row_max, Msg::SetRowMax),
-            row_size("Row Size Min", self.row_min, Msg::SetRowMin),
-            two_col,
             row![
+                self.section_title(s, "COMPACT VIEW"),
                 Space::new().width(Length::Fill),
                 button(t(&s, "Reset").size(12))
                     .on_press(Msg::ResetRowRange)
@@ -1136,17 +1182,24 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             ]
             .align_y(Alignment::Center),
+            muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
+            muted(&s, "Two columns are used when the window is at least the column threshold wide."),
+            row_size("Row Size Max", self.row_max, Msg::SetRowMax),
+            row_size("Row Size Min", self.row_min, Msg::SetRowMin),
+            two_col,
         ]
         .spacing(8);
-        col = col.push(
-            container(compact)
-                .padding(14)
-                .width(Length::Fill)
-                .style(skin::card(s, None)),
-        );
 
         let updates = column![
-            self.section_title(s, "UPDATES"),
+            row![
+                self.section_title(s, "UPDATES"),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Check now").size(12))
+                    .on_press(Msg::CheckUpdateNow)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
             toggler(self.update_cfg.enabled)
                 .label("Check for updates automatically")
                 .on_toggle(Msg::SetUpdateChecks)
@@ -1155,72 +1208,16 @@ impl App {
                 .label("Include release candidates")
                 .on_toggle(Msg::SetIncludeRc)
                 .text_size(12),
-            row![
-                muted(&s, format!("Running v{}. Automatic checks run every 6 hours.", crate::policy::update::CURRENT)),
-                Space::new().width(Length::Fill),
-                button(t(&s, "Check now").size(12))
-                    .on_press(Msg::CheckUpdateNow)
-                    .padding([5.0, 10.0])
-                    .style(skin::btn(s, BtnKind::Ghost)),
-            ]
-            .align_y(Alignment::Center),
+            muted(&s, format!("Running v{}. Automatic checks run every 6 hours.", crate::policy::update::CURRENT)),
         ]
         .spacing(8);
-        col = col.push(
-            container(updates)
-                .padding(14)
-                .width(Length::Fill)
-                .style(skin::card(s, None)),
-        );
 
-        let help = column![
-            self.section_title(s, "COMMAND PLACEHOLDERS"),
-            muted(&s, "Checker: {urls} becomes every URL monitored for the site (appended if missing)."),
-            muted(&s, "Recorder: {url} live stream URL · {streamer_url} the URL you added · {name} streamer name · {title} stream title · {id} video id · {output_dir} output folder."),
-            muted(&s, "--simulate mode expects lines like original_url|webpage_url|id|title, e.g. from --print with --match-filter is_live."),
-        ]
-        .spacing(5);
-        col = col.push(
-            container(help)
-                .padding(14)
-                .width(Length::Fill)
-                .style(skin::card(s, None)),
-        );
-
-        let add = row![
-            iced::widget::text("ADD SITE")
-                .font(s.font)
-                .size(13)
-                .color(s.accent2),
-            button(t(&s, "Twitch").size(13))
-                .on_press(Msg::AddSite(Preset::Twitch))
-                .padding([7.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Tiktok").size(13))
-                .on_press(Msg::AddSite(Preset::Tiktok))
-                .padding([7.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Chaturbate").size(13))
-                .on_press(Msg::AddSite(Preset::Chaturbate))
-                .padding([7.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Kick").size(13))
-                .on_press(Msg::AddSite(Preset::Kick))
-                .padding([7.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Blank").size(13))
-                .on_press(Msg::AddSite(Preset::Blank))
-                .padding([7.0, 14.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-        col = col.push(add);
-
-        for site in &self.settings.sites {
-            if let Some(d) = self.drafts.get(&site.id) {
-                col = col.push(self.site_editor(s, site, d));
-            }
+        let compact = card_box(s, compact);
+        let updates = card_box(s, updates);
+        if self.win_w >= 1000.0 {
+            col = col.push(row![compact, updates].spacing(12));
+        } else {
+            col = col.push(compact).push(updates);
         }
         scrollable(col).height(Length::Fill).into()
     }
@@ -1239,6 +1236,9 @@ impl App {
                 .padding(8)
                 .style(skin::input(s))
                 .into()
+        };
+        let hinted = |input: Element<'a, Msg>, hint: &'static str| -> Element<'a, Msg> {
+            column![input, muted(&s, hint)].spacing(4).into()
         };
         let dirty = *d != SiteDraft::from_site(site);
         let valid = d.interval_secs().is_some() && !d.name.trim().is_empty();
@@ -1310,38 +1310,54 @@ impl App {
         ]
         .spacing(24);
 
-        let form = column![
-            top,
-            labeled(
+        let paths = row![
+            container(labeled(
                 "Path to yt-dlp executable",
                 field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)
-            ),
-            labeled(
-                "URL template",
-                field(
-                    "https://twitch.tv/{username}",
-                    &d.url_template,
-                    DraftField::UrlTemplate
-                )
-            ),
-            labeled(
-                "Checker command arguments",
-                field("--dump-json {urls}", &d.checker, DraftField::Checker)
-            ),
-            labeled(
-                "Recorder command arguments",
-                field(
-                    "-o \"%(title)s.%(ext)s\" {url}",
-                    &d.recorder,
-                    DraftField::Recorder
-                )
-            ),
-            labeled(
+            ))
+            .width(Length::FillPortion(1)),
+            container(labeled(
                 "Output folder (blank = global)",
                 field(
                     "Use the global output folder",
                     &d.output,
                     DraftField::Output
+                )
+            ))
+            .width(Length::FillPortion(1)),
+        ]
+        .spacing(10);
+
+        let form = column![
+            top,
+            paths,
+            labeled(
+                "URL template",
+                hinted(
+                    field(
+                        "https://twitch.tv/{username}",
+                        &d.url_template,
+                        DraftField::UrlTemplate
+                    ),
+                    "{username} is replaced with the name entered when adding a streamer."
+                )
+            ),
+            labeled(
+                "Checker command arguments",
+                hinted(
+                    field("--dump-json {urls}", &d.checker, DraftField::Checker),
+                    "{urls} expands to every monitored URL (appended if missing)."
+                )
+            ),
+            labeled(
+                "Recorder command arguments",
+                hinted(
+                    field(
+                        "-o \"%(title)s.%(ext)s\" {url}",
+                        &d.recorder,
+                        DraftField::Recorder
+                    ),
+                    "{url} is the live stream URL (appended if missing)."
                 )
             ),
             logging,
@@ -1376,4 +1392,13 @@ impl App {
             .style(skin::card(s, None))
             .into()
     }
+}
+
+/// Wraps content in the standard settings card.
+fn card_box<'a>(s: Skin, content: impl Into<Element<'a, Msg>>) -> Element<'a, Msg> {
+    container(content)
+        .padding(14)
+        .width(Length::Fill)
+        .style(skin::card(s, None))
+        .into()
 }

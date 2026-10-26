@@ -529,7 +529,7 @@ mod e2e {
                 interval_secs: 5,
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
-                recorder_args: "RECORD {url} {id}".into(),
+                recorder_args: "RECORD {url}".into(),
                 url_template: "https://x.test/{username}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
             }));

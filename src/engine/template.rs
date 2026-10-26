@@ -41,24 +41,24 @@ pub fn tokenize(input: &str) -> Vec<String> {
     out
 }
 
-/// Builds the final argument list; a bare `{urls}` token expands to one argument per URL.
-pub fn expand(template: &str, vars: &[(&str, String)], urls: Option<&[String]>) -> Vec<String> {
+/// Builds the argument list; a bare `{key}` token expands to one argument per value, and the values are appended if `{key}` is absent.
+pub fn expand(template: &str, key: &str, values: &[String]) -> Vec<String> {
+    let bare = format!("{{{key}}}");
     let mut args = Vec::new();
-    let mut used_urls = false;
+    let mut used = false;
     for tok in tokenize(template) {
-        if tok == "{urls}" {
-            args.extend(urls.unwrap_or(&[]).iter().cloned());
-            used_urls = true;
-            continue;
+        if tok == bare {
+            args.extend(values.iter().cloned());
+            used = true;
+        } else if tok.contains(&bare) {
+            args.push(tok.replace(&bare, &values.join(" ")));
+            used = true;
+        } else {
+            args.push(tok);
         }
-        let mut s = tok;
-        for (k, v) in vars {
-            s = s.replace(&format!("{{{k}}}"), v);
-        }
-        args.push(s);
     }
-    if let (false, Some(urls)) = (used_urls, urls) {
-        args.extend(urls.iter().cloned());
+    if !used {
+        args.extend(values.iter().cloned());
     }
     args
 }
@@ -82,10 +82,13 @@ mod tests {
     }
 
     #[test]
-    fn expands_urls_and_vars() {
+    fn expands_and_appends() {
         let urls = vec!["u1".to_string(), "u2".to_string()];
-        assert_eq!(expand("--a {urls}", &[], Some(&urls)), vec!["--a", "u1", "u2"]);
-        assert_eq!(expand("-o {id}.mp4 {url}", &[("id", "X".into()), ("url", "U".into())], None), vec!["-o", "X.mp4", "U"]);
-        assert_eq!(expand("--a", &[], Some(&urls)), vec!["--a", "u1", "u2"]);
+        let one = vec!["U".to_string()];
+        assert_eq!(expand("--a {urls}", "urls", &urls), vec!["--a", "u1", "u2"]);
+        assert_eq!(expand("--a", "urls", &urls), vec!["--a", "u1", "u2"]);
+        assert_eq!(expand("-o x.mp4 {url}", "url", &one), vec!["-o", "x.mp4", "U"]);
+        assert_eq!(expand("--referer={url}", "url", &one), vec!["--referer=U"]);
+        assert_eq!(expand("-o x.mp4", "url", &one), vec!["-o", "x.mp4", "U"]);
     }
 }

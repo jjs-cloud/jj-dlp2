@@ -50,6 +50,13 @@ pub enum Tab {
     Log,
 }
 
+/// Sub-pages of the Settings tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    Sites,
+    General,
+}
+
 /// Where the update banner is in its flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateStage {
@@ -136,6 +143,8 @@ pub enum Msg {
     Policy(PolicyEvent),
     Tick(#[allow(dead_code)] Instant),
     SetTab(Tab),
+    SetSettingsTab(SettingsTab),
+    OpenAddSite,
     ThemeChosen(ThemeKind),
     OpenConfigDir,
     OpenOutputDir(SiteId),
@@ -193,6 +202,7 @@ pub struct App {
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
     open_streamer_settings: HashSet<StreamerId>,
+    settings_tab: SettingsTab,
     global_out: String,
     phase: f32,
     now: u64,
@@ -227,6 +237,7 @@ impl App {
             drafts: HashMap::new(),
             new_streamer: HashMap::new(),
             open_streamer_settings: HashSet::new(),
+            settings_tab: SettingsTab::Sites,
             global_out: String::new(),
             phase: 0.0,
             now: now_secs(),
@@ -283,6 +294,11 @@ impl App {
                 self.now = now_secs();
             }
             Msg::SetTab(t) => self.tab = t,
+            Msg::SetSettingsTab(w) => self.settings_tab = w,
+            Msg::OpenAddSite => {
+                self.tab = Tab::Settings;
+                self.settings_tab = SettingsTab::Sites;
+            }
             Msg::ThemeChosen(k) => {
                 self.kind = k;
                 prefs::save_theme(k);

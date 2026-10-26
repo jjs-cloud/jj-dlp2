@@ -529,16 +529,8 @@ impl Engine {
             site.output_dir.clone()
         };
         let url = if entry.webpage_url.is_empty() { streamer.url.clone() } else { entry.webpage_url.clone() };
-        let vars = [
-            ("url", url),
-            ("streamer_url", streamer.url.clone()),
-            ("output_dir", out_dir.clone()),
-            ("id", entry.video_id.clone()),
-            ("title", template::sanitize(&entry.title)),
-            ("name", template::sanitize(&streamer.name)),
-        ];
         let template = self.recorder_overrides.get(&streamer_id).unwrap_or(&site.recorder_args);
-        let args = template::expand(template, &vars, None);
+        let args = template::expand(template, "url", &[url]);
         let log_path = |on: bool, kind: &str| on.then(|| logfile::stream_path(&site.name, &streamer.name, kind));
         let exe = exepath::resolve(&site.exe_path);
         if let Some(note) = exe.note {
@@ -610,7 +602,7 @@ mod e2e {
                 interval_secs: 5,
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
-                recorder_args: "RECORD {url} {id}".into(),
+                recorder_args: "RECORD {url}".into(),
                 url_template: String::new(),
                 output_dir: String::new(),
                 log_checker_stdout: true,
@@ -718,7 +710,7 @@ mod e2e {
                 interval_secs: 5,
                 check_mode: CheckMode::DumpJson,
                 checker_args: "--dump-json {urls}".into(),
-                recorder_args: "RECORD {url} {id}".into(),
+                recorder_args: "RECORD {url}".into(),
                 url_template: String::new(),
                 output_dir: String::new(),
                 log_checker_stdout: false,

@@ -72,7 +72,7 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
 }
 
 async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) -> Result<CheckReport, String> {
-    let args = template::expand(&snap.site.checker_args, &[], Some(&snap.urls));
+    let args = template::expand(&snap.site.checker_args, "urls", &snap.urls);
     let exe = exepath::resolve(&snap.site.exe_path);
     if let Some(note) = exe.note {
         let _ = internal.send(Internal::Log(note));
