@@ -289,6 +289,14 @@ pub fn stripe(s: Skin, shaded: bool) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// Thin outline around one compact-view column.
+pub fn column_frame(s: Skin) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        border: Border { color: with_alpha(s.border, 0.6), width: 1.0, radius: Radius::from(s.radius * 0.5) },
+        ..Default::default()
+    }
+}
+
 pub fn input(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
         let focused = matches!(status, text_input::Status::Focused { .. });

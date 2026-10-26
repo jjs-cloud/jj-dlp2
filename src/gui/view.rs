@@ -72,6 +72,8 @@ const ROW_FLOOR: f32 = 15.0;
 const ROW_CEIL: f32 = 34.0;
 const COMPACT_CHROME_H: f32 = 200.0;
 const COMPACT_SLACK_H: f32 = 16.0;
+const COLUMN_FRAME: f32 = 1.0;
+const COLUMN_GAP: f32 = 14.0;
 const NAME_MAX_CHARS: usize = 20;
 const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
@@ -100,7 +102,7 @@ struct RowMetrics {
 }
 
 impl RowMetrics {
-    fn new(row_h: f32, name_chars: usize, site_chars: usize) -> RowMetrics {
+    fn new(row_h: f32, name_chars: usize, site_chars: usize, pad_trim: f32) -> RowMetrics {
         let t = ((row_h - ROW_FLOOR) / (ROW_CEIL - ROW_FLOOR)).max(0.0);
         let at = |floor: f32, ceil: f32| floor + (ceil - floor) * t;
         let text = |floor: f32, ceil: f32| (at(floor, ceil) * 2.0).round() / 2.0;
@@ -119,7 +121,7 @@ impl RowMetrics {
             site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
             name_w: (name_chars.min(NAME_MAX_CHARS) as f32 * name * NAME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
-            pad_h: at(6.0, 12.0),
+            pad_h: at(6.0, 12.0) - pad_trim,
         }
     }
 }
@@ -423,7 +425,7 @@ impl App {
 
     /// Picks two columns when the window is at least the column threshold wide, else one; sizes rows to fit.
     fn compact_layout(&self, rows: usize, extra_h: f32) -> (usize, f32) {
-        let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h).max(0.0);
+        let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h - 2.0 * COLUMN_FRAME).max(0.0);
         let cols = if self.win_w >= self.two_col_w { 2 } else { 1 };
         let per_col = rows.div_ceil(cols).max(1);
         let fit = ((avail + ROW_GAP) / per_col as f32 - ROW_GAP).floor();
@@ -482,15 +484,25 @@ impl App {
             .map(|(site, _)| clip(&site.name, SITE_CLIP_CHARS).chars().count())
             .max()
             .unwrap_or(0);
-        let m = RowMetrics::new(row_h, longest, longest_site);
+        let frame = COLUMN_FRAME;
+        let pad_trim = if cols == 1 { frame } else { 0.0 };
+        let m = RowMetrics::new(row_h, longest, longest_site, pad_trim);
         let per_col = entries.len().div_ceil(cols);
-        let mut grid = Row::new().spacing(14);
+        let col_h = per_col as f32 * row_h + (per_col - 1) as f32 * ROW_GAP + 2.0 * frame;
+        let mut grid = Row::new().spacing(COLUMN_GAP - 4.0 * frame);
         for chunk in entries.chunks(per_col) {
             let mut c = Column::new().spacing(ROW_GAP).width(Length::Fill);
             for (i, &(site, st)) in chunk.iter().enumerate() {
                 c = c.push(self.compact_row(s, m, site, st, i % 2 == 1));
             }
-            grid = grid.push(c);
+            grid = grid.push(
+                container(c)
+                    .padding(COLUMN_FRAME)
+                    .width(Length::Fill)
+                    .height(col_h)
+                    .clip(true)
+                    .style(skin::column_frame(s)),
+            );
         }
         col.push(grid)
     }
