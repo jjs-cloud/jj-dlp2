@@ -18,7 +18,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 const LOG_LIMIT: usize = 500;
 pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
 pub const DEFAULT_SIM_ARGS: &str =
-    "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s|%(id)s|%(title)s\" {urls}";
+    "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s\" {urls}";
 
 static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
 

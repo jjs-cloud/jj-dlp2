@@ -23,8 +23,6 @@ pub struct SiteSnapshot {
 pub struct LiveEntry {
     pub candidates: Vec<String>,
     pub webpage_url: String,
-    pub video_id: String,
-    pub title: String,
 }
 
 impl LiveEntry {
@@ -145,26 +143,20 @@ fn parse_json_line(line: &str) -> Option<LiveEntry> {
     Some(LiveEntry {
         candidates: vec![get("original_url"), webpage_url.clone(), get("channel_url"), get("uploader_url")],
         webpage_url,
-        video_id: get("id"),
-        title: get("title"),
     })
 }
 
-/// Expects `original_url|webpage_url|id|title` (title last, may contain '|').
+/// Expects `original_url|webpage_url`.
 fn parse_simulate_line(line: &str) -> Option<LiveEntry> {
-    let mut parts = line.trim().splitn(4, '|');
+    let mut parts = line.trim().splitn(2, '|');
     let original = parts.next()?.trim();
     let webpage = parts.next()?.trim();
-    let id = parts.next()?.trim();
-    let title = parts.next().unwrap_or("").trim();
     if original.is_empty() && webpage.is_empty() {
         return None;
     }
     Some(LiveEntry {
         candidates: vec![original.to_string(), webpage.to_string()],
         webpage_url: webpage.to_string(),
-        video_id: id.to_string(),
-        title: title.to_string(),
     })
 }
 
