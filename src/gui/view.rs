@@ -78,7 +78,7 @@ const NAME_MAX_CHARS: usize = 20;
 const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
-const PW_SITE: u32 = 90;
+const PW_SITE: u32 = 104;
 const PW_STATE: u32 = 110;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
@@ -159,7 +159,7 @@ fn compact_chips<'a>(
         .spacing(m.spacing / 2.0)
         .align_y(Alignment::Center);
     if status.recording {
-        chips = chips.push(mini_chip(s, m, "RECORDING", s.accent));
+        chips = chips.push(mini_chip(s, m, "REC", s.accent));
     }
     if status.live {
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
@@ -174,12 +174,12 @@ fn compact_chips<'a>(
         chips = chips.push(mini_chip(
             s,
             m,
-            format!("restarted {}×", status.restarts),
+            format!("RESTARTED {}×", status.restarts),
             s.warn,
         ));
     }
     if st.options.log_stdout || st.options.log_stderr {
-        chips = chips.push(mini_chip(s, m, "logging", s.muted));
+        chips = chips.push(mini_chip(s, m, "LOG", s.muted));
     }
     chips
 }
@@ -791,15 +791,9 @@ impl App {
             )
             .width(Length::FillPortion(3))
             .clip(true),
-            container(
-                iced::widget::text(clip(&p.site_name, 12))
-                    .font(s.font)
-                    .size(12)
-                    .color(s.accent2)
-                    .wrapping(Wrapping::None)
-            )
-            .width(PW_SITE)
-            .clip(true),
+            container(chip(s, clip(&p.site_name, 12), s.accent2))
+                .width(PW_SITE)
+                .clip(true),
             container(chip(s, state_label, state_color)).width(PW_STATE),
             cell(fmt_dur(p.uptime_secs), PW_UP),
             cell(yt_text, PW_YT),
@@ -900,7 +894,7 @@ impl App {
                 .color(s.accent2),
         );
         if site.log_checker_stdout || site.log_checker_stderr {
-            head = head.push(chip(s, "logging", s.muted));
+            head = head.push(chip(s, "LOGGING", s.muted));
         }
         let head = head.push(Space::new().width(Length::Fill)).push(check);
 
@@ -981,10 +975,10 @@ impl App {
             chips = chips.push(chip(s, "PAUSED", s.warn));
         }
         if status.restarts > 0 {
-            chips = chips.push(chip(s, format!("restarted {}×", status.restarts), s.warn));
+            chips = chips.push(chip(s, format!("RESTARTED {}×", status.restarts), s.warn));
         }
         if st.options.log_stdout || st.options.log_stderr {
-            chips = chips.push(chip(s, "logging", s.muted));
+            chips = chips.push(chip(s, "LOGGING", s.muted));
         }
         let line = row![
             dot(s, color, glow),
