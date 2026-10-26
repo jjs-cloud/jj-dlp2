@@ -5,8 +5,8 @@ mod skin;
 mod view;
 
 use crate::api::*;
-use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent};
-use crate::update;
+use crate::policy::update::UpdateConfig;
+use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent, UpdateEvent};
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const LOG_LIMIT: usize = 500;
-const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
 pub const DEFAULT_SIM_ARGS: &str =
     "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s|%(id)s|%(title)s\" {urls}";
@@ -57,6 +56,13 @@ pub enum UpdateStage {
     Idle,
     Confirm,
     Installing,
+}
+
+/// A release the policy layer found.
+#[derive(Debug, Clone)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub is_rc: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -158,12 +164,12 @@ pub enum Msg {
     SaveTwoColWidth,
     ResetRowRange,
     Resized(Size),
-    CheckUpdate,
-    UpdateChecked(Result<Option<update::Available>, String>),
     UpdateClicked,
     UpdateCancel,
     UpdateConfirm,
-    UpdateStaged(Result<update::Staged, String>),
+    CheckUpdateNow,
+    SetUpdateChecks(bool),
+    SetIncludeRc(bool),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -197,9 +203,10 @@ pub struct App {
     two_col_w: f32,
     win_w: f32,
     win_h: f32,
-    update: Option<update::Available>,
+    update: Option<UpdateInfo>,
     update_stage: UpdateStage,
     update_error: Option<String>,
+    update_cfg: UpdateConfig,
 }
 
 impl App {
@@ -233,11 +240,12 @@ impl App {
             update: None,
             update_stage: UpdateStage::Idle,
             update_error: None,
+            update_cfg: UpdateConfig::default(),
         };
-        if let Some(e) = update::take_last_error() {
+        if let Some(e) = crate::policy::update::take_last_error() {
             app.push_log(e);
         }
-        (app, Task::perform(update::check_async(), Msg::UpdateChecked))
+        (app, Task::none())
     }
 
     fn skin(&self) -> Skin {
@@ -253,7 +261,6 @@ impl App {
             Subscription::run(engine_stream),
             iced::time::every(Duration::from_millis(100)).map(Msg::Tick),
             window::resize_events().map(on_resize),
-            iced::time::every(UPDATE_CHECK_EVERY).map(|_| Msg::CheckUpdate),
         ])
     }
 
@@ -265,7 +272,12 @@ impl App {
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
-            Msg::Policy(ev) => self.on_event(ev),
+            Msg::Policy(ev) => {
+                if matches!(ev, PolicyEvent::Update(UpdateEvent::Restarting)) {
+                    return iced::exit();
+                }
+                self.on_event(ev)
+            }
             Msg::Tick(_) => {
                 self.phase = (self.phase + 0.04) % 1.0;
                 self.now = now_secs();
@@ -402,19 +414,6 @@ impl App {
                     self.expanded_procs.insert(id);
                 }
             }
-            Msg::CheckUpdate => {
-                if self.update_stage != UpdateStage::Installing {
-                    return Task::perform(update::check_async(), Msg::UpdateChecked);
-                }
-            }
-            Msg::UpdateChecked(Ok(found)) => {
-                if let Some(a) = found {
-                    if self.update_stage != UpdateStage::Installing {
-                        self.update = Some(a);
-                    }
-                }
-            }
-            Msg::UpdateChecked(Err(e)) => self.push_log(e),
             Msg::UpdateClicked => {
                 if self.update.is_some() {
                     self.update_error = None;
@@ -423,21 +422,19 @@ impl App {
             }
             Msg::UpdateCancel => self.update_stage = UpdateStage::Idle,
             Msg::UpdateConfirm => {
-                if let Some(a) = self.update.clone() {
+                if self.update.is_some() {
                     self.update_stage = UpdateStage::Installing;
-                    self.push_log(format!("downloading update v{}", a.version));
-                    return Task::perform(update::download_async(a), Msg::UpdateStaged);
+                    self.client.send(PolicyCommand::InstallUpdate);
                 }
             }
-            Msg::UpdateStaged(Ok(staged)) => {
-                self.push_log(format!("update v{} ready; restarting", staged.version));
-                update::set_pending(staged);
-                return iced::exit();
+            Msg::CheckUpdateNow => self.client.send(PolicyCommand::CheckForUpdate),
+            Msg::SetUpdateChecks(on) => {
+                self.update_cfg.enabled = on;
+                self.client.send(PolicyCommand::SetUpdateConfig(self.update_cfg));
             }
-            Msg::UpdateStaged(Err(e)) => {
-                self.push_log(format!("update failed: {e}"));
-                self.update_error = Some(e);
-                self.update_stage = UpdateStage::Idle;
+            Msg::SetIncludeRc(on) => {
+                self.update_cfg.include_rc = on;
+                self.client.send(PolicyCommand::SetUpdateConfig(self.update_cfg));
             }
         }
         Task::none()
@@ -447,6 +444,7 @@ impl App {
         match ev {
             PolicyEvent::Settings(s) => self.on_settings(s),
             PolicyEvent::Log(line) => self.push_log(line),
+            PolicyEvent::Update(ev) => self.on_update_event(ev),
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
@@ -472,6 +470,25 @@ impl App {
                 }
                 Event::Log(line) => self.push_log(line),
             },
+        }
+    }
+
+    fn on_update_event(&mut self, ev: UpdateEvent) {
+        match ev {
+            UpdateEvent::Config(cfg) => self.update_cfg = cfg,
+            UpdateEvent::Available { version, is_rc } => self.update = Some(UpdateInfo { version, is_rc }),
+            UpdateEvent::NoUpdate => {
+                if self.update_stage != UpdateStage::Installing {
+                    self.update = None;
+                    self.update_stage = UpdateStage::Idle;
+                }
+            }
+            UpdateEvent::Downloading => self.update_stage = UpdateStage::Installing,
+            UpdateEvent::Failed(e) => {
+                self.update_error = Some(e);
+                self.update_stage = UpdateStage::Idle;
+            }
+            UpdateEvent::Restarting => {}
         }
     }
 

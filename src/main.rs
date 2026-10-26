@@ -7,16 +7,16 @@ mod policy;
 mod settings;
 #[cfg(all(test, unix))]
 mod testutil;
-mod update;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
-const USAGE: &str = "Usage: jj-dlp [--no-gui | --engine-only]\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads settings.json at launch";
+const USAGE: &str = "Usage: jj-dlp [--no-gui | --engine-only | --update [--rc]]\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads settings.json at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
 
 enum Mode {
     Gui,
     NoGui,
     EngineOnly,
+    Update(bool),
 }
 
 fn main() {
@@ -25,6 +25,8 @@ fn main() {
         [] => Mode::Gui,
         ["--no-gui"] => Mode::NoGui,
         ["--engine-only"] => Mode::EngineOnly,
+        ["--update"] => Mode::Update(false),
+        ["--update", "--rc"] | ["--rc", "--update"] => Mode::Update(true),
         ["-h" | "--help"] => {
             attach_console();
             println!("{USAGE}");
@@ -40,6 +42,7 @@ fn main() {
         Mode::Gui => run_gui(),
         Mode::NoGui => run_no_gui(),
         Mode::EngineOnly => run_engine_only(),
+        Mode::Update(rc) => run_update(rc),
     }
 }
 
@@ -52,8 +55,6 @@ fn run_gui() {
     // Stop recorders gracefully before exiting.
     policy.client.send(policy::PolicyCommand::Shutdown);
     let _ = policy.thread.join();
-    // Installs a staged update (if any) now that recorders have stopped.
-    update::finish_pending();
 }
 
 fn run_no_gui() {
@@ -62,14 +63,22 @@ fn run_no_gui() {
     let client = policy.client.clone();
     drive(
         policy.events,
-        |ev| {
-            if let policy::PolicyEvent::Engine(api::Event::Log(m)) | policy::PolicyEvent::Log(m) = ev {
-                println!("{m}");
+        |ev| match ev {
+            policy::PolicyEvent::Engine(api::Event::Log(m)) | policy::PolicyEvent::Log(m) => println!("{m}"),
+            policy::PolicyEvent::Update(policy::UpdateEvent::Available { version, is_rc }) => {
+                let kind = if is_rc { " (release candidate)" } else { "" };
+                println!("Update available: v{version}{kind}. Run `jj-dlp --update` to install it.");
             }
+            _ => {}
         },
         move || client.send(policy::PolicyCommand::Shutdown),
         policy.thread,
     );
+}
+
+fn run_update(rc: bool) {
+    attach_console();
+    std::process::exit(policy::update::run_cli(rc));
 }
 
 fn run_engine_only() {

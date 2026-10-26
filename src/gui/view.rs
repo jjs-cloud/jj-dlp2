@@ -273,10 +273,15 @@ impl App {
     /// The "Update available!" banner with its confirm step; `None` when up to date.
     fn update_banner(&self, s: Skin) -> Option<Element<'_, Msg>> {
         let a = self.update.as_ref()?;
-        let heading = iced::widget::text(format!("Update available! v{} (running v{})", a.version, crate::update::CURRENT))
-            .font(s.font)
-            .size(15)
-            .color(s.accent2);
+        let kind = if a.is_rc { " (release candidate)" } else { "" };
+        let heading = iced::widget::text(format!(
+            "Update available! v{}{kind} (running v{})",
+            a.version,
+            crate::policy::update::CURRENT
+        ))
+        .font(s.font)
+        .size(15)
+        .color(s.accent2);
         let (detail, buttons): (Option<String>, Element<'_, Msg>) = match self.update_stage {
             UpdateStage::Idle => (
                 self.update_error.as_ref().map(|e| format!("Last attempt failed: {e}")),
@@ -1135,6 +1140,34 @@ impl App {
         .spacing(8);
         col = col.push(
             container(compact)
+                .padding(14)
+                .width(Length::Fill)
+                .style(skin::card(s, None)),
+        );
+
+        let updates = column![
+            self.section_title(s, "UPDATES"),
+            toggler(self.update_cfg.enabled)
+                .label("Check for updates automatically")
+                .on_toggle(Msg::SetUpdateChecks)
+                .text_size(12),
+            toggler(self.update_cfg.include_rc)
+                .label("Include release candidates")
+                .on_toggle(Msg::SetIncludeRc)
+                .text_size(12),
+            row![
+                muted(&s, format!("Running v{}. Automatic checks run every 6 hours.", crate::policy::update::CURRENT)),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Check now").size(12))
+                    .on_press(Msg::CheckUpdateNow)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8);
+        col = col.push(
+            container(updates)
                 .padding(14)
                 .width(Length::Fill)
                 .style(skin::card(s, None)),

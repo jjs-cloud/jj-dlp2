@@ -5,8 +5,14 @@ use crate::api::{
 };
 use crate::engine::EngineParts;
 use crate::settings;
+use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
+
+pub mod update;
+use update::UpdateConfig;
+
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 /// Fields supplied when creating a site; the policy layer assigns the id.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +42,12 @@ pub enum PolicyCommand {
     OpenOutputDir(SiteId),
     /// Re-runs the engine's setup checks.
     Recheck,
+    /// Looks for a new release now, even when automatic checks are off.
+    CheckForUpdate,
+    /// Downloads the available update, then stops the engine and restarts into it.
+    InstallUpdate,
+    /// Saves the updater settings and re-checks.
+    SetUpdateConfig(UpdateConfig),
     /// Stops the engine gracefully, then ends the policy layer.
     Shutdown,
 }
@@ -45,6 +57,26 @@ pub enum PolicyEvent {
     Settings(Settings),
     Engine(Event),
     Log(String),
+    Update(UpdateEvent),
+}
+
+/// Updater state changes reported to front ends.
+#[derive(Debug, Clone)]
+pub enum UpdateEvent {
+    Config(UpdateConfig),
+    Available { version: String, is_rc: bool },
+    /// No newer release; clears any earlier `Available`.
+    NoUpdate,
+    Downloading,
+    Failed(String),
+    /// The update is staged and the engine is stopping; the front end should exit.
+    Restarting,
+}
+
+/// Results of background update work, fed back into the policy loop.
+enum UpdateMsg {
+    Checked { manual: bool, result: Result<Option<update::Available>, String> },
+    Staged(Result<update::Staged, String>),
 }
 
 /// Cheap handle for sending commands to the policy layer.
@@ -79,7 +111,11 @@ pub fn start(engine: EngineParts) -> PolicyParts {
                 let _ = thread.join();
                 let _ = done_tx.send(());
             });
-            rt.block_on(Policy::new(client, ev_tx).run(cmd_rx, events, done_rx));
+            let (upd_tx, upd_rx) = mpsc::unbounded_channel();
+            rt.block_on(Policy::new(client, ev_tx, upd_tx).run(cmd_rx, events, done_rx, upd_rx));
+            // Stops the runtime without waiting on downloads, then installs any staged update.
+            rt.shutdown_background();
+            update::finish_pending();
         })
         .expect("spawn policy thread");
     PolicyParts { client: PolicyClient { tx: cmd_tx }, events: ev_rx, thread }
@@ -89,11 +125,23 @@ struct Policy {
     settings: Settings,
     engine: EngineClient,
     events: UnboundedSender<PolicyEvent>,
+    update_cfg: UpdateConfig,
+    available: Option<update::Available>,
+    installing: bool,
+    upd_tx: UnboundedSender<UpdateMsg>,
 }
 
 impl Policy {
-    fn new(engine: EngineClient, events: UnboundedSender<PolicyEvent>) -> Self {
-        Self { settings: settings::load(), engine, events }
+    fn new(engine: EngineClient, events: UnboundedSender<PolicyEvent>, upd_tx: UnboundedSender<UpdateMsg>) -> Self {
+        Self {
+            settings: settings::load(),
+            engine,
+            events,
+            update_cfg: update::load_config(),
+            available: None,
+            installing: false,
+            upd_tx,
+        }
     }
 
     async fn run(
@@ -101,9 +149,13 @@ impl Policy {
         mut cmds: UnboundedReceiver<PolicyCommand>,
         mut engine_events: UnboundedReceiver<Event>,
         mut engine_done: oneshot::Receiver<()>,
+        mut update_msgs: UnboundedReceiver<UpdateMsg>,
     ) {
         let mut cmds_open = true;
+        let mut update_tick = tokio::time::interval(UPDATE_CHECK_EVERY);
+        update_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit_settings();
+        self.emit_update_config();
         loop {
             tokio::select! {
                 cmd = cmds.recv(), if cmds_open => match cmd {
@@ -118,6 +170,12 @@ impl Policy {
                     None => break,
                 },
                 _ = &mut engine_done => break,
+                _ = update_tick.tick() => self.check_now(),
+                msg = update_msgs.recv() => {
+                    if let Some(m) = msg {
+                        self.on_update_msg(m);
+                    }
+                }
             }
         }
         while let Ok(e) = engine_events.try_recv() {
@@ -131,6 +189,83 @@ impl Policy {
 
     fn emit_settings(&self) {
         self.emit(PolicyEvent::Settings(self.settings.clone()));
+    }
+
+    fn emit_update_config(&self) {
+        self.emit(PolicyEvent::Update(UpdateEvent::Config(self.update_cfg)));
+    }
+
+    /// Re-reads update.json (so hand edits apply) and checks for a release.
+    fn check_now(&mut self) {
+        let cfg = update::load_config();
+        if cfg != self.update_cfg {
+            self.update_cfg = cfg;
+            self.emit_update_config();
+        }
+        self.run_check(false);
+    }
+
+    /// Starts a background release check; `manual` checks run even when automatic ones are off.
+    fn run_check(&mut self, manual: bool) {
+        if self.installing || cfg!(test) {
+            return;
+        }
+        if !self.update_cfg.enabled && !manual {
+            if self.available.take().is_some() {
+                self.emit(PolicyEvent::Update(UpdateEvent::NoUpdate));
+            }
+            return;
+        }
+        let include_rc = self.update_cfg.include_rc;
+        let tx = self.upd_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(UpdateMsg::Checked { manual, result: update::check(include_rc) });
+        });
+    }
+
+    /// Starts downloading the available update in the background.
+    fn install_update(&mut self) {
+        let Some(a) = self.available.clone() else {
+            return;
+        };
+        if self.installing {
+            return;
+        }
+        self.installing = true;
+        self.emit(PolicyEvent::Update(UpdateEvent::Downloading));
+        self.log(format!("downloading update v{}", a.version));
+        let tx = self.upd_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(UpdateMsg::Staged(update::download(&a)));
+        });
+    }
+
+    fn on_update_msg(&mut self, msg: UpdateMsg) {
+        match msg {
+            UpdateMsg::Checked { result: Err(e), .. } => self.log(e),
+            UpdateMsg::Checked { result: Ok(Some(a)), .. } => {
+                self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
+                self.available = Some(a);
+            }
+            UpdateMsg::Checked { manual, result: Ok(None) } => {
+                if manual {
+                    self.log(format!("jj-dlp v{} is up to date", update::CURRENT));
+                }
+                self.available = None;
+                self.emit(PolicyEvent::Update(UpdateEvent::NoUpdate));
+            }
+            UpdateMsg::Staged(Ok(staged)) => {
+                self.log(format!("update v{} ready; restarting", staged.version));
+                update::set_pending(staged);
+                self.emit(PolicyEvent::Update(UpdateEvent::Restarting));
+                self.engine.send(Command::Shutdown);
+            }
+            UpdateMsg::Staged(Err(e)) => {
+                self.installing = false;
+                self.log(format!("update failed: {e}"));
+                self.emit(PolicyEvent::Update(UpdateEvent::Failed(e)));
+            }
+        }
     }
 
     fn log(&self, msg: impl Into<String>) {
@@ -164,7 +299,13 @@ impl Policy {
 
     fn handle(&mut self, cmd: PolicyCommand) {
         match cmd {
-            PolicyCommand::RequestSnapshot => self.emit_settings(),
+            PolicyCommand::RequestSnapshot => {
+                self.emit_settings();
+                self.emit_update_config();
+                if let Some(a) = &self.available {
+                    self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
+                }
+            }
             PolicyCommand::AddSite(n) => {
                 let id = self.alloc_id();
                 self.settings.sites.push(Site {
@@ -255,6 +396,16 @@ impl Policy {
                 let _ = open::that_detached(output_dir(&self.settings, site_id));
             }
             PolicyCommand::Recheck => self.engine.send(Command::Recheck),
+            PolicyCommand::CheckForUpdate => self.run_check(true),
+            PolicyCommand::InstallUpdate => self.install_update(),
+            PolicyCommand::SetUpdateConfig(cfg) => {
+                if let Err(e) = update::save_config(&cfg) {
+                    self.log(format!("failed to save update.json: {e}"));
+                }
+                self.update_cfg = cfg;
+                self.emit_update_config();
+                self.run_check(false);
+            }
             PolicyCommand::Shutdown => self.engine.send(Command::Shutdown),
         }
     }
