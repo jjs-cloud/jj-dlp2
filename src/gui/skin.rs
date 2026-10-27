@@ -201,6 +201,24 @@ pub fn chip(_s: Skin, color: Color) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// A small round colour button; `selected` draws a bright outline.
+pub fn swatch(s: Skin, color: Color, selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(color)),
+            text_color: s.text,
+            border: Border {
+                color: if selected || hovered { s.text } else { with_alpha(s.border, 0.8) },
+                width: if selected { 2.0 } else { 1.0 },
+                radius: Radius::from(99.0),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
 pub fn dot(color: Color, glow: f32) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(color)),

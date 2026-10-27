@@ -1,7 +1,9 @@
 //! View functions for every screen.
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
-use super::{App, DraftField, Msg, OptionField, Preset, SettingsTab, SiteDraft, Tab, UpdateStage, prefs};
+use super::{
+    App, DraftField, Msg, OptionField, Preset, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
+};
 use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
@@ -1387,7 +1389,22 @@ impl App {
         ]
         .spacing(10)
         .align_y(Alignment::Center);
-        let mut color_col = Column::new().spacing(4).push(muted(&s, "Site color")).push(color_row);
+        let mut swatches: Row<'a, Msg> = Row::new().spacing(6).align_y(Alignment::Center);
+        for hex in SITE_SWATCHES {
+            let c = skin::parse_hex(hex).unwrap_or(s.muted);
+            let selected = !d.use_theme_color && skin::parse_hex(&d.color) == Some(c);
+            swatches = swatches.push(
+                button(Space::new().width(18).height(18))
+                    .on_press(Msg::Draft(id, DraftField::PickColor(hex.to_string())))
+                    .padding(0)
+                    .style(skin::swatch(s, c, selected)),
+            );
+        }
+        let mut color_col = Column::new()
+            .spacing(4)
+            .push(muted(&s, "Site color"))
+            .push(color_row)
+            .push(swatches);
         if !d.color_ok() {
             color_col = color_col.push(muted(&s, "Use a hex color such as #9146FF."));
         }

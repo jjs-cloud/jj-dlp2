@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const LOG_LIMIT: usize = 500;
+/// Quick-pick colours shown under the site colour field.
+pub const SITE_SWATCHES: [&str; 10] = [
+    "#9146FF", "#FE2C55", "#F89C1C", "#53FC18", "#19F0FF", "#FF2BD6", "#FFD24A", "#7AA2F7", "#F38BA8", "#B8FFC8",
+];
 pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
 pub const DEFAULT_SIM_ARGS: &str =
     "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s\" {urls}";
@@ -152,6 +156,7 @@ pub enum DraftField {
     LogStderr(bool),
     Color(String),
     UseThemeColor(bool),
+    PickColor(String),
 }
 
 /// A single option changed in a streamer's settings panel.
@@ -394,6 +399,10 @@ impl App {
                         DraftField::LogStderr(v) => d.log_stderr = v,
                         DraftField::Color(v) => d.color = v,
                         DraftField::UseThemeColor(v) => d.use_theme_color = v,
+                        DraftField::PickColor(v) => {
+                            d.color = v;
+                            d.use_theme_color = false;
+                        }
                     }
                 }
             }
