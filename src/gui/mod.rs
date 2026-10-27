@@ -95,6 +95,8 @@ pub struct SiteDraft {
     pub output: String,
     pub log_stdout: bool,
     pub log_stderr: bool,
+    pub use_theme_color: bool,
+    pub color: String,
 }
 
 impl SiteDraft {
@@ -111,7 +113,19 @@ impl SiteDraft {
             output: s.output_dir.clone(),
             log_stdout: s.log_checker_stdout,
             log_stderr: s.log_checker_stderr,
+            use_theme_color: s.color.is_none(),
+            color: s.color.clone().unwrap_or_else(|| DEFAULT_SITE_COLOR.to_string()),
         }
+    }
+
+    /// True when the theme colour is selected or the hex text parses.
+    pub fn color_ok(&self) -> bool {
+        self.use_theme_color || skin::parse_hex(&self.color).is_some()
+    }
+
+    /// The colour to store: `None` for the theme colour, else normalised `#RRGGBB`.
+    pub fn site_color(&self) -> Option<String> {
+        (!self.use_theme_color).then(|| format!("#{}", self.color.trim().trim_start_matches('#').to_uppercase()))
     }
 
     pub fn interval_secs(&self) -> Option<u64> {
@@ -136,6 +150,8 @@ pub enum DraftField {
     Output(String),
     LogStdout(bool),
     LogStderr(bool),
+    Color(String),
+    UseThemeColor(bool),
 }
 
 /// A single option changed in a streamer's settings panel.
@@ -376,12 +392,14 @@ impl App {
                         DraftField::Output(v) => d.output = v,
                         DraftField::LogStdout(v) => d.log_stdout = v,
                         DraftField::LogStderr(v) => d.log_stderr = v,
+                        DraftField::Color(v) => d.color = v,
+                        DraftField::UseThemeColor(v) => d.use_theme_color = v,
                     }
                 }
             }
             Msg::SaveSite(id) => {
                 if let Some(d) = self.drafts.get(&id) {
-                    if let (Some(interval), Some(end_after)) = (d.interval_secs(), d.end_after_minutes()) {
+                    if let (Some(interval), Some(end_after), true) = (d.interval_secs(), d.end_after_minutes(), d.color_ok()) {
                         self.client.send(PolicyCommand::UpdateSite(Site {
                             id,
                             name: d.name.trim().to_string(),
@@ -395,6 +413,7 @@ impl App {
                             log_checker_stdout: d.log_stdout,
                             log_checker_stderr: d.log_stderr,
                             end_after_minutes: end_after,
+                            color: d.site_color(),
                         }));
                     }
                 }
@@ -555,32 +574,36 @@ fn default_exe() -> &'static str {
 }
 
 fn new_site(preset: Preset) -> NewSite {
-    let (name, url_template, checker, recorder) = match preset {
+    let (name, url_template, checker, recorder, color) = match preset {
         Preset::Twitch => (
             "Twitch",
             "https://twitch.tv/{username}",
             "--cookies-from-browser firefox --dump-json {urls}",
             r#"--cookies-from-browser firefox --fixup never --no-part -o "%(title)s [%(id)s].%(ext)s" {url}"#,
+            "#9146FF",
         ),
         Preset::Tiktok => (
             "Tiktok",
             "https://tiktok.com/@{username}/live",
             "--cookies-from-browser firefox --dump-json {urls}",
             r#"--cookies-from-browser firefox --no-part --retries 0 -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
+            "#FE2C55",
         ),
         Preset::Chaturbate => (
             "Chaturbate",
             "https://chaturbate.com/{username}",
             "--dump-json {urls}",
             r#"--fixup never --no-part --downloader-args ffmpeg:"-fps_mode passthrough -copyts -avoid_negative_ts make_zero" -o "%(title)s.%(ext)s" {url}"#,
+            "#F89C1C",
         ),
         Preset::Kick => (
             "Kick",
             "https://kick.com/{username}",
             "--dump-json {urls}",
             r#"--fixup never --no-part -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
+            "#53FC18",
         ),
-        Preset::Blank => ("New site", "", "", ""),
+        Preset::Blank => ("New site", "", "", "", DEFAULT_SITE_COLOR),
     };
     NewSite {
         name: name.into(),
@@ -591,6 +614,7 @@ fn new_site(preset: Preset) -> NewSite {
         recorder_args: recorder.into(),
         url_template: url_template.into(),
         output_dir: String::new(),
+        color: Some(color.into()),
     }
 }
 

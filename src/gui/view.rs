@@ -559,7 +559,7 @@ impl App {
                 s,
                 m,
                 clip(&site.name, SITE_CLIP_CHARS),
-                s.accent2
+                s.site_color(site.color.as_deref())
             ))
             .width(m.site_w)
             .clip(true),
@@ -802,6 +802,13 @@ impl App {
             .width(w)
             .clip(true)
         };
+        let site_color = self
+            .settings
+            .streamers
+            .iter()
+            .find(|x| x.id == p.streamer_id)
+            .and_then(|st| self.settings.sites.iter().find(|x| x.id == st.site_id))
+            .map_or(s.accent2, |site| s.site_color(site.color.as_deref()));
         let line = row![
             dot(s, state_color, glow),
             container(
@@ -813,7 +820,7 @@ impl App {
             )
             .width(Length::FillPortion(3))
             .clip(true),
-            container(chip(s, clip(&p.site_name, 12), s.accent2))
+            container(chip(s, clip(&p.site_name, 12), site_color))
                 .width(PW_SITE)
                 .clip(true),
             container(chip(s, state_label, state_color)).width(PW_STATE),
@@ -913,7 +920,7 @@ impl App {
             iced::widget::text(clip(&site.name, 30))
                 .font(s.font)
                 .size(18)
-                .color(s.accent2),
+                .color(s.site_color(site.color.as_deref())),
         );
         if site.log_checker_stdout || site.log_checker_stderr {
             head = head.push(chip(s, "LOGGING", s.muted));
@@ -1275,7 +1282,8 @@ impl App {
             column![input, muted(&s, hint)].spacing(4).into()
         };
         let dirty = *d != SiteDraft::from_site(site);
-        let valid = d.interval_secs().is_some() && d.end_after_minutes().is_some() && !d.name.trim().is_empty();
+        let valid =
+            d.interval_secs().is_some() && d.end_after_minutes().is_some() && d.color_ok() && !d.name.trim().is_empty();
 
         let top = row![
             container(labeled(
@@ -1362,13 +1370,41 @@ impl App {
         ]
         .spacing(10);
 
-        let form = column![
-            top,
+        let swatch = if d.use_theme_color { s.accent2 } else { skin::parse_hex(&d.color).unwrap_or(s.muted) };
+        let color_row = row![
+            container(Space::new().width(26).height(26)).style(skin::dot(swatch, 0.0)),
+            text_input("#RRGGBB", &d.color)
+                .on_input_maybe(
+                    (!d.use_theme_color).then(|| move |v: String| Msg::Draft(id, DraftField::Color(v)))
+                )
+                .padding(8)
+                .width(120)
+                .style(skin::input(s)),
+            toggler(d.use_theme_color)
+                .label("Use theme color")
+                .on_toggle(move |v| Msg::Draft(id, DraftField::UseThemeColor(v)))
+                .text_size(12),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        let mut color_col = Column::new().spacing(4).push(muted(&s, "Site color")).push(color_row);
+        if !d.color_ok() {
+            color_col = color_col.push(muted(&s, "Use a hex color such as #9146FF."));
+        }
+        let timing_color = row![
             container(labeled(
                 "Consider a stream ended after x minutes:",
                 field("30", &d.end_after, DraftField::EndAfter)
             ))
             .width(320),
+            color_col,
+        ]
+        .spacing(20)
+        .align_y(Alignment::Start);
+
+        let form = column![
+            top,
+            timing_color,
             paths,
             labeled(
                 "URL template",

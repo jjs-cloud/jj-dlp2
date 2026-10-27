@@ -51,7 +51,12 @@ pub struct Site {
     pub log_checker_stderr: bool,
     /// Minutes without a live sighting after which a stream counts as ended.
     pub end_after_minutes: u64,
+    /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
+    pub color: Option<String>,
 }
+
+/// Colour given to new blank sites.
+pub const DEFAULT_SITE_COLOR: &str = "#7AA2F7";
 
 /// Default for `Site::end_after_minutes`.
 pub const DEFAULT_END_AFTER_MINUTES: u64 = 30;

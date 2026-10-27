@@ -66,6 +66,15 @@ pub fn with_alpha(c: Color, a: f32) -> Color {
     Color { a, ..c }
 }
 
+/// Parses `#RRGGBB` (the `#` is optional).
+pub fn parse_hex(text: &str) -> Option<Color> {
+    let h = text.trim().trim_start_matches('#');
+    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(h, 16).ok().map(hex)
+}
+
 impl Skin {
     pub fn new(kind: ThemeKind) -> Skin {
         let base = |bg, bg2, surface, surface_hi, border, text, muted, accent, accent2, live, warn, danger, glow, radius| Skin {
@@ -107,6 +116,11 @@ impl Skin {
                 0xf38ba8, 0.25, 12.0,
             ),
         }
+    }
+
+    /// A site's chosen colour, or the theme's secondary accent when unset or invalid.
+    pub fn site_color(&self, color: Option<&str>) -> Color {
+        color.and_then(parse_hex).unwrap_or(self.accent2)
     }
 
     pub fn theme(&self) -> Theme {

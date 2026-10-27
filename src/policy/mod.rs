@@ -29,6 +29,7 @@ pub struct NewSite {
     pub recorder_args: String,
     pub url_template: String,
     pub output_dir: String,
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -377,6 +378,7 @@ impl Policy {
                     log_checker_stdout: false,
                     log_checker_stderr: false,
                     end_after_minutes: DEFAULT_END_AFTER_MINUTES,
+                    color: n.color,
                 });
                 self.commit();
             }
@@ -520,6 +522,7 @@ mod tests {
             log_checker_stdout: false,
             log_checker_stderr: false,
             end_after_minutes: 30,
+            color: None,
         }
     }
 
@@ -592,6 +595,7 @@ mod e2e {
                 recorder_args: "RECORD {url}".into(),
                 url_template: "https://x.test/{username}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
+                color: None,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };

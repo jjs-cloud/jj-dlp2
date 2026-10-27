@@ -608,6 +608,7 @@ mod e2e {
                 log_checker_stdout: true,
                 log_checker_stderr: true,
                 end_after_minutes: 30,
+                color: None,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -717,6 +718,7 @@ mod e2e {
                 log_checker_stdout: false,
                 log_checker_stderr: false,
                 end_after_minutes: 30,
+                color: None,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };
