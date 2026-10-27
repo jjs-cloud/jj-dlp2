@@ -1014,17 +1014,19 @@ impl App {
         let line = row![
             dot(s, color, glow),
             column![
-                iced::widget::text(clip(&st.name, 40))
-                    .font(s.font)
-                    .size(15)
-                    .color(if st.enabled { s.text } else { s.muted }),
                 {
-                    let mut sub = Row::new().spacing(12).push(muted(&s, clip(&st.url, 70)));
+                    let mut name = Row::new().spacing(12).align_y(Alignment::Center).push(
+                        iced::widget::text(clip(&st.name, 40))
+                            .font(s.font)
+                            .size(15)
+                            .color(if st.enabled { s.text } else { s.muted }),
+                    );
                     if let Some(d) = self.live_for(id, status) {
-                        sub = sub.push(muted(&s, format!("live for {}", fmt_dur(d))));
+                        name = name.push(muted(&s, format!("live for {}", fmt_dur(d))));
                     }
-                    sub
+                    name
                 },
+                muted(&s, clip(&st.url, 70)),
             ]
             .spacing(2)
             .width(Length::Fill),
