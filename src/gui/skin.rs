@@ -107,7 +107,7 @@ impl Skin {
             ThemeKind::Matrix => Skin {
                 font: Font::MONOSPACE,
                 ..base(
-                    0x020a04, 0x03170b, 0x061a0c, 0x0a2a14, 0x0f5a2a, 0xb8ffc8, 0x4f9a63, 0x19ff6a, 0xa6ff00, 0x19ff6a, 0xe6ff3d,
+                    0x020a04, 0x03170b, 0x061a0c, 0x0a2a14, 0x0f5a2a, 0xb8ffc8, 0x4f9a63, 0x19ff6a, 0xa6ff00, 0x22d3ee, 0xe6ff3d,
                     0xff4d3d, 0.8, 3.0,
                 )
             },

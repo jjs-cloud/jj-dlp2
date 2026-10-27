@@ -771,7 +771,7 @@ impl App {
         let ph = pulse(self.phase);
         let (state_label, state_color) = match p.state {
             RecorderState::Starting => ("STARTING".to_string(), s.warn),
-            RecorderState::Running => ("RECORDING".to_string(), s.live),
+            RecorderState::Running => ("RECORDING".to_string(), s.accent),
             RecorderState::Stopping => ("STOPPING".to_string(), s.warn),
             RecorderState::Exited(code) => (
                 format!("EXITED {}", code.map_or("?".into(), |c| c.to_string())),
