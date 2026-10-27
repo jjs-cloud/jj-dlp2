@@ -1,15 +1,19 @@
 //! Policy layer: owns settings.json, applies edits and tells the engine to reload.
 
 use crate::api::{
-    CheckMode, Command, EngineClient, Event, Settings, Site, SiteId, Streamer, StreamerId, StreamerOptions,
+    now_secs, CheckMode, Command, EngineClient, Event, Settings, Site, SiteId, Streamer, StreamerId, StreamerOptions,
+    DEFAULT_END_AFTER_MINUTES,
 };
 use crate::engine::EngineParts;
 use crate::settings;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
+pub mod live;
 pub mod update;
+use live::LiveTracker;
 use update::UpdateConfig;
 
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
@@ -58,6 +62,8 @@ pub enum PolicyEvent {
     Engine(Event),
     Log(String),
     Update(UpdateEvent),
+    /// Streamer id to the unix time it was first seen live; absent when not in a live span.
+    LiveSince(HashMap<StreamerId, u64>),
 }
 
 /// Updater state changes reported to front ends.
@@ -123,6 +129,7 @@ pub fn start(engine: EngineParts) -> PolicyParts {
 
 struct Policy {
     settings: Settings,
+    live: LiveTracker,
     engine: EngineClient,
     events: UnboundedSender<PolicyEvent>,
     update_cfg: UpdateConfig,
@@ -133,8 +140,11 @@ struct Policy {
 
 impl Policy {
     fn new(engine: EngineClient, events: UnboundedSender<PolicyEvent>, upd_tx: UnboundedSender<UpdateMsg>) -> Self {
+        let settings = settings::load();
+        let live = LiveTracker::load(&settings, now_secs());
         Self {
-            settings: settings::load(),
+            settings,
+            live,
             engine,
             events,
             update_cfg: update::load_config(),
@@ -156,6 +166,7 @@ impl Policy {
         update_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit_settings();
         self.emit_update_config();
+        self.emit_live();
         loop {
             tokio::select! {
                 cmd = cmds.recv(), if cmds_open => match cmd {
@@ -166,7 +177,13 @@ impl Policy {
                     }
                 },
                 ev = engine_events.recv() => match ev {
-                    Some(e) => self.emit(PolicyEvent::Engine(e)),
+                    Some(e) => {
+                        self.on_engine_event(e);
+                        while let Ok(e) = engine_events.try_recv() {
+                            self.on_engine_event(e);
+                        }
+                        self.flush_live();
+                    }
                     None => break,
                 },
                 _ = &mut engine_done => break,
@@ -179,8 +196,46 @@ impl Policy {
             }
         }
         while let Ok(e) = engine_events.try_recv() {
-            self.emit(PolicyEvent::Engine(e));
+            self.on_engine_event(e);
         }
+        self.flush_live();
+    }
+
+    /// Feeds check results to the live tracker, then forwards the event.
+    fn on_engine_event(&mut self, ev: Event) {
+        match &ev {
+            Event::SiteChecked { id, ok, .. } => self.live.site_checked(*id, *ok),
+            Event::StreamerStatus { id, status } => {
+                if let (Some(at), Some((site_id, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
+                    self.live.status(*id, site_id, at, status.live, secs);
+                }
+            }
+            _ => {}
+        }
+        self.emit(PolicyEvent::Engine(ev));
+    }
+
+    /// Writes live.json and notifies front ends when the tracker changed.
+    fn flush_live(&mut self) {
+        if self.live.take_dirty() {
+            if let Err(e) = self.live.save() {
+                self.log(format!("failed to save live.json: {e}"));
+            }
+        }
+        if self.live.take_span_changed() {
+            self.emit_live();
+        }
+    }
+
+    fn emit_live(&self) {
+        self.emit(PolicyEvent::LiveSince(self.live.live_since()));
+    }
+
+    /// Drops live records of streamers that no longer exist.
+    fn prune_live(&mut self) {
+        let settings = &self.settings;
+        self.live.retain(|id, _| live::lookup(settings, id).is_some());
+        self.flush_live();
     }
 
     fn emit(&self, ev: PolicyEvent) {
@@ -302,6 +357,7 @@ impl Policy {
             PolicyCommand::RequestSnapshot => {
                 self.emit_settings();
                 self.emit_update_config();
+                self.emit_live();
                 if let Some(a) = &self.available {
                     self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
                 }
@@ -320,6 +376,7 @@ impl Policy {
                     output_dir: n.output_dir,
                     log_checker_stdout: false,
                     log_checker_stderr: false,
+                    end_after_minutes: DEFAULT_END_AFTER_MINUTES,
                 });
                 self.commit();
             }
@@ -333,6 +390,7 @@ impl Policy {
                 self.settings.streamers.retain(|s| s.site_id != id);
                 self.settings.sites.retain(|s| s.id != id);
                 self.commit();
+                self.prune_live();
             }
             PolicyCommand::AddStreamer { site_id, name, username } => {
                 let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else {
@@ -365,6 +423,7 @@ impl Policy {
             PolicyCommand::RemoveStreamer(id) => {
                 self.settings.streamers.retain(|s| s.id != id);
                 self.commit();
+                self.prune_live();
             }
             PolicyCommand::SetStreamerEnabled { id, enabled } => {
                 if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
@@ -460,6 +519,7 @@ mod tests {
             output_dir: output_dir.into(),
             log_checker_stdout: false,
             log_checker_stderr: false,
+            end_after_minutes: 30,
         }
     }
 
@@ -480,7 +540,7 @@ mod tests {
 
     #[test]
     fn settings_without_log_fields_still_load() {
-        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":""}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
+        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
         assert_eq!(s.streamers[0].options, StreamerOptions::default());

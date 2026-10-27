@@ -57,6 +57,18 @@ fn fmt_dur(secs: u64) -> String {
     }
 }
 
+/// Hours and minutes only, for compact rows.
+fn fmt_dur_short(secs: u64) -> String {
+    let (h, m) = (secs / 3600, (secs / 60) % 60);
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else if m > 0 {
+        format!("{m}m")
+    } else {
+        "<1m".to_string()
+    }
+}
+
 fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -89,7 +101,7 @@ const PW_FF: u32 = 140;
 struct RowMetrics {
     row_h: f32,
     name: f32,
-    url: f32,
+    info: f32,
     chip: f32,
     chip_pad_v: f32,
     chip_pad_h: f32,
@@ -112,7 +124,7 @@ impl RowMetrics {
         RowMetrics {
             row_h,
             name,
-            url: text(10.0, 12.0),
+            info: text(10.0, 12.0),
             chip,
             chip_pad_v: at(0.0, 4.0),
             chip_pad_h,
@@ -507,6 +519,14 @@ impl App {
         col.push(grid)
     }
 
+    /// Seconds the streamer has been live; only while the checker reports it live.
+    fn live_for(&self, id: StreamerId, status: StreamerStatus) -> Option<u64> {
+        if !status.live {
+            return None;
+        }
+        self.live_since.get(&id).map(|t| self.now.saturating_sub(*t))
+    }
+
     fn compact_row<'a>(
         &'a self,
         s: Skin,
@@ -553,11 +573,13 @@ impl App {
             .width(m.name_w)
             .clip(true),
             container(
-                iced::widget::text(st.url.as_str())
-                    .font(s.font)
-                    .size(m.url)
-                    .color(s.muted)
-                    .wrapping(Wrapping::None)
+                iced::widget::text(
+                    self.live_for(id, status).map(|d| format!("live {}", fmt_dur_short(d))).unwrap_or_default()
+                )
+                .font(s.font)
+                .size(m.info)
+                .color(s.muted)
+                .wrapping(Wrapping::None)
             )
             .width(Length::Fill)
             .clip(true),
@@ -987,7 +1009,13 @@ impl App {
                     .font(s.font)
                     .size(15)
                     .color(if st.enabled { s.text } else { s.muted }),
-                muted(&s, clip(&st.url, 70)),
+                {
+                    let mut sub = Row::new().spacing(12).push(muted(&s, clip(&st.url, 70)));
+                    if let Some(d) = self.live_for(id, status) {
+                        sub = sub.push(muted(&s, format!("live for {}", fmt_dur(d))));
+                    }
+                    sub
+                },
             ]
             .spacing(2)
             .width(Length::Fill),
@@ -1247,7 +1275,7 @@ impl App {
             column![input, muted(&s, hint)].spacing(4).into()
         };
         let dirty = *d != SiteDraft::from_site(site);
-        let valid = d.interval_secs().is_some() && !d.name.trim().is_empty();
+        let valid = d.interval_secs().is_some() && d.end_after_minutes().is_some() && !d.name.trim().is_empty();
 
         let top = row![
             container(labeled(
@@ -1336,6 +1364,11 @@ impl App {
 
         let form = column![
             top,
+            container(labeled(
+                "Consider a stream ended after x minutes:",
+                field("30", &d.end_after, DraftField::EndAfter)
+            ))
+            .width(320),
             paths,
             labeled(
                 "URL template",

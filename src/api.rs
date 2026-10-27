@@ -49,7 +49,12 @@ pub struct Site {
     /// Write the checker's stderr to this site's checker log file.
     #[serde(default)]
     pub log_checker_stderr: bool,
+    /// Minutes without a live sighting after which a stream counts as ended.
+    pub end_after_minutes: u64,
 }
+
+/// Default for `Site::end_after_minutes`.
+pub const DEFAULT_END_AFTER_MINUTES: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Streamer {

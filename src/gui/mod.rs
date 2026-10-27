@@ -87,6 +87,7 @@ pub struct SiteDraft {
     pub name: String,
     pub exe: String,
     pub interval: String,
+    pub end_after: String,
     pub mode: CheckMode,
     pub checker: String,
     pub recorder: String,
@@ -102,6 +103,7 @@ impl SiteDraft {
             name: s.name.clone(),
             exe: s.exe_path.clone(),
             interval: s.interval_secs.to_string(),
+            end_after: s.end_after_minutes.to_string(),
             mode: s.check_mode,
             checker: s.checker_args.clone(),
             recorder: s.recorder_args.clone(),
@@ -115,6 +117,10 @@ impl SiteDraft {
     pub fn interval_secs(&self) -> Option<u64> {
         self.interval.trim().parse().ok().filter(|v| *v >= 5)
     }
+
+    pub fn end_after_minutes(&self) -> Option<u64> {
+        self.end_after.trim().parse().ok().filter(|v| *v >= 1)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +128,7 @@ pub enum DraftField {
     Name(String),
     Exe(String),
     Interval(String),
+    EndAfter(String),
     Mode(CheckMode),
     Checker(String),
     Recorder(String),
@@ -194,6 +201,7 @@ pub struct App {
     kind: ThemeKind,
     tab: Tab,
     statuses: HashMap<StreamerId, StreamerStatus>,
+    live_since: HashMap<StreamerId, u64>,
     checks: HashMap<SiteId, CheckInfo>,
     issues: HashMap<StreamerId, String>,
     notices: Vec<Notice>,
@@ -229,6 +237,7 @@ impl App {
             kind: prefs::load_theme(),
             tab: Tab::Monitor,
             statuses: HashMap::new(),
+            live_since: HashMap::new(),
             checks: HashMap::new(),
             issues: HashMap::new(),
             notices: Vec::new(),
@@ -349,6 +358,7 @@ impl App {
                         DraftField::Name(v) => d.name = v,
                         DraftField::Exe(v) => d.exe = v,
                         DraftField::Interval(v) => d.interval = v,
+                        DraftField::EndAfter(v) => d.end_after = v,
                         DraftField::Mode(m) => {
                             let swap = |cur: &str, from: &str, to: &str| (cur.trim() == from).then(|| to.to_string());
                             let new_args = match m {
@@ -371,7 +381,7 @@ impl App {
             }
             Msg::SaveSite(id) => {
                 if let Some(d) = self.drafts.get(&id) {
-                    if let Some(interval) = d.interval_secs() {
+                    if let (Some(interval), Some(end_after)) = (d.interval_secs(), d.end_after_minutes()) {
                         self.client.send(PolicyCommand::UpdateSite(Site {
                             id,
                             name: d.name.trim().to_string(),
@@ -384,6 +394,7 @@ impl App {
                             output_dir: d.output.trim().to_string(),
                             log_checker_stdout: d.log_stdout,
                             log_checker_stderr: d.log_stderr,
+                            end_after_minutes: end_after,
                         }));
                     }
                 }
@@ -461,6 +472,7 @@ impl App {
             PolicyEvent::Settings(s) => self.on_settings(s),
             PolicyEvent::Log(line) => self.push_log(line),
             PolicyEvent::Update(ev) => self.on_update_event(ev),
+            PolicyEvent::LiveSince(map) => self.live_since = map,
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
