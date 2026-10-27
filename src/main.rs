@@ -3,6 +3,7 @@
 mod api;
 mod engine;
 mod gui;
+mod outpath;
 mod policy;
 mod settings;
 #[cfg(all(test, unix))]

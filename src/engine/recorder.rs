@@ -28,6 +28,8 @@ pub struct RecorderSpec {
     pub exe: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,
+    /// Sidecar file yt-dlp appends its reported output paths to.
+    pub sidecar: Option<PathBuf>,
     /// Files that receive the process's stdout/stderr lines when logging is enabled.
     pub log_stdout: Option<PathBuf>,
     pub log_stderr: Option<PathBuf>,
@@ -50,6 +52,9 @@ pub struct Tracked {
     pub gone_sent: bool,
     pub last_line: String,
     pub cmdline: String,
+    /// Absolute working directory the recorder was started in.
+    pub cwd: PathBuf,
+    pub sidecar: Option<PathBuf>,
     /// Recent ERROR lines from the process output, oldest first.
     pub errors: Vec<String>,
 }
@@ -98,6 +103,8 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
             gone_sent: false,
             last_line: String::new(),
             cmdline,
+            cwd: std::path::absolute(&spec.cwd).unwrap_or_else(|_| spec.cwd.clone()),
+            sidecar: spec.sidecar.clone(),
             errors: Vec::new(),
         },
     );

@@ -12,6 +12,7 @@ mod sampler;
 mod template;
 
 use crate::api::*;
+use crate::outpath;
 use crate::settings;
 use checker::{CheckReport, LiveEntry, SiteSnapshot, SiteWorker};
 use diagnose::Problem;
@@ -125,6 +126,7 @@ impl Engine {
 
     async fn run(mut self, mut cmd_rx: UnboundedReceiver<Command>) {
         let mut internal_rx = self.internal_rx.take().expect("internal rx");
+        outpath::clear_sidecars();
         sampler::spawn_sampler(self.tracked.clone(), self.events.clone(), self.internal_tx.clone());
         self.sync_workers();
         self.start_preflight(false);
@@ -266,6 +268,9 @@ impl Engine {
             Internal::RecorderGone(id) => {
                 let streamer = self.recorders.remove(&id).map(|h| h.streamer_id);
                 let done = self.tracked.lock().unwrap().remove(&id);
+                if let Some(path) = done.as_ref().and_then(|t| t.sidecar.as_deref()) {
+                    outpath::remove_sidecar(path);
+                }
                 self.emit(Event::ProcessRemoved(id));
                 if let (Some(sid), Some(t)) = (streamer, done) {
                     self.on_recorder_exit(sid, t);
@@ -537,6 +542,11 @@ impl Engine {
             self.log(note);
         }
         let id = self.alloc_recorder_id();
+        let sidecar = outpath::prepare_sidecar(id);
+        let mut args = args;
+        if let Some(path) = &sidecar {
+            args.extend(outpath::sidecar_args(&args, path));
+        }
         let spec = RecorderSpec {
             id,
             streamer_id,
@@ -545,6 +555,7 @@ impl Engine {
             exe: exe.exe,
             args,
             cwd: PathBuf::from(out_dir),
+            sidecar: sidecar.clone(),
             log_stdout: log_path(streamer.options.log_stdout, "stdout"),
             log_stderr: log_path(streamer.options.log_stderr, "stderr"),
             internal: self.internal_tx.clone(),
@@ -555,7 +566,12 @@ impl Engine {
                 self.recorders.insert(id, handle);
                 self.emit_status(streamer_id);
             }
-            Err(e) => self.log(format!("could not record {}: {e}", streamer.name)),
+            Err(e) => {
+                if let Some(path) = &sidecar {
+                    outpath::remove_sidecar(path);
+                }
+                self.log(format!("could not record {}: {e}", streamer.name));
+            }
         }
     }
 
@@ -608,6 +624,10 @@ mod e2e {
                 log_checker_stdout: true,
                 log_checker_stderr: true,
                 end_after_minutes: 30,
+                file_exists_grace_secs: DEFAULT_FILE_EXISTS_GRACE_SECS,
+                growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
+                stall_window_secs: DEFAULT_STALL_WINDOW_SECS,
+                file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
                 color: None,
             }],
             streamers: vec![Streamer {
@@ -718,6 +738,10 @@ mod e2e {
                 log_checker_stdout: false,
                 log_checker_stderr: false,
                 end_after_minutes: 30,
+                file_exists_grace_secs: DEFAULT_FILE_EXISTS_GRACE_SECS,
+                growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
+                stall_window_secs: DEFAULT_STALL_WINDOW_SECS,
+                file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
                 color: None,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],

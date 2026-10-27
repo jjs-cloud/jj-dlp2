@@ -3,9 +3,11 @@
 use super::recorder::SharedTracked;
 use super::Internal;
 use crate::api::{Event, ProcSample, ProcessInfo, RecorderState};
+use crate::outpath;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc::UnboundedSender;
 
 const ORPHAN_GRACE: Duration = Duration::from_secs(20);
@@ -33,6 +35,7 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
             true,
             ProcessRefreshKind::nothing().with_cpu().with_memory(),
         );
+        refresh_ffmpeg_cmds(&mut sys);
         let children = children_map(&sys);
         let mut map = tracked.lock().unwrap();
         for (&id, t) in map.iter_mut() {
@@ -62,6 +65,9 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
                 }
             }
 
+            let ffmpeg_output = ffmpeg.iter().find_map(|f| output_of(&sys, f.pid, &t.cwd));
+            let sidecar_paths = t.sidecar.as_deref().map(|p| outpath::read_sidecar(p, &t.cwd)).unwrap_or_default();
+
             let state = match t.root_exit {
                 Some(code) => RecorderState::Exited(code),
                 None if t.stopping => RecorderState::Stopping,
@@ -81,9 +87,32 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
                 ffmpeg,
                 last_line: t.last_line.clone(),
                 cmdline: t.cmdline.clone(),
+                ffmpeg_output,
+                sidecar_paths,
             }));
         }
     }
+}
+
+/// Re-reads the command line and working directory of every ffmpeg process.
+fn refresh_ffmpeg_cmds(sys: &mut System) {
+    let pids: Vec<Pid> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| p.name().to_string_lossy().to_lowercase().contains("ffmpeg"))
+        .map(|(pid, _)| *pid)
+        .collect();
+    if pids.is_empty() {
+        return;
+    }
+    let kind = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always).with_cwd(UpdateKind::Always);
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), false, kind);
+}
+
+/// The output file on one ffmpeg process's command line, resolved against its working directory.
+fn output_of(sys: &System, pid: u32, fallback_cwd: &Path) -> Option<PathBuf> {
+    let p = sys.process(Pid::from_u32(pid))?;
+    outpath::ffmpeg_output(p.cmd(), p.cwd().unwrap_or(fallback_cwd))
 }
 
 fn children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {

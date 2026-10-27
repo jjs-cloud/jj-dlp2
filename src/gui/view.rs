@@ -93,7 +93,8 @@ const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
 const PW_SITE: u32 = 104;
-const PW_STATE: u32 = 110;
+const PW_STATE: u32 = 170;
+const PW_OPEN: u32 = 56;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
@@ -168,12 +169,16 @@ fn compact_chips<'a>(
     m: RowMetrics,
     st: &Streamer,
     status: StreamerStatus,
+    stalled: bool,
 ) -> Row<'a, Msg> {
     let mut chips: Row<'a, Msg> = Row::new()
         .spacing(m.spacing / 2.0)
         .align_y(Alignment::Center);
     if status.recording {
         chips = chips.push(mini_chip(s, m, "REC", s.accent));
+    }
+    if stalled {
+        chips = chips.push(mini_chip(s, m, "STALLED", s.danger));
     }
     if status.live {
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
@@ -521,6 +526,19 @@ impl App {
         col.push(grid)
     }
 
+    fn recording_stalled(&self, id: RecorderId) -> bool {
+        self.recording_files.get(&id).is_some_and(|f| f.stalled)
+    }
+
+    fn recording_openable(&self, id: RecorderId) -> bool {
+        self.recording_files.get(&id).is_some_and(|f| f.openable)
+    }
+
+    /// True when any active recording of the streamer is stalled.
+    fn streamer_stalled(&self, id: StreamerId) -> bool {
+        self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
+    }
+
     /// Seconds the streamer has been live; only while the checker reports it live.
     fn live_for(&self, id: StreamerId, status: StreamerStatus) -> Option<u64> {
         if !status.live {
@@ -585,7 +603,7 @@ impl App {
             )
             .width(Length::Fill)
             .clip(true),
-            compact_chips(s, m, st, status),
+            compact_chips(s, m, st, status, self.streamer_stalled(id)),
             toggler(st.enabled)
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
                 .size(m.toggler),
@@ -732,6 +750,7 @@ impl App {
                 container(h("YT-DLP CPU · MEM")).width(PW_YT),
                 container(h("FFMPEG CPU · MEM")).width(PW_FF),
                 container(h("LAST OUTPUT")).width(Length::FillPortion(4)),
+                Space::new().width(PW_OPEN),
             ]
             .spacing(8),
         )
@@ -782,6 +801,13 @@ impl App {
             RecorderState::Exited(_) => 0.0,
             _ => 0.4 + 0.6 * ph,
         };
+        let stalled = self.recording_stalled(p.id);
+        let tint = if stalled { s.danger } else { state_color };
+        let mut state_chips: Row<'a, Msg> =
+            Row::new().spacing(6).align_y(Alignment::Center).push(chip(s, state_label, state_color));
+        if stalled {
+            state_chips = state_chips.push(chip(s, "STALLED", s.danger));
+        }
         let yt = p.ytdlp.as_ref().or(p.root.as_ref());
         let yt_text = yt.map_or("—".to_string(), |y| {
             format!("{:.1}% · {}", y.cpu_percent, fmt_mem(y.mem_bytes))
@@ -812,7 +838,7 @@ impl App {
             .and_then(|st| self.settings.sites.iter().find(|x| x.id == st.site_id))
             .map_or(s.accent2, |site| s.site_color(site.color.as_deref()));
         let line = row![
-            dot(s, state_color, glow),
+            dot(s, tint, glow),
             container(
                 iced::widget::text(clip(&p.streamer_name, 28))
                     .font(s.font)
@@ -825,7 +851,7 @@ impl App {
             container(chip(s, clip(&p.site_name, 12), site_color))
                 .width(PW_SITE)
                 .clip(true),
-            container(chip(s, state_label, state_color)).width(PW_STATE),
+            container(state_chips).width(PW_STATE),
             cell(fmt_dur(p.uptime_secs), PW_UP),
             cell(yt_text, PW_YT),
             cell(ff_text, PW_FF),
@@ -842,7 +868,7 @@ impl App {
         .spacing(8)
         .align_y(Alignment::Center);
         let open = self.expanded_procs.contains(&p.id);
-        button(line)
+        let tile = button(line)
             .on_press(Msg::ToggleProc(p.id))
             .padding([6.0, 12.0])
             .width(Length::Fill)
@@ -851,11 +877,16 @@ impl App {
                 if matches!(p.state, RecorderState::Exited(_)) {
                     s.muted
                 } else {
-                    state_color
+                    tint
                 },
                 open,
-            ))
-            .into()
+            ));
+        let open_file = button(container(btn_label(&s, "Open").size(12)).center_x(Length::Fill))
+            .on_press_maybe(self.recording_openable(p.id).then_some(Msg::OpenRecording(p.id)))
+            .padding([6.0, 0.0])
+            .width(PW_OPEN)
+            .style(skin::btn(s, BtnKind::Ghost));
+        row![tile, open_file].spacing(8).align_y(Alignment::Center).into()
     }
 
     fn proc_detail<'a>(&'a self, s: Skin, p: &'a ProcessInfo) -> Element<'a, Msg> {
@@ -996,6 +1027,9 @@ impl App {
         if status.recording {
             chips = chips.push(chip(s, "RECORDING", s.accent));
         }
+        if self.streamer_stalled(id) {
+            chips = chips.push(chip(s, "STALLED", s.danger));
+        }
         if status.live {
             chips = chips.push(chip(s, "LIVE", s.live));
         }
@@ -1039,7 +1073,7 @@ impl App {
                 .on_press(Msg::ToggleStreamerSettings(id))
                 .padding([5.0, 10.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Open").size(12))
+            button(t(&s, "Folder").size(12))
                 .on_press(Msg::OpenOutputDir(st.site_id))
                 .padding([5.0, 10.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
@@ -1286,8 +1320,11 @@ impl App {
             column![input, muted(&s, hint)].spacing(4).into()
         };
         let dirty = *d != SiteDraft::from_site(site);
-        let valid =
-            d.interval_secs().is_some() && d.end_after_minutes().is_some() && d.color_ok() && !d.name.trim().is_empty();
+        let valid = d.interval_secs().is_some()
+            && d.end_after_minutes().is_some()
+            && d.file_checks_ok()
+            && d.color_ok()
+            && !d.name.trim().is_empty();
 
         let top = row![
             container(labeled(
@@ -1421,9 +1458,56 @@ impl App {
         .spacing(20)
         .align_y(Alignment::Start);
 
+        let file_checks = column![
+            muted(&s, "Recording file checks (seconds)"),
+            row![
+                container(labeled(
+                    "File must exist after",
+                    field("60", &d.file_exists_grace, DraftField::FileExistsGrace)
+                ))
+                .width(Length::FillPortion(1)),
+                container(labeled(
+                    "Check growth after",
+                    field("60", &d.growth_grace, DraftField::GrowthGrace)
+                ))
+                .width(Length::FillPortion(1)),
+                container(labeled(
+                    "Stalled after no growth for",
+                    field("120", &d.stall_window, DraftField::StallWindow)
+                ))
+                .width(Length::FillPortion(1)),
+                container(labeled(
+                    "Check every (min 5)",
+                    field("30", &d.file_check_interval, DraftField::FileCheckInterval)
+                ))
+                .width(Length::FillPortion(1)),
+            ]
+            .spacing(10),
+            muted(
+                &s,
+                "Timers start once the recording file's path is verified; a missing or stalled file shows a STALLED chip."
+            ),
+        ]
+        .spacing(4);
+
+        let mut recorder_col = column![
+            field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder),
+            muted(&s, "{url} is the live stream URL (appended if missing)."),
+        ]
+        .spacing(4);
+        if !has_no_part(&d.recorder) {
+            recorder_col = recorder_col.push(
+                iced::widget::text("Add --no-part: otherwise the recording file can't be verified, so Open and STALLED checks stay off.")
+                    .font(s.font)
+                    .size(12)
+                    .color(s.warn),
+            );
+        }
+
         let form = column![
             top,
             timing_color,
+            file_checks,
             paths,
             labeled(
                 "URL template",
@@ -1443,17 +1527,7 @@ impl App {
                     "{urls} expands to every monitored URL (appended if missing)."
                 )
             ),
-            labeled(
-                "Recorder command arguments",
-                hinted(
-                    field(
-                        "-o \"%(title)s.%(ext)s\" {url}",
-                        &d.recorder,
-                        DraftField::Recorder
-                    ),
-                    "{url} is the live stream URL (appended if missing)."
-                )
-            ),
+            labeled("Recorder command arguments", recorder_col.into()),
             logging,
             actions,
         ]
@@ -1486,6 +1560,11 @@ impl App {
             .style(skin::card(s, None))
             .into()
     }
+}
+
+/// True when the recorder arguments contain a `--no-part` token.
+fn has_no_part(args: &str) -> bool {
+    args.split_whitespace().any(|t| t == "--no-part")
 }
 
 /// Wraps content in the standard settings card.
