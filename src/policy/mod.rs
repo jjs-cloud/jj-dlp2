@@ -1,18 +1,23 @@
 //! Policy layer: owns settings.json, applies edits and tells the engine to reload.
 
 use crate::api::{
-    now_secs, CheckMode, Command, EngineClient, Event, Settings, Site, SiteId, Streamer, StreamerId, StreamerOptions,
-    DEFAULT_END_AFTER_MINUTES,
+    now_secs, CheckMode, Command, EngineClient, Event, ProcessInfo, RecorderId, Settings, Site, SiteId, Streamer,
+    StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES,
 };
 use crate::engine::EngineParts;
 use crate::settings;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
+mod files;
 pub mod live;
+mod outpath;
 pub mod update;
+use files::{FileTracker, Thresholds};
+pub use files::RecordingFile;
 use live::LiveTracker;
 use update::UpdateConfig;
 
@@ -29,6 +34,10 @@ pub struct NewSite {
     pub recorder_args: String,
     pub url_template: String,
     pub output_dir: String,
+    pub file_exists_grace_secs: u64,
+    pub growth_grace_secs: u64,
+    pub stall_window_secs: u64,
+    pub file_check_interval_secs: u64,
     pub color: Option<String>,
 }
 
@@ -45,6 +54,8 @@ pub enum PolicyCommand {
     SetGlobalOutputDir(String),
     OpenConfigDir,
     OpenOutputDir(SiteId),
+    /// Opens the file a recorder is writing, once its path is verified.
+    OpenRecording(RecorderId),
     /// Re-runs the engine's setup checks.
     Recheck,
     /// Looks for a new release now, even when automatic checks are off.
@@ -65,6 +76,8 @@ pub enum PolicyEvent {
     Update(UpdateEvent),
     /// Streamer id to the unix time it was first seen live; absent when not in a live span.
     LiveSince(HashMap<StreamerId, u64>),
+    /// File state of every active recording; sent whenever it changes.
+    RecordingFiles(HashMap<RecorderId, RecordingFile>),
 }
 
 /// Updater state changes reported to front ends.
@@ -84,6 +97,12 @@ pub enum UpdateEvent {
 enum UpdateMsg {
     Checked { manual: bool, result: Result<Option<update::Available>, String> },
     Staged(Result<update::Staged, String>),
+}
+
+/// Result of a recording-file job running on a blocking thread.
+struct FileJob {
+    id: RecorderId,
+    result: files::JobResult,
 }
 
 /// Cheap handle for sending commands to the policy layer.
@@ -119,7 +138,8 @@ pub fn start(engine: EngineParts) -> PolicyParts {
                 let _ = done_tx.send(());
             });
             let (upd_tx, upd_rx) = mpsc::unbounded_channel();
-            rt.block_on(Policy::new(client, ev_tx, upd_tx).run(cmd_rx, events, done_rx, upd_rx));
+            let (file_tx, file_rx) = mpsc::unbounded_channel();
+            rt.block_on(Policy::new(client, ev_tx, upd_tx, file_tx).run(cmd_rx, events, done_rx, upd_rx, file_rx));
             // Stops the runtime without waiting on downloads, then installs any staged update.
             rt.shutdown_background();
             update::finish_pending();
@@ -137,10 +157,18 @@ struct Policy {
     available: Option<update::Available>,
     installing: bool,
     upd_tx: UnboundedSender<UpdateMsg>,
+    files: FileTracker,
+    last_files: HashMap<RecorderId, RecordingFile>,
+    file_tx: UnboundedSender<FileJob>,
 }
 
 impl Policy {
-    fn new(engine: EngineClient, events: UnboundedSender<PolicyEvent>, upd_tx: UnboundedSender<UpdateMsg>) -> Self {
+    fn new(
+        engine: EngineClient,
+        events: UnboundedSender<PolicyEvent>,
+        upd_tx: UnboundedSender<UpdateMsg>,
+        file_tx: UnboundedSender<FileJob>,
+    ) -> Self {
         let settings = settings::load();
         let live = LiveTracker::load(&settings, now_secs());
         Self {
@@ -152,6 +180,9 @@ impl Policy {
             available: None,
             installing: false,
             upd_tx,
+            files: FileTracker::default(),
+            last_files: HashMap::new(),
+            file_tx,
         }
     }
 
@@ -161,6 +192,7 @@ impl Policy {
         mut engine_events: UnboundedReceiver<Event>,
         mut engine_done: oneshot::Receiver<()>,
         mut update_msgs: UnboundedReceiver<UpdateMsg>,
+        mut file_msgs: UnboundedReceiver<FileJob>,
     ) {
         let mut cmds_open = true;
         let mut update_tick = tokio::time::interval(UPDATE_CHECK_EVERY);
@@ -168,6 +200,8 @@ impl Policy {
         self.emit_settings();
         self.emit_update_config();
         self.emit_live();
+        outpath::clear_sidecars();
+        self.sync_overrides();
         loop {
             tokio::select! {
                 cmd = cmds.recv(), if cmds_open => match cmd {
@@ -194,6 +228,11 @@ impl Policy {
                         self.on_update_msg(m);
                     }
                 }
+                msg = file_msgs.recv() => {
+                    if let Some(m) = msg {
+                        self.on_file_job(m);
+                    }
+                }
             }
         }
         while let Ok(e) = engine_events.try_recv() {
@@ -211,9 +250,87 @@ impl Policy {
                     self.live.status(*id, site_id, at, status.live, secs);
                 }
             }
+            Event::ProcessUpdate(p) => self.on_process_update(p),
+            Event::ProcessRemoved(id) => {
+                if let Some(streamer_id) = self.files.remove(*id) {
+                    outpath::remove_sidecar(streamer_id);
+                }
+                self.emit_files();
+            }
             _ => {}
         }
         self.emit(PolicyEvent::Engine(ev));
+    }
+
+    /// Looks up the file-check timing of the site a streamer belongs to.
+    fn thresholds_for(&self, streamer_id: StreamerId) -> Option<Thresholds> {
+        let streamer = self.settings.streamers.iter().find(|s| s.id == streamer_id)?;
+        let site = self.settings.sites.iter().find(|s| s.id == streamer.site_id)?;
+        Some(Thresholds::from_site(site))
+    }
+
+    fn on_process_update(&mut self, p: &ProcessInfo) {
+        let Some(th) = self.thresholds_for(p.streamer_id) else { return };
+        let up = self.files.on_update(p, th, Instant::now());
+        self.apply_file_update(p.id, up);
+    }
+
+    fn on_file_job(&mut self, m: FileJob) {
+        let up = self.files.on_job(m.id, m.result, Instant::now());
+        self.apply_file_update(m.id, up);
+    }
+
+    /// Logs the tracker's messages, starts a requested job on a blocking thread and publishes changes.
+    fn apply_file_update(&mut self, id: RecorderId, up: files::Update) {
+        for line in up.logs {
+            self.log(line);
+        }
+        if let Some(job) = up.job {
+            let cwd = self.recording_dir(job.streamer_id);
+            let tx = self.file_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = tx.send(FileJob { id, result: files::run_job(&job, &cwd) });
+            });
+        }
+        self.emit_files();
+    }
+
+    /// The absolute folder a streamer's recordings are written to.
+    fn recording_dir(&self, streamer_id: StreamerId) -> PathBuf {
+        let site_id = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.site_id);
+        let dir = site_id.map_or(self.settings.default_output_dir.as_str(), |id| output_dir(&self.settings, id));
+        let dir = PathBuf::from(dir);
+        std::path::absolute(&dir).unwrap_or(dir)
+    }
+
+    /// Gives the engine each streamer's recorder arguments plus the sidecar options.
+    fn sync_overrides(&self) {
+        outpath::ensure_sidecar_dir();
+        for streamer in &self.settings.streamers {
+            let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { continue };
+            let args = outpath::recorder_override(&site.recorder_args, &outpath::sidecar_path(streamer.id));
+            self.engine.send(Command::SetRecorderOverride { streamer_id: streamer.id, args });
+        }
+    }
+
+    fn emit_files(&mut self) {
+        let snap = self.files.snapshot();
+        if snap != self.last_files {
+            self.last_files = snap.clone();
+            self.emit(PolicyEvent::RecordingFiles(snap));
+        }
+    }
+
+    /// Opens a recording's file, but only through its verified path.
+    fn open_recording(&self, id: RecorderId) {
+        let Some(path) = self.files.trusted_path(id) else { return };
+        if !path.is_file() {
+            self.log(format!("recording file not found: {}", path.display()));
+            return;
+        }
+        if let Err(e) = open::that_detached(path) {
+            self.log(format!("could not open {}: {e}", path.display()));
+        }
     }
 
     /// Writes live.json and notifies front ends when the tracker changed.
@@ -349,6 +466,7 @@ impl Policy {
     fn commit(&self) {
         if self.save() {
             self.engine.send(Command::Reload);
+            self.sync_overrides();
         }
         self.emit_settings();
     }
@@ -378,6 +496,10 @@ impl Policy {
                     log_checker_stdout: false,
                     log_checker_stderr: false,
                     end_after_minutes: DEFAULT_END_AFTER_MINUTES,
+                    file_exists_grace_secs: n.file_exists_grace_secs,
+                    growth_grace_secs: n.growth_grace_secs,
+                    stall_window_secs: n.stall_window_secs,
+                    file_check_interval_secs: n.file_check_interval_secs,
                     color: n.color,
                 });
                 self.commit();
@@ -456,6 +578,7 @@ impl Policy {
             PolicyCommand::OpenOutputDir(site_id) => {
                 let _ = open::that_detached(output_dir(&self.settings, site_id));
             }
+            PolicyCommand::OpenRecording(id) => self.open_recording(id),
             PolicyCommand::Recheck => self.engine.send(Command::Recheck),
             PolicyCommand::CheckForUpdate => self.run_check(true),
             PolicyCommand::InstallUpdate => self.install_update(),
@@ -522,6 +645,10 @@ mod tests {
             log_checker_stdout: false,
             log_checker_stderr: false,
             end_after_minutes: 30,
+            file_exists_grace_secs: 60,
+            growth_grace_secs: 60,
+            stall_window_secs: 120,
+            file_check_interval_secs: 30,
             color: None,
         }
     }
@@ -543,7 +670,7 @@ mod tests {
 
     #[test]
     fn settings_without_log_fields_still_load() {
-        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
+        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
         assert_eq!(s.streamers[0].options, StreamerOptions::default());
@@ -595,6 +722,10 @@ mod e2e {
                 recorder_args: "RECORD {url}".into(),
                 url_template: "https://x.test/{username}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
+                file_exists_grace_secs: 60,
+                growth_grace_secs: 60,
+                stall_window_secs: 120,
+                file_check_interval_secs: 30,
                 color: None,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;

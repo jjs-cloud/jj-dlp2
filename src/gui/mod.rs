@@ -6,7 +6,7 @@ mod view;
 
 use crate::api::*;
 use crate::policy::update::UpdateConfig;
-use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent, UpdateEvent};
+use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent, RecordingFile, UpdateEvent};
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
@@ -92,6 +92,10 @@ pub struct SiteDraft {
     pub exe: String,
     pub interval: String,
     pub end_after: String,
+    pub file_exists_grace: String,
+    pub growth_grace: String,
+    pub stall_window: String,
+    pub file_check_interval: String,
     pub mode: CheckMode,
     pub checker: String,
     pub recorder: String,
@@ -110,6 +114,10 @@ impl SiteDraft {
             exe: s.exe_path.clone(),
             interval: s.interval_secs.to_string(),
             end_after: s.end_after_minutes.to_string(),
+            file_exists_grace: s.file_exists_grace_secs.to_string(),
+            growth_grace: s.growth_grace_secs.to_string(),
+            stall_window: s.stall_window_secs.to_string(),
+            file_check_interval: s.file_check_interval_secs.to_string(),
             mode: s.check_mode,
             checker: s.checker_args.clone(),
             recorder: s.recorder_args.clone(),
@@ -139,6 +147,35 @@ impl SiteDraft {
     pub fn end_after_minutes(&self) -> Option<u64> {
         self.end_after.trim().parse().ok().filter(|v| *v >= 1)
     }
+
+    pub fn file_exists_grace_secs(&self) -> Option<u64> {
+        parse_secs(&self.file_exists_grace, 1)
+    }
+
+    pub fn growth_grace_secs(&self) -> Option<u64> {
+        parse_secs(&self.growth_grace, 1)
+    }
+
+    pub fn stall_window_secs(&self) -> Option<u64> {
+        parse_secs(&self.stall_window, 1)
+    }
+
+    pub fn file_check_interval_secs(&self) -> Option<u64> {
+        parse_secs(&self.file_check_interval, 5)
+    }
+
+    /// True when all four recording-file timings parse.
+    pub fn file_checks_ok(&self) -> bool {
+        self.file_exists_grace_secs().is_some()
+            && self.growth_grace_secs().is_some()
+            && self.stall_window_secs().is_some()
+            && self.file_check_interval_secs().is_some()
+    }
+}
+
+/// Parses whole seconds, rejecting values below `min`.
+fn parse_secs(text: &str, min: u64) -> Option<u64> {
+    text.trim().parse().ok().filter(|v| *v >= min)
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +184,10 @@ pub enum DraftField {
     Exe(String),
     Interval(String),
     EndAfter(String),
+    FileExistsGrace(String),
+    GrowthGrace(String),
+    StallWindow(String),
+    FileCheckInterval(String),
     Mode(CheckMode),
     Checker(String),
     Recorder(String),
@@ -176,6 +217,7 @@ pub enum Msg {
     ThemeChosen(ThemeKind),
     OpenConfigDir,
     OpenOutputDir(SiteId),
+    OpenRecording(RecorderId),
     NewStreamerName(SiteId, String),
     NewStreamerUsername(SiteId, String),
     AddStreamer(SiteId),
@@ -227,6 +269,7 @@ pub struct App {
     issues: HashMap<StreamerId, String>,
     notices: Vec<Notice>,
     processes: BTreeMap<RecorderId, ProcessInfo>,
+    recording_files: HashMap<RecorderId, RecordingFile>,
     log: VecDeque<String>,
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
@@ -263,6 +306,7 @@ impl App {
             issues: HashMap::new(),
             notices: Vec::new(),
             processes: BTreeMap::new(),
+            recording_files: HashMap::new(),
             log: VecDeque::new(),
             drafts: HashMap::new(),
             new_streamer: HashMap::new(),
@@ -335,6 +379,7 @@ impl App {
             }
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenOutputDir(site_id) => self.client.send(PolicyCommand::OpenOutputDir(site_id)),
+            Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
             Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
             Msg::NewStreamerUsername(id, v) => self.new_streamer.entry(id).or_default().1 = v,
             Msg::AddStreamer(id) => {
@@ -380,6 +425,10 @@ impl App {
                         DraftField::Exe(v) => d.exe = v,
                         DraftField::Interval(v) => d.interval = v,
                         DraftField::EndAfter(v) => d.end_after = v,
+                        DraftField::FileExistsGrace(v) => d.file_exists_grace = v,
+                        DraftField::GrowthGrace(v) => d.growth_grace = v,
+                        DraftField::StallWindow(v) => d.stall_window = v,
+                        DraftField::FileCheckInterval(v) => d.file_check_interval = v,
                         DraftField::Mode(m) => {
                             let swap = |cur: &str, from: &str, to: &str| (cur.trim() == from).then(|| to.to_string());
                             let new_args = match m {
@@ -408,7 +457,15 @@ impl App {
             }
             Msg::SaveSite(id) => {
                 if let Some(d) = self.drafts.get(&id) {
-                    if let (Some(interval), Some(end_after), true) = (d.interval_secs(), d.end_after_minutes(), d.color_ok()) {
+                    let checks = (
+                        d.file_exists_grace_secs(),
+                        d.growth_grace_secs(),
+                        d.stall_window_secs(),
+                        d.file_check_interval_secs(),
+                    );
+                    if let (Some(interval), Some(end_after), true, (Some(exists), Some(growth), Some(stall), Some(every))) =
+                        (d.interval_secs(), d.end_after_minutes(), d.color_ok(), checks)
+                    {
                         self.client.send(PolicyCommand::UpdateSite(Site {
                             id,
                             name: d.name.trim().to_string(),
@@ -422,6 +479,10 @@ impl App {
                             log_checker_stdout: d.log_stdout,
                             log_checker_stderr: d.log_stderr,
                             end_after_minutes: end_after,
+                            file_exists_grace_secs: exists,
+                            growth_grace_secs: growth,
+                            stall_window_secs: stall,
+                            file_check_interval_secs: every,
                             color: d.site_color(),
                         }));
                     }
@@ -501,6 +562,7 @@ impl App {
             PolicyEvent::Log(line) => self.push_log(line),
             PolicyEvent::Update(ev) => self.on_update_event(ev),
             PolicyEvent::LiveSince(map) => self.live_since = map,
+            PolicyEvent::RecordingFiles(map) => self.recording_files = map,
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
@@ -522,6 +584,7 @@ impl App {
                 }
                 Event::ProcessRemoved(id) => {
                     self.processes.remove(&id);
+                    self.recording_files.remove(&id);
                     self.expanded_procs.remove(&id);
                 }
                 Event::Log(line) => self.push_log(line),
@@ -623,6 +686,14 @@ fn new_site(preset: Preset) -> NewSite {
         recorder_args: recorder.into(),
         url_template: url_template.into(),
         output_dir: String::new(),
+        file_exists_grace_secs: DEFAULT_FILE_EXISTS_GRACE_SECS,
+        growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
+        stall_window_secs: if matches!(preset, Preset::Tiktok) {
+            TIKTOK_STALL_WINDOW_SECS
+        } else {
+            DEFAULT_STALL_WINDOW_SECS
+        },
+        file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
         color: Some(color.into()),
     }
 }

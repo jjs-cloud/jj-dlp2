@@ -51,6 +51,14 @@ pub struct Site {
     pub log_checker_stderr: bool,
     /// Minutes without a live sighting after which a stream counts as ended.
     pub end_after_minutes: u64,
+    /// Seconds after the recording file's path is verified before the file must exist.
+    pub file_exists_grace_secs: u64,
+    /// Seconds after the path is verified before file growth is checked.
+    pub growth_grace_secs: u64,
+    /// Seconds without file growth after which a recording counts as stalled.
+    pub stall_window_secs: u64,
+    /// Seconds between checks of the recording file.
+    pub file_check_interval_secs: u64,
     /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
     pub color: Option<String>,
 }
@@ -60,6 +68,13 @@ pub const DEFAULT_SITE_COLOR: &str = "#7AA2F7";
 
 /// Default for `Site::end_after_minutes`.
 pub const DEFAULT_END_AFTER_MINUTES: u64 = 30;
+
+/// Defaults for the per-site recording file checks.
+pub const DEFAULT_FILE_EXISTS_GRACE_SECS: u64 = 60;
+pub const DEFAULT_GROWTH_GRACE_SECS: u64 = 60;
+pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
+pub const TIKTOK_STALL_WINDOW_SECS: u64 = 360;
+pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Streamer {
