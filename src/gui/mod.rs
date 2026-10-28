@@ -5,6 +5,7 @@ mod skin;
 mod view;
 
 use crate::api::*;
+use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
 use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent, RecordingFile, UpdateEvent};
 use iced::futures::{SinkExt, Stream};
@@ -15,7 +16,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-const LOG_LIMIT: usize = 500;
 /// Quick-pick colours shown under the site colour field.
 pub const SITE_SWATCHES: [&str; 10] = [
     "#9146FF", "#FE2C55", "#F89C1C", "#53FC18", "#19F0FF", "#FF2BD6", "#FFD24A", "#7AA2F7", "#F38BA8", "#B8FFC8",
@@ -258,6 +258,8 @@ pub enum Msg {
     SaveTwoColWidth,
     SetNameClip(f32),
     SaveNameClip,
+    SetLogLines(f32),
+    SaveLogLines,
     SetRememberSize(bool),
     ResetRowRange,
     Resized(Size),
@@ -302,6 +304,7 @@ pub struct App {
     row_max: f32,
     two_col_w: f32,
     name_clip: f32,
+    log_lines: f32,
     remember_size: bool,
     win_w: f32,
     win_h: f32,
@@ -342,6 +345,7 @@ impl App {
             row_max,
             two_col_w: prefs::load_two_col_width(),
             name_clip: prefs::load_name_clip(),
+            log_lines: prefs::load_log_lines(),
             remember_size: prefs::load_remember_size(),
             win_w,
             win_h,
@@ -373,9 +377,8 @@ impl App {
     }
 
     fn push_log(&mut self, line: String) {
-        let t = now_secs() % 86_400;
-        self.log.push_front(format!("{:02}:{:02}:{:02}  {line}", t / 3600, (t / 60) % 60, t % 60));
-        self.log.truncate(LOG_LIMIT);
+        self.log.push_front(format!("{}  {line}", uilog::stamp()));
+        self.log.truncate(self.log_lines as usize);
     }
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
@@ -541,6 +544,13 @@ impl App {
                 self.name_clip = v.round().clamp(prefs::NAME_CLIP_MIN_LIMIT, prefs::NAME_CLIP_MAX_LIMIT);
             }
             Msg::SaveNameClip => prefs::save_name_clip(self.name_clip),
+            Msg::SetLogLines(v) => {
+                self.log_lines = ((v / 100.0).round() * 100.0).clamp(prefs::LOG_LINES_MIN_LIMIT, prefs::LOG_LINES_MAX_LIMIT);
+            }
+            Msg::SaveLogLines => {
+                prefs::save_log_lines(self.log_lines);
+                self.log.truncate(self.log_lines as usize);
+            }
             Msg::SetRememberSize(on) => {
                 self.remember_size = on;
                 prefs::save_remember_size(on);
@@ -597,6 +607,10 @@ impl App {
         match ev {
             PolicyEvent::Settings(s) => self.on_settings(s),
             PolicyEvent::Log(line) => self.push_log(line),
+            PolicyEvent::LogHistory(lines) => {
+                self.log.extend(lines.into_iter().rev());
+                self.log.truncate(self.log_lines as usize);
+            }
             PolicyEvent::Update(ev) => self.on_update_event(ev),
             PolicyEvent::LiveSince(map) => self.live_since = map,
             PolicyEvent::RecordingFiles(map) => self.recording_files = map,

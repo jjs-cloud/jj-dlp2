@@ -1,11 +1,11 @@
 //! The engine: owns settings, per-site checker workers and recorder processes.
 
-// Any changes to the engine should first be approved by the owner.
+// Effort should be made to avoid changes to the engine, in favor of changes to the policy layer. Any changes to the engine should first be approved by the owner.
 
 mod checker;
 mod diagnose;
 mod exepath;
-mod logfile;
+pub(crate) mod logfile;
 mod preflight;
 mod recorder;
 mod sampler;
@@ -243,12 +243,23 @@ impl Engine {
         self.start_preflight(false);
         let streamers = self.settings.streamers.clone();
         for s in streamers.iter().filter(|s| kept.contains(&s.id)) {
+            self.apply_log_options(s);
             if s.enabled {
                 self.maybe_start_recording(s.id);
             } else {
                 self.stop_streamer_recorders(s.id);
             }
             self.emit_status(s.id);
+        }
+    }
+
+    /// Points a streamer's running recorders at the log files its options currently ask for.
+    fn apply_log_options(&self, streamer: &Streamer) {
+        let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
+        let path = |on: bool, kind: &str| on.then(|| logfile::stream_path(&site.name, &streamer.name, kind));
+        for t in self.tracked.lock().unwrap().values().filter(|t| t.streamer_id == streamer.id) {
+            *t.log_stdout.lock().unwrap() = path(streamer.options.log_stdout, "stdout");
+            *t.log_stderr.lock().unwrap() = path(streamer.options.log_stderr, "stderr");
         }
     }
 

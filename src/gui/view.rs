@@ -182,9 +182,6 @@ fn compact_chips<'a>(
     if status.live {
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
     }
-    if !status.live && !status.recording {
-        chips = chips.push(mini_chip(s, m, "OFFLINE", s.muted));
-    }
     if !st.enabled {
         chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
     }
@@ -1289,6 +1286,16 @@ impl App {
         ]
         .spacing(12)
         .align_y(Alignment::Center);
+        let log_lines = row![
+            t(&s, "Buffer Length").size(13).width(110),
+            slider(prefs::LOG_LINES_MIN_LIMIT..=prefs::LOG_LINES_MAX_LIMIT, self.log_lines, Msg::SetLogLines)
+                .step(100.0_f32)
+                .on_release(Msg::SaveLogLines)
+                .width(Length::Fill),
+            muted(&s, format!("{:.0} lines", self.log_lines)).width(90),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
         let compact = column![
             row![
                 self.section_title(s, "COMPACT VIEW"),
@@ -1331,6 +1338,13 @@ impl App {
         ]
         .spacing(8);
 
+        let log_card = column![
+            self.section_title(s, "LOG"),
+            muted(&s, "Lines shown in the Log tab. Recent history is saved to ui.log and reloaded at startup."),
+            log_lines,
+        ]
+        .spacing(8);
+
         let window = column![
             self.section_title(s, "WINDOW"),
             toggler(self.remember_size)
@@ -1344,11 +1358,12 @@ impl App {
         let compact = card_box(s, compact);
         let updates = card_box(s, updates);
         let window = card_box(s, window);
+        let log_card = card_box(s, log_card);
         if self.win_w >= 1000.0 {
-            let right = column![updates, window].spacing(12).width(Length::Fill);
+            let right = column![updates, window, log_card].spacing(12).width(Length::Fill);
             col = col.push(row![compact, right].spacing(12));
         } else {
-            col = col.push(compact).push(updates).push(window);
+            col = col.push(compact).push(updates).push(window).push(log_card);
         }
         scrollable(col).height(Length::Fill).into()
     }

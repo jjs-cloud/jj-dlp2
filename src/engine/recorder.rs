@@ -20,6 +20,9 @@ const MAX_ERRORS: usize = 8;
 
 type Notes = Option<(UnboundedSender<Internal>, StreamerId)>;
 
+/// The log file an output stream is currently written to; `None` means not logging.
+pub type LogSink = Arc<Mutex<Option<PathBuf>>>;
+
 pub struct RecorderSpec {
     pub id: RecorderId,
     pub streamer_id: StreamerId,
@@ -52,6 +55,9 @@ pub struct Tracked {
     pub cmdline: String,
     /// Recent ERROR lines from the process output, oldest first.
     pub errors: Vec<String>,
+    /// Current log targets for stdout and stderr, updated when the streamer's options change.
+    pub log_stdout: LogSink,
+    pub log_stderr: LogSink,
 }
 
 pub type SharedTracked = Arc<Mutex<HashMap<RecorderId, Tracked>>>;
@@ -82,6 +88,8 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     for path in &logs {
         logfile::line(path, &format!("start: {cmdline} (cwd {}, pid {pid})", spec.cwd.display()));
     }
+    let log_stdout: LogSink = Arc::new(Mutex::new(spec.log_stdout.clone()));
+    let log_stderr: LogSink = Arc::new(Mutex::new(spec.log_stderr.clone()));
     tracked.lock().unwrap().insert(
         spec.id,
         Tracked {
@@ -99,21 +107,24 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
             last_line: String::new(),
             cmdline,
             errors: Vec::new(),
+            log_stdout: log_stdout.clone(),
+            log_stderr: log_stderr.clone(),
         },
     );
 
     let notes: Notes = Some((spec.internal.clone(), spec.streamer_id));
     if let Some(out) = child.stdout.take() {
-        tokio::spawn(read_lines(out, spec.id, tracked.clone(), spec.log_stdout.clone(), notes.clone()));
+        tokio::spawn(read_lines(out, spec.id, tracked.clone(), log_stdout.clone(), notes.clone()));
     }
     if let Some(err) = child.stderr.take() {
-        tokio::spawn(read_lines(err, spec.id, tracked.clone(), spec.log_stderr.clone(), notes));
+        tokio::spawn(read_lines(err, spec.id, tracked.clone(), log_stderr.clone(), notes));
     }
 
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
     let tracked = tracked.clone();
     let id = spec.id;
     let started = Instant::now();
+    let sinks = [log_stdout, log_stderr];
     tokio::spawn(async move {
         let status = tokio::select! {
             s = child.wait() => s,
@@ -124,9 +135,12 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
             t.root_exit = Some(code);
             t.root_exited_at = Some(Instant::now());
         }
-        for path in &logs {
-            let code = code.map_or("none".to_string(), |c| c.to_string());
-            logfile::line(path, &format!("exit: code {code} after {}s", started.elapsed().as_secs()));
+        let code = code.map_or("none".to_string(), |c| c.to_string());
+        for sink in &sinks {
+            let path = sink.lock().unwrap().clone();
+            if let Some(path) = path {
+                logfile::line(&path, &format!("exit: code {code} after {}s", started.elapsed().as_secs()));
+            }
         }
     });
 
@@ -168,7 +182,7 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
     mut r: R,
     id: RecorderId,
     tracked: SharedTracked,
-    log: Option<PathBuf>,
+    log: LogSink,
     notes: Notes,
 ) {
     let mut buf = [0u8; 4096];
@@ -201,8 +215,9 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
             };
             if let Some(text) = finished {
                 inspect(&text, id, &tracked, &notes);
-                if let Some(path) = &log {
-                    logfile::line(path, &text);
+                let path = log.lock().unwrap().clone();
+                if let Some(path) = path {
+                    logfile::line(&path, &text);
                 }
             }
         }
@@ -256,7 +271,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let input: &[u8] = b"one\r\ntwo\rthree\n\nfour";
         let tracked: SharedTracked = Arc::new(Mutex::new(HashMap::new()));
-        read_lines(input, 1, tracked, Some(path.clone()), None).await;
+        read_lines(input, 1, tracked, Arc::new(Mutex::new(Some(path.clone()))), None).await;
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().map(|l| l.split_once("  ").unwrap().1).collect();
         assert_eq!(lines, ["one", "three"]);

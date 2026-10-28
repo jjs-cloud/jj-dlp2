@@ -1,10 +1,10 @@
 //! Policy layer: owns settings.json, applies edits and tells the engine to reload.
 
 use crate::api::{
-    now_secs, CheckMode, Command, EngineClient, Event, ProcessInfo, RecorderId, Settings, Site, SiteId, Streamer,
-    StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES,
+    now_secs, CheckMode, Command, EngineClient, Event, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
+    Streamer, StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES, LOG_HISTORY_MAX,
 };
-use crate::engine::EngineParts;
+use crate::engine::{logfile, EngineParts};
 use crate::settings;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,6 +15,7 @@ use tokio::sync::oneshot;
 mod files;
 pub mod live;
 mod outpath;
+pub mod uilog;
 pub mod update;
 use files::{FileTracker, Thresholds};
 pub use files::RecordingFile;
@@ -73,6 +74,8 @@ pub enum PolicyEvent {
     Settings(Settings),
     Engine(Event),
     Log(String),
+    /// Saved UI log lines from earlier sessions, oldest first; sent once at startup.
+    LogHistory(Vec<String>),
     Update(UpdateEvent),
     /// Streamer id to the unix time it was first seen live; absent when not in a live span.
     LiveSince(HashMap<StreamerId, u64>),
@@ -160,6 +163,8 @@ struct Policy {
     files: FileTracker,
     last_files: HashMap<RecorderId, RecordingFile>,
     file_tx: UnboundedSender<FileJob>,
+    /// Running recorders as (streamer id, root pid), used for log toggle markers.
+    recorder_pids: HashMap<RecorderId, (StreamerId, u32)>,
 }
 
 impl Policy {
@@ -183,6 +188,7 @@ impl Policy {
             files: FileTracker::default(),
             last_files: HashMap::new(),
             file_tx,
+            recorder_pids: HashMap::new(),
         }
     }
 
@@ -197,6 +203,8 @@ impl Policy {
         let mut cmds_open = true;
         let mut update_tick = tokio::time::interval(UPDATE_CHECK_EVERY);
         update_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
+        self.log(format!("--- session started (v{}) ---", update::CURRENT));
         self.emit_settings();
         self.emit_update_config();
         self.emit_live();
@@ -252,6 +260,7 @@ impl Policy {
             }
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
+                self.recorder_pids.remove(id);
                 if let Some(streamer_id) = self.files.remove(*id) {
                     outpath::remove_sidecar(streamer_id);
                 }
@@ -270,6 +279,14 @@ impl Policy {
     }
 
     fn on_process_update(&mut self, p: &ProcessInfo) {
+        match (&p.state, &p.root) {
+            (RecorderState::Exited(_), _) | (_, None) => {
+                self.recorder_pids.remove(&p.id);
+            }
+            (_, Some(root)) => {
+                self.recorder_pids.insert(p.id, (p.streamer_id, root.pid));
+            }
+        }
         let Some(th) = self.thresholds_for(p.streamer_id) else { return };
         let up = self.files.on_update(p, th, Instant::now());
         self.apply_file_update(p.id, up);
@@ -357,6 +374,9 @@ impl Policy {
     }
 
     fn emit(&self, ev: PolicyEvent) {
+        if let PolicyEvent::Log(line) | PolicyEvent::Engine(Event::Log(line)) = &ev {
+            uilog::append(line);
+        }
         let _ = self.events.send(ev);
     }
 
@@ -443,6 +463,21 @@ impl Policy {
 
     fn log(&self, msg: impl Into<String>) {
         self.emit(PolicyEvent::Log(msg.into()));
+    }
+
+    /// Writes an enabled/disabled marker to a streamer's log files for each toggled stream with a running recorder.
+    fn mark_log_toggles(&self, id: StreamerId, old: &StreamerOptions, new: &StreamerOptions) {
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
+        let pids: Vec<u32> = self.recorder_pids.values().filter(|(sid, _)| *sid == id).map(|(_, pid)| *pid).collect();
+        let streams = [("stdout", old.log_stdout, new.log_stdout), ("stderr", old.log_stderr, new.log_stderr)];
+        for (kind, _, now) in streams.into_iter().filter(|(_, was, now)| was != now) {
+            let path = logfile::stream_path(&site.name, &streamer.name, kind);
+            for pid in &pids {
+                let text = if now { format!("logging enabled (pid {pid})") } else { "logging disabled".to_string() };
+                logfile::line(&path, &text);
+            }
+        }
     }
 
     fn alloc_id(&mut self) -> u64 {
@@ -560,7 +595,8 @@ impl Policy {
             }
             PolicyCommand::SetStreamerOptions { id, options } => {
                 if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
-                    s.options = options;
+                    let old = std::mem::replace(&mut s.options, options.clone());
+                    self.mark_log_toggles(id, &old, &options);
                     self.commit();
                 }
             }

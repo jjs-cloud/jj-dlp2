@@ -13,6 +13,9 @@ pub const TWO_COL_DEFAULT: f32 = 1100.0;
 pub const NAME_CLIP_MIN_LIMIT: f32 = 6.0;
 pub const NAME_CLIP_MAX_LIMIT: f32 = 30.0;
 pub const NAME_CLIP_DEFAULT: f32 = 12.0;
+pub const LOG_LINES_MIN_LIMIT: f32 = 100.0;
+pub const LOG_LINES_MAX_LIMIT: f32 = crate::api::LOG_HISTORY_MAX as f32;
+pub const LOG_LINES_DEFAULT: f32 = 500.0;
 const WIN_DEFAULT_W: f32 = 1180.0;
 const WIN_DEFAULT_H: f32 = 820.0;
 const WIN_MIN_W: f32 = 640.0;
@@ -27,6 +30,7 @@ struct Prefs {
     row_max: f32,
     two_col_w: f32,
     name_clip: f32,
+    log_lines: f32,
     remember_size: bool,
     win_w: f32,
     win_h: f32,
@@ -36,6 +40,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs { theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,
+            log_lines: LOG_LINES_DEFAULT,
             remember_size: false,
             win_w: WIN_DEFAULT_W,
             win_h: WIN_DEFAULT_H,
@@ -119,6 +124,18 @@ pub fn load_name_clip() -> f32 {
 pub fn save_name_clip(chars: f32) {
     let mut prefs = read();
     prefs.name_clip = chars;
+    write(&prefs);
+}
+
+/// Reads the saved Log tab line limit, clamped to the allowed limits.
+pub fn load_log_lines() -> f32 {
+    read().log_lines.clamp(LOG_LINES_MIN_LIMIT, LOG_LINES_MAX_LIMIT)
+}
+
+/// Saves the Log tab line limit.
+pub fn save_log_lines(lines: f32) {
+    let mut prefs = read();
+    prefs.log_lines = lines;
     write(&prefs);
 }
 

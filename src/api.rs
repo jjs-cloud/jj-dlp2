@@ -189,6 +189,9 @@ pub enum Event {
     Log(String),
 }
 
+/// Most log lines the UI can keep; the saved UI log holds at least this many.
+pub const LOG_HISTORY_MAX: usize = 5000;
+
 /// Cheap handle for sending commands to the engine.
 #[derive(Clone)]
 pub struct EngineClient {
