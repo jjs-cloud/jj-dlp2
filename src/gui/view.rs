@@ -8,7 +8,7 @@ use crate::api::*;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
-    text_input, toggler,
+    text_input, toggler, tooltip,
 };
 use iced::{Alignment, Color, Element, Length};
 
@@ -88,7 +88,6 @@ const COMPACT_CHROME_H: f32 = 200.0;
 const COMPACT_SLACK_H: f32 = 16.0;
 const COLUMN_FRAME: f32 = 1.0;
 const COLUMN_GAP: f32 = 14.0;
-const NAME_MAX_CHARS: usize = 20;
 const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
@@ -134,7 +133,7 @@ impl RowMetrics {
             dot: at(7.0, 10.0).round(),
             toggler: at(12.0, 18.0).round(),
             site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
-            name_w: (name_chars.min(NAME_MAX_CHARS) as f32 * name * NAME_CHAR_W).ceil() + 2.0,
+            name_w: (name_chars as f32 * name * NAME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0) - pad_trim,
         }
@@ -257,10 +256,18 @@ impl App {
         let p = pulse(self.phase);
         let title = row![
             dot(s, s.accent, 0.4 + 0.6 * p),
-            iced::widget::text("jj-dlp")
-                .font(s.font)
-                .size(22)
-                .color(s.accent2),
+            row![
+                iced::widget::text("jj-dlp")
+                    .font(s.font)
+                    .size(22)
+                    .color(s.accent2),
+                iced::widget::text(format!("v{}", crate::policy::update::CURRENT))
+                    .font(s.font)
+                    .size(12)
+                    .color(s.muted),
+            ]
+            .spacing(8)
+            .align_y(Alignment::End),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
@@ -493,9 +500,10 @@ impl App {
         let banner_h = if self.update.is_some() { 70.0 } else { 0.0 };
         let extra_h = problems.len() as f32 * 32.0 + notices_h + banner_h;
         let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
+        let name_clip = self.name_clip.round() as usize;
         let longest = entries
             .iter()
-            .map(|(_, st)| st.name.chars().count())
+            .map(|(_, st)| clip(&st.name, name_clip).chars().count())
             .max()
             .unwrap_or(0);
         let longest_site = entries
@@ -573,6 +581,30 @@ impl App {
         };
         let id = st.id;
         let name_color = if st.enabled { s.text } else { s.muted };
+        let shown_name = clip(&st.name, self.name_clip.round() as usize);
+        let was_clipped = shown_name != st.name;
+        let name_cell = container(
+            iced::widget::text(shown_name)
+                .font(s.font)
+                .size(m.name)
+                .color(name_color)
+                .wrapping(Wrapping::None),
+        )
+        .width(m.name_w)
+        .clip(true);
+        // Full name on hover, only when it was cut.
+        let name_el: Element<'a, Msg> = if was_clipped {
+            tooltip(
+                name_cell,
+                container(iced::widget::text(st.name.as_str()).font(s.font).size(12).color(s.text))
+                    .padding([4.0, 8.0])
+                    .style(skin::card(s, None)),
+                tooltip::Position::Bottom,
+            )
+            .into()
+        } else {
+            name_cell.into()
+        };
         let line = row![
             mini_dot(m, color, glow),
             container(mini_chip(
@@ -583,15 +615,7 @@ impl App {
             ))
             .width(m.site_w)
             .clip(true),
-            container(
-                iced::widget::text(st.name.as_str())
-                    .font(s.font)
-                    .size(m.name)
-                    .color(name_color)
-                    .wrapping(Wrapping::None)
-            )
-            .width(m.name_w)
-            .clip(true),
+            name_el,
             container(
                 iced::widget::text(
                     self.live_for(id, status).map(|d| format!("live {}", fmt_dur_short(d))).unwrap_or_default()
@@ -1251,6 +1275,20 @@ impl App {
         ]
         .spacing(12)
         .align_y(Alignment::Center);
+        let name_clip = row![
+            t(&s, "Name Length").size(13).width(110),
+            slider(
+                prefs::NAME_CLIP_MIN_LIMIT..=prefs::NAME_CLIP_MAX_LIMIT,
+                self.name_clip,
+                Msg::SetNameClip
+            )
+            .step(1.0_f32)
+            .on_release(Msg::SaveNameClip)
+            .width(Length::Fill),
+            muted(&s, format!("{:.0} chars", self.name_clip)).width(90),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
         let compact = column![
             row![
                 self.section_title(s, "COMPACT VIEW"),
@@ -1263,9 +1301,11 @@ impl App {
             .align_y(Alignment::Center),
             muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
             muted(&s, "Two columns are used when the window is at least the column threshold wide."),
+            muted(&s, "Longer streamer names are cut off with … in compact view; hover shows the full name."),
             row_size("Row Size Max", self.row_max, Msg::SetRowMax),
             row_size("Row Size Min", self.row_min, Msg::SetRowMin),
             two_col,
+            name_clip,
         ]
         .spacing(8);
 
@@ -1291,12 +1331,24 @@ impl App {
         ]
         .spacing(8);
 
+        let window = column![
+            self.section_title(s, "WINDOW"),
+            toggler(self.remember_size)
+                .label("Remember window size")
+                .on_toggle(Msg::SetRememberSize)
+                .text_size(12),
+            muted(&s, "Reopens at the size the window had when the app last closed."),
+        ]
+        .spacing(8);
+
         let compact = card_box(s, compact);
         let updates = card_box(s, updates);
+        let window = card_box(s, window);
         if self.win_w >= 1000.0 {
-            col = col.push(row![compact, updates].spacing(12));
+            let right = column![updates, window].spacing(12).width(Length::Fill);
+            col = col.push(row![compact, right].spacing(12));
         } else {
-            col = col.push(compact).push(updates);
+            col = col.push(compact).push(updates).push(window);
         }
         scrollable(col).height(Length::Fill).into()
     }

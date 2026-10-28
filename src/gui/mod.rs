@@ -25,6 +25,8 @@ pub const DEFAULT_SIM_ARGS: &str =
     "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s\" {urls}";
 
 static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
+/// Latest window size, read when the app exits.
+static LAST_SIZE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 
 /// Hands the policy event stream to the GUI subscription.
 pub fn install_event_stream(rx: UnboundedReceiver<PolicyEvent>) {
@@ -32,13 +34,26 @@ pub fn install_event_stream(rx: UnboundedReceiver<PolicyEvent>) {
 }
 
 pub fn run(client: PolicyClient) -> iced::Result {
-    iced::application(move || App::new(client.clone()), App::update, App::view)
+    let (win_w, win_h) = prefs::startup_window_size();
+    let result = iced::application(move || App::new(client.clone()), App::update, App::view)
         .title("jj-dlp")
         .subscription(App::subscription)
         .theme(App::theme)
-        .window(window::Settings { size: Size::new(1180.0, 820.0), icon: app_icon(), ..Default::default() })
+        .window(window::Settings { size: Size::new(win_w, win_h), icon: app_icon(), ..Default::default() })
         .antialiasing(true)
-        .run()
+        .run();
+    save_size_on_exit();
+    result
+}
+
+/// Writes the last window size to gui.json when remembering is on.
+fn save_size_on_exit() {
+    if !prefs::load_remember_size() {
+        return;
+    }
+    if let Some((w, h)) = *LAST_SIZE.lock().unwrap() {
+        prefs::save_window_size(w, h);
+    }
 }
 
 /// Loads the embedded 128x128 RGBA window icon.
@@ -241,6 +256,9 @@ pub enum Msg {
     SaveRowRange,
     SetTwoColWidth(f32),
     SaveTwoColWidth,
+    SetNameClip(f32),
+    SaveNameClip,
+    SetRememberSize(bool),
     ResetRowRange,
     Resized(Size),
     UpdateClicked,
@@ -283,6 +301,8 @@ pub struct App {
     row_min: f32,
     row_max: f32,
     two_col_w: f32,
+    name_clip: f32,
+    remember_size: bool,
     win_w: f32,
     win_h: f32,
     update: Option<UpdateInfo>,
@@ -295,6 +315,7 @@ impl App {
     fn new(client: PolicyClient) -> (App, Task<Msg>) {
         client.send(PolicyCommand::RequestSnapshot);
         let (row_min, row_max) = prefs::load_row_range();
+        let (win_w, win_h) = prefs::startup_window_size();
         let mut app = App {
             client,
             settings: crate::settings::default_settings(),
@@ -320,8 +341,10 @@ impl App {
             row_min,
             row_max,
             two_col_w: prefs::load_two_col_width(),
-            win_w: 1180.0,
-            win_h: 820.0,
+            name_clip: prefs::load_name_clip(),
+            remember_size: prefs::load_remember_size(),
+            win_w,
+            win_h,
             update: None,
             update_stage: UpdateStage::Idle,
             update_error: None,
@@ -514,16 +537,30 @@ impl App {
                 self.two_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
             }
             Msg::SaveTwoColWidth => prefs::save_two_col_width(self.two_col_w),
+            Msg::SetNameClip(v) => {
+                self.name_clip = v.round().clamp(prefs::NAME_CLIP_MIN_LIMIT, prefs::NAME_CLIP_MAX_LIMIT);
+            }
+            Msg::SaveNameClip => prefs::save_name_clip(self.name_clip),
+            Msg::SetRememberSize(on) => {
+                self.remember_size = on;
+                prefs::save_remember_size(on);
+                if on {
+                    prefs::save_window_size(self.win_w, self.win_h);
+                }
+            }
             Msg::ResetRowRange => {
                 self.row_min = prefs::ROW_MIN_DEFAULT;
                 self.row_max = prefs::ROW_MAX_DEFAULT;
                 self.two_col_w = prefs::TWO_COL_DEFAULT;
+                self.name_clip = prefs::NAME_CLIP_DEFAULT;
                 prefs::save_row_range(self.row_min, self.row_max);
                 prefs::save_two_col_width(self.two_col_w);
+                prefs::save_name_clip(self.name_clip);
             }
             Msg::Resized(size) => {
                 self.win_w = size.width;
                 self.win_h = size.height;
+                *LAST_SIZE.lock().unwrap() = Some((size.width, size.height));
             }
             Msg::ToggleProc(id) => {
                 if !self.expanded_procs.remove(&id) {
