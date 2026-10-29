@@ -2,6 +2,7 @@
 name = "jj-dlp"
 version = "2.0.1-rc.3"
 edition = "2024"
+rust-version = "1.89"
 repository = "https://github.com/jjs-cloud/jj-dlp2"
 
 [dependencies]
@@ -24,7 +25,7 @@ flate2 = "1"
 tar = "0.4"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]

@@ -3,6 +3,7 @@
 mod api;
 mod engine;
 mod gui;
+mod instance;
 mod policy;
 mod settings;
 #[cfg(all(test, unix))]
@@ -36,6 +37,22 @@ fn main() {
             attach_console();
             eprintln!("{USAGE}");
             std::process::exit(2);
+        }
+    };
+    let _instance = if matches!(mode, Mode::Update(_)) {
+        None
+    } else {
+        match instance::acquire() {
+            Ok(lock) => Some(lock),
+            Err(instance::AlreadyRunning) => {
+                if matches!(mode, Mode::Gui) {
+                    instance::show_running_dialog();
+                } else {
+                    attach_console();
+                    eprintln!("{}", instance::MESSAGE);
+                }
+                std::process::exit(1);
+            }
         }
     };
     match mode {
