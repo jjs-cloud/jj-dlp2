@@ -1,7 +1,7 @@
 //! Policy layer: owns settings.json, applies edits and tells the engine to reload.
 
 use crate::api::{
-    now_secs, CheckMode, Command, EngineClient, Event, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
+    now_secs, CheckMode, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
     Streamer, StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 
 mod files;
 mod gql;
+pub mod layout;
 pub mod live;
 mod outpath;
 pub mod uilog;
@@ -36,6 +37,7 @@ pub struct NewSite {
     pub recorder_args: String,
     pub url_template: String,
     pub output_dir: String,
+    pub folder_layout: FolderLayout,
     pub file_exists_grace_secs: u64,
     pub growth_grace_secs: u64,
     pub stall_window_secs: u64,
@@ -343,12 +345,14 @@ impl Policy {
         std::path::absolute(&dir).unwrap_or(dir)
     }
 
-    /// Gives the engine each streamer's recorder arguments plus the sidecar options.
+    /// Gives the engine each streamer's recorder arguments, including its subfolders and the sidecar options.
     fn sync_overrides(&self) {
         outpath::ensure_sidecar_dir();
         for streamer in &self.settings.streamers {
             let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { continue };
-            let args = outpath::recorder_override(&site.recorder_args, &outpath::sidecar_path(streamer.id));
+            let layout = streamer.options.folder_layout.unwrap_or(site.folder_layout);
+            let dirs = layout::dirs(layout, &site.name, &streamer.name);
+            let args = outpath::recorder_override(&site.recorder_args, &dirs, &outpath::sidecar_path(streamer.id));
             self.engine.send(Command::SetRecorderOverride { streamer_id: streamer.id, args });
         }
     }
@@ -607,6 +611,7 @@ impl Policy {
                     recorder_args: n.recorder_args,
                     url_template: n.url_template,
                     output_dir: n.output_dir,
+                    folder_layout: n.folder_layout,
                     log_checker_stdout: false,
                     log_checker_stderr: false,
                     end_after_minutes: DEFAULT_END_AFTER_MINUTES,
@@ -757,6 +762,7 @@ mod tests {
             recorder_args: String::new(),
             url_template: String::new(),
             output_dir: output_dir.into(),
+            folder_layout: FolderLayout::default(),
             log_checker_stdout: false,
             log_checker_stderr: false,
             end_after_minutes: 30,
@@ -789,6 +795,8 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
         assert_eq!(s.streamers[0].options, StreamerOptions::default());
+        assert_eq!(s.sites[0].folder_layout, FolderLayout::Streamer);
+        assert_eq!(s.streamers[0].options.folder_layout, None);
     }
 
     #[test]
@@ -837,6 +845,7 @@ mod e2e {
                 recorder_args: "RECORD {url}".into(),
                 url_template: "https://x.test/{username}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
+                folder_layout: FolderLayout::default(),
                 file_exists_grace_secs: 60,
                 growth_grace_secs: 60,
                 stall_window_secs: 120,
@@ -854,7 +863,7 @@ mod e2e {
             let saved = settings::try_load().unwrap();
             assert_eq!(saved.streamers.len(), 1);
 
-            let options = StreamerOptions { log_stdout: true, log_stderr: false };
+            let options = StreamerOptions { log_stdout: true, log_stderr: false, ..Default::default() };
             p.client.send(PolicyCommand::SetStreamerOptions { id: info.streamer_id, options: options.clone() });
             wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if s.streamers[0].options == options)).await;
             assert_eq!(settings::try_load().unwrap().streamers[0].options, options);

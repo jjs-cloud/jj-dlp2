@@ -30,6 +30,40 @@ impl std::fmt::Display for CheckMode {
     }
 }
 
+/// Subfolders recordings are placed in below the output folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FolderLayout {
+    Flat,
+    #[default]
+    Streamer,
+    Site,
+    StreamerSite,
+    SiteStreamer,
+}
+
+impl FolderLayout {
+    pub const ALL: [FolderLayout; 5] = [
+        FolderLayout::Flat,
+        FolderLayout::Streamer,
+        FolderLayout::Site,
+        FolderLayout::StreamerSite,
+        FolderLayout::SiteStreamer,
+    ];
+}
+
+impl std::fmt::Display for FolderLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sep = std::path::MAIN_SEPARATOR;
+        match self {
+            FolderLayout::Flat => write!(f, "No subfolder"),
+            FolderLayout::Streamer => write!(f, "streamer{sep}"),
+            FolderLayout::Site => write!(f, "site{sep}"),
+            FolderLayout::StreamerSite => write!(f, "streamer{sep}site{sep}"),
+            FolderLayout::SiteStreamer => write!(f, "site{sep}streamer{sep}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Site {
     pub id: SiteId,
@@ -43,6 +77,9 @@ pub struct Site {
     pub url_template: String,
     /// Empty means use the global output directory.
     pub output_dir: String,
+    /// Subfolders recordings are placed in below the output folder.
+    #[serde(default)]
+    pub folder_layout: FolderLayout,
     /// Write the checker's stdout to this site's checker log file.
     #[serde(default)]
     pub log_checker_stdout: bool,
@@ -95,6 +132,8 @@ pub struct StreamerOptions {
     pub log_stdout: bool,
     /// Write the recorder's stderr to this streamer's log file.
     pub log_stderr: bool,
+    /// Overrides the site's subfolder layout; `None` inherits it.
+    pub folder_layout: Option<FolderLayout>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

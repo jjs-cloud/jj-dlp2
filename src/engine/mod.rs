@@ -616,6 +616,7 @@ mod e2e {
                 recorder_args: "RECORD {url}".into(),
                 url_template: String::new(),
                 output_dir: String::new(),
+                folder_layout: FolderLayout::default(),
                 log_checker_stdout: true,
                 log_checker_stderr: true,
                 end_after_minutes: 30,
@@ -631,7 +632,7 @@ mod e2e {
                 name: "live1".into(),
                 url: "https://x.test/live1".into(),
                 enabled,
-                options: StreamerOptions { log_stdout: true, log_stderr: true },
+                options: StreamerOptions { log_stdout: true, log_stderr: true, ..Default::default() },
             }],
         };
         std::fs::create_dir_all(settings::config_dir()).unwrap();
@@ -730,6 +731,7 @@ mod e2e {
                 recorder_args: "RECORD {url}".into(),
                 url_template: String::new(),
                 output_dir: String::new(),
+                folder_layout: FolderLayout::default(),
                 log_checker_stdout: false,
                 log_checker_stderr: false,
                 end_after_minutes: 30,

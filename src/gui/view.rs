@@ -5,6 +5,7 @@ use super::{
     App, DraftField, Msg, OptionField, Preset, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
+use crate::policy::layout;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
@@ -1137,6 +1138,38 @@ impl App {
                 .on_toggle(move |v| Msg::StreamerOption(id, f(v)))
                 .text_size(12)
         };
+        let site = self.settings.sites.iter().find(|x| x.id == st.site_id);
+        let site_layout = site.map(|x| x.folder_layout).unwrap_or_default();
+        let choices: Vec<LayoutChoice> = std::iter::once(LayoutChoice {
+            value: None,
+            label: format!("Inherit ({site_layout})"),
+        })
+        .chain(FolderLayout::ALL.into_iter().map(|l| LayoutChoice {
+            value: Some(l),
+            label: l.to_string(),
+        }))
+        .collect();
+        let selected = choices.iter().find(|c| c.value == st.options.folder_layout).cloned();
+        let effective = st.options.folder_layout.unwrap_or(site_layout);
+        let base = layout::base_dir(
+            site.map_or("", |x| x.output_dir.as_str()),
+            &self.settings.default_output_dir,
+        );
+        let path = layout::preview(base, effective, site.map_or("", |x| x.name.as_str()), Some(&st.name));
+        let mut folders = column![
+            muted(&s, "Recording subfolders"),
+            pick_list(choices, selected, move |c: LayoutChoice| Msg::StreamerOption(
+                id,
+                OptionField::FolderLayout(c.value)
+            ))
+            .padding(8)
+            .width(260),
+            muted(&s, format!("Effective path: {path}")),
+        ]
+        .spacing(4);
+        if effective != FolderLayout::Flat && site.is_some_and(|x| layout::has_absolute_template(&x.recorder_args)) {
+            folders = folders.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
+        }
         column![
             muted(
                 &s,
@@ -1155,6 +1188,7 @@ impl App {
                 ),
             ]
             .spacing(24),
+            folders,
         ]
         .spacing(8)
         .into()
@@ -1590,11 +1624,37 @@ impl App {
             );
         }
 
+        let base = layout::base_dir(&d.output, &self.settings.default_output_dir);
+        let mut folders = column![
+            labeled(
+                "Recording subfolders",
+                pick_list(FolderLayout::ALL, Some(d.folder_layout), move |l| Msg::Draft(
+                    id,
+                    DraftField::FolderLayout(l)
+                ))
+                .padding(8)
+                .width(260)
+                .into(),
+            ),
+            muted(
+                &s,
+                format!(
+                    "Effective path: {}",
+                    layout::preview(base, d.folder_layout, &d.name, None)
+                )
+            ),
+        ]
+        .spacing(4);
+        if d.folder_layout != FolderLayout::Flat && layout::has_absolute_template(&d.recorder) {
+            folders = folders.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
+        }
+
         let form = column![
             top,
             timing_color,
             file_checks,
             paths,
+            folders,
             labeled(
                 "URL template",
                 hinted(
@@ -1645,6 +1705,26 @@ impl App {
             .height(Length::Fill)
             .style(skin::card(s, None))
             .into()
+    }
+}
+
+/// Shown when an absolute `-o` path stops the subfolder setting from applying.
+const ABSOLUTE_TEMPLATE_WARNING: &str = "The recorder arguments use an absolute -o path, so subfolders are not applied.";
+
+fn warn_text<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
+    iced::widget::text(v).font(s.font).size(12).color(s.warn)
+}
+
+/// One entry in a streamer's subfolder dropdown: a layout, or `None` to inherit the site's.
+#[derive(Clone, PartialEq)]
+struct LayoutChoice {
+    value: Option<FolderLayout>,
+    label: String,
+}
+
+impl std::fmt::Display for LayoutChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
     }
 }
 

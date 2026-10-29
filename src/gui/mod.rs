@@ -116,6 +116,7 @@ pub struct SiteDraft {
     pub recorder: String,
     pub url_template: String,
     pub output: String,
+    pub folder_layout: FolderLayout,
     pub log_stdout: bool,
     pub log_stderr: bool,
     pub use_theme_color: bool,
@@ -138,6 +139,7 @@ impl SiteDraft {
             recorder: s.recorder_args.clone(),
             url_template: s.url_template.clone(),
             output: s.output_dir.clone(),
+            folder_layout: s.folder_layout,
             log_stdout: s.log_checker_stdout,
             log_stderr: s.log_checker_stderr,
             use_theme_color: s.color.is_none(),
@@ -208,6 +210,7 @@ pub enum DraftField {
     Recorder(String),
     UrlTemplate(String),
     Output(String),
+    FolderLayout(FolderLayout),
     LogStdout(bool),
     LogStderr(bool),
     Color(String),
@@ -220,6 +223,7 @@ pub enum DraftField {
 pub enum OptionField {
     LogStdout(bool),
     LogStderr(bool),
+    FolderLayout(Option<FolderLayout>),
 }
 
 #[derive(Debug, Clone)]
@@ -433,6 +437,7 @@ impl App {
                     match field {
                         OptionField::LogStdout(v) => options.log_stdout = v,
                         OptionField::LogStderr(v) => options.log_stderr = v,
+                        OptionField::FolderLayout(v) => options.folder_layout = v,
                     }
                     self.client.send(PolicyCommand::SetStreamerOptions { id, options });
                 }
@@ -473,6 +478,7 @@ impl App {
                         DraftField::Recorder(v) => d.recorder = v,
                         DraftField::UrlTemplate(v) => d.url_template = v,
                         DraftField::Output(v) => d.output = v,
+                        DraftField::FolderLayout(v) => d.folder_layout = v,
                         DraftField::LogStdout(v) => d.log_stdout = v,
                         DraftField::LogStderr(v) => d.log_stderr = v,
                         DraftField::Color(v) => d.color = v,
@@ -505,6 +511,7 @@ impl App {
                             recorder_args: d.recorder.trim().to_string(),
                             url_template: d.url_template.trim().to_string(),
                             output_dir: d.output.trim().to_string(),
+                            folder_layout: d.folder_layout,
                             log_checker_stdout: d.log_stdout,
                             log_checker_stderr: d.log_stderr,
                             end_after_minutes: end_after,
@@ -751,6 +758,7 @@ fn new_site(preset: Preset) -> NewSite {
         recorder_args: recorder.into(),
         url_template: url_template.into(),
         output_dir: String::new(),
+        folder_layout: FolderLayout::default(),
         file_exists_grace_secs: DEFAULT_FILE_EXISTS_GRACE_SECS,
         growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
         stall_window_secs: if matches!(preset, Preset::Tiktok) {

@@ -1,5 +1,6 @@
 //! Recording output paths: the sidecar override sent to the engine, ffmpeg's output argument, and path comparison.
 
+use super::layout;
 use crate::api::StreamerId;
 use crate::settings;
 use std::ffi::{OsStr, OsString};
@@ -16,6 +17,8 @@ pub struct SidecarPath {
 const FORMS: &[(&str, &str, &str)] = &[("BDP", "before_dl", "%(filepath)s"), ("BDN", "before_dl", "%(filename)s")];
 /// Tag of the form built from the user's own `-o` template.
 const TEMPLATE_TAG: &str = "BDT";
+/// yt-dlp's default output template, used when the arguments have no `-o`.
+const DEFAULT_TEMPLATE: &str = "%(title)s [%(id)s].%(ext)s";
 /// Output-template type prefixes that can precede a `-o` value.
 const OUTPUT_KINDS: &[&str] = &[
     "default",
@@ -57,9 +60,12 @@ pub fn remove_sidecar(streamer_id: StreamerId) {
     let _ = std::fs::remove_file(sidecar_path(streamer_id));
 }
 
-/// The recorder arguments to hand the engine: the site's own arguments plus the sidecar options.
-pub fn recorder_override(recorder_args: &str, sidecar: &Path) -> Option<String> {
-    let extra = sidecar_args(&split_args(recorder_args), sidecar);
+/// The recorder arguments to hand the engine: the site's own arguments plus the folder `-o` and sidecar options.
+pub fn recorder_override(recorder_args: &str, dirs: &[String], sidecar: &Path) -> Option<String> {
+    let mut args = split_args(recorder_args);
+    let mut extra = folder_args(&args, dirs);
+    args.extend(extra.iter().cloned());
+    extra.extend(sidecar_args(&args, sidecar));
     if extra.is_empty() {
         return None;
     }
@@ -69,6 +75,19 @@ pub fn recorder_override(recorder_args: &str, sidecar: &Path) -> Option<String> 
         out.push_str(&quote_arg(&arg));
     }
     Some(out.trim_start().to_string())
+}
+
+/// A trailing `-o` that nests the output under `dirs`; empty when there are no folders or the template is absolute.
+fn folder_args(args: &[String], dirs: &[String]) -> Vec<String> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let template = output_template(args).unwrap_or_else(|| DEFAULT_TEMPLATE.to_string());
+    if layout::is_absolute_template(&template) {
+        return Vec::new();
+    }
+    let prefix: String = dirs.iter().map(|d| format!("{}/", d.replace('%', "%%"))).collect();
+    vec!["-o".to_string(), format!("{prefix}{template}")]
 }
 
 /// Extra yt-dlp arguments that append each print form's path to the sidecar file.
@@ -84,7 +103,7 @@ fn sidecar_args(args: &[String], sidecar: &Path) -> Vec<String> {
 }
 
 /// Splits on whitespace honouring "double" and 'single' quotes, the way the engine reads recorder arguments.
-fn split_args(input: &str) -> Vec<String> {
+pub(super) fn split_args(input: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_token = false;
@@ -131,7 +150,7 @@ fn quote_arg(arg: &str) -> String {
 }
 
 /// The last plain `-o` / `--output` template in the arguments.
-fn output_template(args: &[String]) -> Option<String> {
+pub(super) fn output_template(args: &[String]) -> Option<String> {
     let mut found = None;
     let mut i = 0;
     while i < args.len() {
@@ -286,7 +305,7 @@ mod tests {
 
     #[test]
     fn override_appends_quoted_sidecar_options_after_the_users_arguments() {
-        let got = recorder_override("--no-part -o \"%(title)s.%(ext)s\" {url}", Path::new("/cfg/50%/3.txt")).unwrap();
+        let got = recorder_override("--no-part -o \"%(title)s.%(ext)s\" {url}", &[], Path::new("/cfg/50%/3.txt")).unwrap();
         assert!(got.starts_with("--no-part -o \"%(title)s.%(ext)s\" {url} '--print-to-file' "), "{got}");
         let args = split_args(&got);
         assert_eq!(args.len(), 4 + 9);
@@ -296,9 +315,39 @@ mod tests {
 
     #[test]
     fn override_works_when_the_site_has_no_arguments() {
-        let got = recorder_override("  ", Path::new("/cfg/3.txt")).unwrap();
+        let got = recorder_override("  ", &[], Path::new("/cfg/3.txt")).unwrap();
         assert!(got.starts_with("'--print-to-file' "), "{got}");
         assert_eq!(split_args(&got).len(), 6);
+    }
+
+    #[test]
+    fn override_nests_the_users_template_under_the_folders() {
+        let dirs = strings(&["Twitch", "Emiru"]);
+        let got = recorder_override("--no-part -o \"%(title)s.%(ext)s\" {url}", &dirs, Path::new("/cfg/3.txt")).unwrap();
+        let args = split_args(&got);
+        assert_eq!(args.len(), 4 + 2 + 9);
+        assert_eq!(&args[4..6], ["-o", "Twitch/Emiru/%(title)s.%(ext)s"]);
+        assert_eq!(args[13], "before_dl:BDT|Twitch/Emiru/%(title)s.%(ext)s");
+    }
+
+    #[test]
+    fn override_uses_the_default_template_when_there_is_no_output_option() {
+        let got = recorder_override("--no-part {url}", &strings(&["Emiru"]), Path::new("/cfg/3.txt")).unwrap();
+        let args = split_args(&got);
+        assert_eq!(&args[2..4], ["-o", "Emiru/%(title)s [%(id)s].%(ext)s"]);
+    }
+
+    #[test]
+    fn override_escapes_percent_signs_in_folder_names() {
+        let got = recorder_override("-o \"%(id)s.%(ext)s\"", &strings(&["50%"]), Path::new("/cfg/3.txt")).unwrap();
+        assert_eq!(split_args(&got)[2..4], ["-o", "50%%/%(id)s.%(ext)s"]);
+    }
+
+    #[test]
+    fn override_leaves_absolute_templates_alone() {
+        let args_in = "-o \"D:\\rec\\%(id)s.%(ext)s\" {url}";
+        let got = recorder_override(args_in, &strings(&["Emiru"]), Path::new("/cfg/3.txt")).unwrap();
+        assert_eq!(split_args(&got).len(), 3 + 9);
     }
 
     #[test]
