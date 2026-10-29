@@ -1366,12 +1366,20 @@ impl App {
         .spacing(8);
 
         let window = column![
-            self.section_title(s, "WINDOW"),
+            row![
+                self.section_title(s, "WINDOW"),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Reset").size(12))
+                    .on_press(Msg::ResetWindowSize)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
             toggler(self.remember_size)
                 .label("Remember window size")
                 .on_toggle(Msg::SetRememberSize)
                 .text_size(12),
-            muted(&s, "Reopens at the size the window had when the app last closed."),
+            muted(&s, "Reopens at the size the window had when the app last closed. Reset restores the default size now."),
         ]
         .spacing(8);
 

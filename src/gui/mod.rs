@@ -261,6 +261,7 @@ pub enum Msg {
     SetLogLines(f32),
     SaveLogLines,
     SetRememberSize(bool),
+    ResetWindowSize,
     ResetRowRange,
     Resized(Size),
     UpdateClicked,
@@ -559,6 +560,16 @@ impl App {
                 if on {
                     prefs::save_window_size(self.win_w, self.win_h);
                 }
+            }
+            Msg::ResetWindowSize => {
+                let (w, h) = (prefs::WIN_DEFAULT_W, prefs::WIN_DEFAULT_H);
+                self.win_w = w;
+                self.win_h = h;
+                *LAST_SIZE.lock().unwrap() = Some((w, h));
+                if self.remember_size {
+                    prefs::save_window_size(w, h);
+                }
+                return window::latest().and_then(move |id| window::resize(id, Size::new(w, h)));
             }
             Msg::ResetRowRange => {
                 self.row_min = prefs::ROW_MIN_DEFAULT;

@@ -16,8 +16,8 @@ pub const NAME_CLIP_DEFAULT: f32 = 12.0;
 pub const LOG_LINES_MIN_LIMIT: f32 = 100.0;
 pub const LOG_LINES_MAX_LIMIT: f32 = crate::api::LOG_HISTORY_MAX as f32;
 pub const LOG_LINES_DEFAULT: f32 = 500.0;
-const WIN_DEFAULT_W: f32 = 1180.0;
-const WIN_DEFAULT_H: f32 = 820.0;
+pub const WIN_DEFAULT_W: f32 = 1180.0;
+pub const WIN_DEFAULT_H: f32 = 820.0;
 const WIN_MIN_W: f32 = 640.0;
 const WIN_MIN_H: f32 = 420.0;
 
