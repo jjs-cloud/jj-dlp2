@@ -59,18 +59,6 @@ fn fmt_dur(secs: u64) -> String {
     }
 }
 
-/// Hours and minutes only, for compact rows.
-fn fmt_dur_short(secs: u64) -> String {
-    let (h, m) = (secs / 3600, (secs / 60) % 60);
-    if h > 0 {
-        format!("{h}h {m:02}m")
-    } else if m > 0 {
-        format!("{m}m")
-    } else {
-        "<1m".to_string()
-    }
-}
-
 /// Largest whole unit of an elapsed time, e.g. `5m ago`, `3h ago`, `2d ago`.
 fn fmt_ago(secs: u64) -> String {
     match secs {
@@ -101,8 +89,8 @@ const COLUMN_GAP: f32 = 14.0;
 const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
-const AGO_CHARS: f32 = 8.0;
-const AGO_CHAR_W: f32 = 0.6;
+const TIME_CHARS: f32 = 11.0;
+const TIME_CHAR_W: f32 = 0.6;
 const PW_SITE: u32 = 104;
 const PW_STATE: u32 = 170;
 const PW_OPEN: u32 = 56;
@@ -123,7 +111,7 @@ struct RowMetrics {
     toggler: f32,
     site_w: f32,
     name_w: f32,
-    ago_w: f32,
+    time_w: f32,
     spacing: f32,
     pad_h: f32,
 }
@@ -147,7 +135,7 @@ impl RowMetrics {
             toggler: at(12.0, 18.0).round(),
             site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
             name_w: (name_chars as f32 * name * NAME_CHAR_W).ceil() + 2.0,
-            ago_w: (AGO_CHARS * text(10.0, 12.0) * AGO_CHAR_W).ceil() + 2.0,
+            time_w: (TIME_CHARS * text(10.0, 12.0) * TIME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0) - pad_trim,
         }
@@ -624,6 +612,11 @@ impl App {
         } else {
             name_cell.into()
         };
+        // Live duration while live, otherwise time since last live.
+        let (time_text, time_color) = match self.live_for(id, status) {
+            Some(d) => (fmt_dur(d), s.live),
+            None => (self.last_live_ago(id, status).map(fmt_ago).unwrap_or_default(), s.muted),
+        };
         let line = row![
             mini_dot(m, color, glow),
             container(mini_chip(
@@ -635,25 +628,15 @@ impl App {
             .width(m.site_w)
             .clip(true),
             name_el,
+            Space::new().width(Length::Fill),
             container(
-                iced::widget::text(
-                    self.live_for(id, status).map(|d| format!("live {}", fmt_dur_short(d))).unwrap_or_default()
-                )
-                .font(s.font)
-                .size(m.info)
-                .color(s.muted)
-                .wrapping(Wrapping::None)
-            )
-            .width(Length::Fill)
-            .clip(true),
-            container(
-                iced::widget::text(self.last_live_ago(id, status).map(fmt_ago).unwrap_or_default())
+                iced::widget::text(time_text)
                     .font(s.font)
                     .size(m.info)
-                    .color(s.muted)
+                    .color(time_color)
                     .wrapping(Wrapping::None)
             )
-            .width(m.ago_w)
+            .width(m.time_w)
             .clip(true),
             compact_chips(s, m, st, status, self.streamer_stalled(id)),
             toggler(st.enabled)
