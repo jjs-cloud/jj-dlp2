@@ -86,7 +86,6 @@ const COMPACT_CHROME_H: f32 = 200.0;
 const COMPACT_SLACK_H: f32 = 16.0;
 const COLUMN_FRAME: f32 = 1.0;
 const COLUMN_GAP: f32 = 14.0;
-const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
 const TIME_CHARS: f32 = 11.0;
@@ -98,7 +97,7 @@ const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
 
-/// Sizes of one compact row, interpolated from its height; name and site columns fit the longest name and site chip.
+/// Sizes of one compact row, interpolated from its height; the site column fits the longest site chip and the name column takes the remaining width.
 #[derive(Clone, Copy)]
 struct RowMetrics {
     row_h: f32,
@@ -110,14 +109,13 @@ struct RowMetrics {
     dot: f32,
     toggler: f32,
     site_w: f32,
-    name_w: f32,
     time_w: f32,
     spacing: f32,
     pad_h: f32,
 }
 
 impl RowMetrics {
-    fn new(row_h: f32, name_chars: usize, site_chars: usize, pad_trim: f32) -> RowMetrics {
+    fn new(row_h: f32, site_chars: usize, pad_trim: f32) -> RowMetrics {
         let t = ((row_h - ROW_FLOOR) / (ROW_CEIL - ROW_FLOOR)).max(0.0);
         let at = |floor: f32, ceil: f32| floor + (ceil - floor) * t;
         let text = |floor: f32, ceil: f32| (at(floor, ceil) * 2.0).round() / 2.0;
@@ -134,7 +132,6 @@ impl RowMetrics {
             dot: at(7.0, 10.0).round(),
             toggler: at(12.0, 18.0).round(),
             site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
-            name_w: (name_chars as f32 * name * NAME_CHAR_W).ceil() + 2.0,
             time_w: (TIME_CHARS * text(10.0, 12.0) * TIME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0) - pad_trim,
@@ -499,12 +496,6 @@ impl App {
         let banner_h = if self.update.is_some() { 70.0 } else { 0.0 };
         let extra_h = problems.len() as f32 * 32.0 + notices_h + banner_h;
         let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
-        let name_clip = self.name_clip.round() as usize;
-        let longest = entries
-            .iter()
-            .map(|(_, st)| clip(&st.name, name_clip).chars().count())
-            .max()
-            .unwrap_or(0);
         let longest_site = entries
             .iter()
             .map(|(site, _)| clip(&site.name, SITE_CLIP_CHARS).chars().count())
@@ -512,7 +503,7 @@ impl App {
             .unwrap_or(0);
         let frame = COLUMN_FRAME;
         let pad_trim = if cols == 1 { frame } else { 0.0 };
-        let m = RowMetrics::new(row_h, longest, longest_site, pad_trim);
+        let m = RowMetrics::new(row_h, longest_site, pad_trim);
         let per_col = entries.len().div_ceil(cols);
         let col_h = per_col as f32 * row_h + (per_col - 1) as f32 * ROW_GAP + 2.0 * frame;
         let mut grid = Row::new().spacing(COLUMN_GAP - 4.0 * frame);
@@ -597,7 +588,7 @@ impl App {
                 .color(name_color)
                 .wrapping(Wrapping::None),
         )
-        .width(m.name_w)
+        .width(Length::Fill)
         .clip(true);
         // Full name on hover, only when it was cut.
         let name_el: Element<'a, Msg> = if was_clipped {
@@ -628,7 +619,6 @@ impl App {
             .width(m.site_w)
             .clip(true),
             name_el,
-            Space::new().width(Length::Fill),
             container(
                 iced::widget::text(time_text)
                     .font(s.font)
