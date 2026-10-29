@@ -71,6 +71,16 @@ fn fmt_dur_short(secs: u64) -> String {
     }
 }
 
+/// Largest whole unit of an elapsed time, e.g. `5m ago`, `3h ago`, `2d ago`.
+fn fmt_ago(secs: u64) -> String {
+    match secs {
+        0..=59 => "<1m ago".to_string(),
+        60..=3599 => format!("{}m ago", secs / 60),
+        3600..=86399 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86400),
+    }
+}
+
 fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -91,6 +101,8 @@ const COLUMN_GAP: f32 = 14.0;
 const NAME_CHAR_W: f32 = 0.6;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
+const AGO_CHARS: f32 = 8.0;
+const AGO_CHAR_W: f32 = 0.6;
 const PW_SITE: u32 = 104;
 const PW_STATE: u32 = 170;
 const PW_OPEN: u32 = 56;
@@ -111,6 +123,7 @@ struct RowMetrics {
     toggler: f32,
     site_w: f32,
     name_w: f32,
+    ago_w: f32,
     spacing: f32,
     pad_h: f32,
 }
@@ -134,6 +147,7 @@ impl RowMetrics {
             toggler: at(12.0, 18.0).round(),
             site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
             name_w: (name_chars as f32 * name * NAME_CHAR_W).ceil() + 2.0,
+            ago_w: (AGO_CHARS * text(10.0, 12.0) * AGO_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0) - pad_trim,
         }
@@ -552,6 +566,14 @@ impl App {
         self.live_since.get(&id).map(|t| self.now.saturating_sub(*t))
     }
 
+    /// Seconds since the streamer was last seen live; hidden while live or when unknown.
+    fn last_live_ago(&self, id: StreamerId, status: StreamerStatus) -> Option<u64> {
+        if status.live {
+            return None;
+        }
+        self.last_live.get(&id).map(|t| self.now.saturating_sub(*t))
+    }
+
     fn compact_row<'a>(
         &'a self,
         s: Skin,
@@ -623,6 +645,15 @@ impl App {
                 .wrapping(Wrapping::None)
             )
             .width(Length::Fill)
+            .clip(true),
+            container(
+                iced::widget::text(self.last_live_ago(id, status).map(fmt_ago).unwrap_or_default())
+                    .font(s.font)
+                    .size(m.info)
+                    .color(s.muted)
+                    .wrapping(Wrapping::None)
+            )
+            .width(m.ago_w)
             .clip(true),
             compact_chips(s, m, st, status, self.streamer_stalled(id)),
             toggler(st.enabled)
@@ -1081,7 +1112,13 @@ impl App {
                     }
                     name
                 },
-                muted(&s, clip(&st.url, 70)),
+                {
+                    let url = clip(&st.url, 70);
+                    match self.last_live_ago(id, status) {
+                        Some(d) => muted(&s, format!("{url} · last live {}", fmt_ago(d))),
+                        None => muted(&s, url),
+                    }
+                },
             ]
             .spacing(2)
             .width(Length::Fill),

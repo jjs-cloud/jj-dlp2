@@ -285,6 +285,7 @@ pub struct App {
     tab: Tab,
     statuses: HashMap<StreamerId, StreamerStatus>,
     live_since: HashMap<StreamerId, u64>,
+    last_live: HashMap<StreamerId, u64>,
     checks: HashMap<SiteId, CheckInfo>,
     issues: HashMap<StreamerId, String>,
     notices: Vec<Notice>,
@@ -326,6 +327,7 @@ impl App {
             tab: Tab::Monitor,
             statuses: HashMap::new(),
             live_since: HashMap::new(),
+            last_live: HashMap::new(),
             checks: HashMap::new(),
             issues: HashMap::new(),
             notices: Vec::new(),
@@ -613,6 +615,7 @@ impl App {
             }
             PolicyEvent::Update(ev) => self.on_update_event(ev),
             PolicyEvent::LiveSince(map) => self.live_since = map,
+            PolicyEvent::LastLive(map) => self.last_live = map,
             PolicyEvent::RecordingFiles(map) => self.recording_files = map,
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {

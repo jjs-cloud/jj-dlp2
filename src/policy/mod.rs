@@ -13,6 +13,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
 mod files;
+mod gql;
 pub mod live;
 mod outpath;
 pub mod uilog;
@@ -79,6 +80,8 @@ pub enum PolicyEvent {
     Update(UpdateEvent),
     /// Streamer id to the unix time it was first seen live; absent when not in a live span.
     LiveSince(HashMap<StreamerId, u64>),
+    /// Streamer id to the unix time it was last seen live; absent when never seen.
+    LastLive(HashMap<StreamerId, u64>),
     /// File state of every active recording; sent whenever it changes.
     RecordingFiles(HashMap<RecorderId, RecordingFile>),
 }
@@ -106,6 +109,12 @@ enum UpdateMsg {
 struct FileJob {
     id: RecorderId,
     result: files::JobResult,
+}
+
+/// Result of the startup Twitch GQL lookup, with the streamers it was run for.
+struct GqlJob {
+    targets: Vec<(StreamerId, String)>,
+    lookup: gql::Lookup,
 }
 
 /// Cheap handle for sending commands to the policy layer.
@@ -142,7 +151,10 @@ pub fn start(engine: EngineParts) -> PolicyParts {
             });
             let (upd_tx, upd_rx) = mpsc::unbounded_channel();
             let (file_tx, file_rx) = mpsc::unbounded_channel();
-            rt.block_on(Policy::new(client, ev_tx, upd_tx, file_tx).run(cmd_rx, events, done_rx, upd_rx, file_rx));
+            let (gql_tx, gql_rx) = mpsc::unbounded_channel();
+            rt.block_on(Policy::new(client, ev_tx, upd_tx, file_tx, gql_tx).run(
+                cmd_rx, events, done_rx, upd_rx, file_rx, gql_rx,
+            ));
             // Stops the runtime without waiting on downloads, then installs any staged update.
             rt.shutdown_background();
             update::finish_pending();
@@ -163,6 +175,7 @@ struct Policy {
     files: FileTracker,
     last_files: HashMap<RecorderId, RecordingFile>,
     file_tx: UnboundedSender<FileJob>,
+    gql_tx: UnboundedSender<GqlJob>,
     /// Running recorders as (streamer id, root pid), used for log toggle markers.
     recorder_pids: HashMap<RecorderId, (StreamerId, u32)>,
 }
@@ -173,6 +186,7 @@ impl Policy {
         events: UnboundedSender<PolicyEvent>,
         upd_tx: UnboundedSender<UpdateMsg>,
         file_tx: UnboundedSender<FileJob>,
+        gql_tx: UnboundedSender<GqlJob>,
     ) -> Self {
         let settings = settings::load();
         let live = LiveTracker::load(&settings, now_secs());
@@ -188,6 +202,7 @@ impl Policy {
             files: FileTracker::default(),
             last_files: HashMap::new(),
             file_tx,
+            gql_tx,
             recorder_pids: HashMap::new(),
         }
     }
@@ -199,6 +214,7 @@ impl Policy {
         mut engine_done: oneshot::Receiver<()>,
         mut update_msgs: UnboundedReceiver<UpdateMsg>,
         mut file_msgs: UnboundedReceiver<FileJob>,
+        mut gql_msgs: UnboundedReceiver<GqlJob>,
     ) {
         let mut cmds_open = true;
         let mut update_tick = tokio::time::interval(UPDATE_CHECK_EVERY);
@@ -208,6 +224,8 @@ impl Policy {
         self.emit_settings();
         self.emit_update_config();
         self.emit_live();
+        self.emit_last_live();
+        self.start_backfill();
         outpath::clear_sidecars();
         self.sync_overrides();
         loop {
@@ -239,6 +257,11 @@ impl Policy {
                 msg = file_msgs.recv() => {
                     if let Some(m) = msg {
                         self.on_file_job(m);
+                    }
+                }
+                msg = gql_msgs.recv() => {
+                    if let Some(m) = msg {
+                        self.on_gql_job(m);
                     }
                 }
             }
@@ -360,16 +383,71 @@ impl Policy {
         if self.live.take_span_changed() {
             self.emit_live();
         }
+        if self.live.take_last_live_changed() {
+            self.emit_last_live();
+        }
     }
 
     fn emit_live(&self) {
         self.emit(PolicyEvent::LiveSince(self.live.live_since()));
     }
 
+    fn emit_last_live(&self) {
+        self.emit(PolicyEvent::LastLive(self.live.last_live()));
+    }
+
+    /// Starts the Twitch GQL lookup of missing last-live times, at most once per 24 hours.
+    fn start_backfill(&mut self) {
+        if cfg!(test) {
+            return;
+        }
+        let now = now_secs();
+        if self.live.gql_checked_at().is_some_and(|at| now.saturating_sub(at) < gql::BACKFILL_EVERY_SECS) {
+            return;
+        }
+        let targets: Vec<(StreamerId, String)> = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|s| !self.live.has_last_live(s.id))
+            .filter_map(|s| gql::login_from_url(&s.url).map(|login| (s.id, login)))
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        self.live.set_gql_checked_at(now);
+        self.flush_live();
+        let mut logins: Vec<String> = targets.iter().map(|(_, login)| login.clone()).collect();
+        logins.sort();
+        logins.dedup();
+        let tx = self.gql_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(GqlJob { targets, lookup: gql::fetch_last_broadcasts(&logins) });
+        });
+    }
+
+    /// Stores the looked-up last-live times for streamers that still exist and have none.
+    fn on_gql_job(&mut self, job: GqlJob) {
+        if let Some(e) = &job.lookup.error {
+            self.log(e.clone());
+        }
+        let found: HashMap<StreamerId, u64> = job
+            .targets
+            .iter()
+            .filter(|(id, _)| live::lookup(&self.settings, *id).is_some())
+            .filter_map(|(id, login)| job.lookup.found.get(login).map(|at| (*id, *at)))
+            .collect();
+        let added = self.live.backfill(found);
+        if added > 0 {
+            self.log(format!("backfilled last-live time via Twitch GQL for {added} streamer(s)"));
+        }
+        self.flush_live();
+    }
+
     /// Drops live records of streamers that no longer exist.
     fn prune_live(&mut self) {
         let settings = &self.settings;
-        self.live.retain(|id, _| live::lookup(settings, id).is_some());
+        self.live.retain(|id| live::lookup(settings, id).is_some());
         self.flush_live();
     }
 
@@ -512,6 +590,7 @@ impl Policy {
                 self.emit_settings();
                 self.emit_update_config();
                 self.emit_live();
+                self.emit_last_live();
                 if let Some(a) = &self.available {
                     self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
                 }
