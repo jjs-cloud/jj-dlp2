@@ -175,17 +175,17 @@ fn compact_chips<'a>(
     let mut chips: Row<'a, Msg> = Row::new()
         .spacing(m.spacing / 2.0)
         .align_y(Alignment::Center);
-    if status.recording {
+    if status.recording && st.enabled {
         chips = chips.push(mini_chip(s, m, "REC", s.accent));
     }
     if stalled {
         chips = chips.push(mini_chip(s, m, "STALLED", s.danger));
     }
-    if status.live {
-        chips = chips.push(mini_chip(s, m, "LIVE", s.live));
-    }
     if !st.enabled {
         chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
+    }
+    if status.live {
+        chips = chips.push(mini_chip(s, m, "LIVE", s.live));
     }
     if status.restarts > 0 {
         chips = chips.push(mini_chip(
@@ -1059,7 +1059,7 @@ impl App {
         };
         let id = st.id;
         let mut chips: Row<'_, Msg> = Row::new().spacing(6);
-        if status.recording {
+        if status.recording && st.enabled {
             chips = chips.push(chip(s, "RECORDING", s.accent));
         }
         if self.streamer_stalled(id) {
@@ -1326,9 +1326,10 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             ]
             .align_y(Alignment::Center),
-            muted(&s, "Rows start at the maximum and shrink toward the minimum as streamers are added."),
-            muted(&s, "Two columns are used when the window is at least the column threshold wide."),
-            muted(&s, "Longer streamer names are cut off with … in compact view; hover shows the full name."),
+            muted(&s, "Row Size Max: The tallest a row can be; rows start here when there is room."),
+            muted(&s, "Row Size Min: The shortest a row can shrink to as streamers are added."),
+            muted(&s, "Column threshold: The window width at which the list switches to two columns."),
+            muted(&s, "Name Length: Longer names are cut off with …; hover shows the full name."),
             row_size("Row Size Max", self.row_max, Msg::SetRowMax),
             row_size("Row Size Min", self.row_min, Msg::SetRowMin),
             two_col,
