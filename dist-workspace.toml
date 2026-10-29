@@ -1,3 +1,4 @@
+
 [workspace]
 members = ["cargo:."]
 
@@ -7,6 +8,8 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
+# Enable GitHub artifact attestations for release artifacts
+github-attestations = true
 # The installers to generate for each app
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
