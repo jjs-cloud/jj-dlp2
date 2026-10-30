@@ -104,23 +104,6 @@ pub struct Site {
     pub color: Option<String>,
 }
 
-/// Colour given to new blank sites.
-pub const DEFAULT_SITE_COLOR: &str = "#7AA2F7";
-
-/// Default for `Site::end_after_minutes`.
-pub const DEFAULT_END_AFTER_MINUTES: u64 = 30;
-
-/// Defaults for the per-site recording file checks.
-pub const DEFAULT_FILE_EXISTS_GRACE_SECS: u64 = 60;
-pub const DEFAULT_GROWTH_GRACE_SECS: u64 = 60;
-pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
-pub const TIKTOK_STALL_WINDOW_SECS: u64 = 360;
-pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
-
-/// Defaults for the per-site restart warnings.
-pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
-pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Streamer {
     pub id: StreamerId,

@@ -2,10 +2,10 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, OptionField, Preset, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
+    App, DraftField, Msg, OptionField, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
-use crate::policy::layout;
+use crate::policy::{layout, Preset};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
@@ -1689,6 +1689,10 @@ impl App {
                 .style(skin::btn(s, BtnKind::Primary)),
             button(t(&s, "Revert").size(13))
                 .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
+                .padding([5.0, 12.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "Defaults").size(13))
+                .on_press(Msg::DefaultsSite(id))
                 .padding([5.0, 12.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
             button(t(&s, "Remove site").size(13))

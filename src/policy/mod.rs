@@ -2,8 +2,7 @@
 
 use crate::api::{
     now_secs, CheckMode, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
-    Streamer, StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES, DEFAULT_RESTART_CLEAR_MINUTES,
-    DEFAULT_RESTART_THRESHOLD, LOG_HISTORY_MAX,
+    Streamer, StreamerId, StreamerOptions, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
 use crate::settings;
@@ -13,6 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
+mod defaults;
 mod files;
 mod gql;
 pub mod layout;
@@ -22,6 +22,7 @@ mod restarts;
 pub mod uilog;
 pub mod update;
 use files::{FileTracker, Thresholds};
+pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_JSON_ARGS, DEFAULT_SIM_ARGS, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
 use live::LiveTracker;
 use restarts::RestartTracker;
@@ -41,10 +42,15 @@ pub struct NewSite {
     pub url_template: String,
     pub output_dir: String,
     pub folder_layout: FolderLayout,
+    pub log_checker_stdout: bool,
+    pub log_checker_stderr: bool,
+    pub end_after_minutes: u64,
     pub file_exists_grace_secs: u64,
     pub growth_grace_secs: u64,
     pub stall_window_secs: u64,
     pub file_check_interval_secs: u64,
+    pub restart_clear_minutes: u64,
+    pub restart_threshold: u32,
     pub color: Option<String>,
 }
 
@@ -656,15 +662,15 @@ impl Policy {
                     url_template: n.url_template,
                     output_dir: n.output_dir,
                     folder_layout: n.folder_layout,
-                    log_checker_stdout: false,
-                    log_checker_stderr: false,
-                    end_after_minutes: DEFAULT_END_AFTER_MINUTES,
+                    log_checker_stdout: n.log_checker_stdout,
+                    log_checker_stderr: n.log_checker_stderr,
+                    end_after_minutes: n.end_after_minutes,
                     file_exists_grace_secs: n.file_exists_grace_secs,
                     growth_grace_secs: n.growth_grace_secs,
                     stall_window_secs: n.stall_window_secs,
                     file_check_interval_secs: n.file_check_interval_secs,
-                    restart_clear_minutes: DEFAULT_RESTART_CLEAR_MINUTES,
-                    restart_threshold: DEFAULT_RESTART_THRESHOLD,
+                    restart_clear_minutes: n.restart_clear_minutes,
+                    restart_threshold: n.restart_threshold,
                     color: n.color,
                 });
                 self.commit();
@@ -899,10 +905,15 @@ mod e2e {
                 url_template: "https://x.test/{username}".into(),
                 output_dir: sb.dir.join("out").to_string_lossy().into(),
                 folder_layout: FolderLayout::default(),
+                log_checker_stdout: false,
+                log_checker_stderr: false,
+                end_after_minutes: 30,
                 file_exists_grace_secs: 60,
                 growth_grace_secs: 60,
                 stall_window_secs: 120,
                 file_check_interval_secs: 30,
+                restart_clear_minutes: 1440,
+                restart_threshold: 1,
                 color: None,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;

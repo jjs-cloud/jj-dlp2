@@ -7,7 +7,10 @@ mod view;
 use crate::api::*;
 use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
-use crate::policy::{NewSite, PolicyClient, PolicyCommand, PolicyEvent, RecordingFile, UpdateEvent};
+use crate::policy::{
+    new_site, preset_for_name, PolicyClient, PolicyCommand, PolicyEvent, Preset, RecordingFile, UpdateEvent, DEFAULT_JSON_ARGS,
+    DEFAULT_SIM_ARGS, DEFAULT_SITE_COLOR,
+};
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
@@ -20,9 +23,6 @@ use tokio::sync::mpsc::UnboundedReceiver;
 pub const SITE_SWATCHES: [&str; 10] = [
     "#9146FF", "#FE2C55", "#F89C1C", "#53FC18", "#19F0FF", "#FF2BD6", "#FFD24A", "#7AA2F7", "#F38BA8", "#B8FFC8",
 ];
-pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
-pub const DEFAULT_SIM_ARGS: &str =
-    "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s\" {urls}";
 
 static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
 /// Latest window size, read when the app exits.
@@ -91,15 +91,6 @@ pub struct UpdateInfo {
     pub is_rc: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Preset {
-    Twitch,
-    Tiktok,
-    Chaturbate,
-    Kick,
-    Blank,
-}
-
 /// Editable copy of a site's settings, kept as strings while the user types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SiteDraft {
@@ -148,6 +139,33 @@ impl SiteDraft {
             log_stderr: s.log_checker_stderr,
             use_theme_color: s.color.is_none(),
             color: s.color.clone().unwrap_or_else(|| DEFAULT_SITE_COLOR.to_string()),
+        }
+    }
+
+    /// Draft holding the current defaults for a new site, keeping `name`.
+    fn from_defaults(name: &str, preset: Preset) -> Self {
+        let n = new_site(preset);
+        Self {
+            name: name.to_string(),
+            exe: n.exe_path,
+            interval: n.interval_secs.to_string(),
+            end_after: n.end_after_minutes.to_string(),
+            restart_clear: n.restart_clear_minutes.to_string(),
+            restart_threshold: n.restart_threshold.to_string(),
+            file_exists_grace: n.file_exists_grace_secs.to_string(),
+            growth_grace: n.growth_grace_secs.to_string(),
+            stall_window: n.stall_window_secs.to_string(),
+            file_check_interval: n.file_check_interval_secs.to_string(),
+            mode: n.check_mode,
+            checker: n.checker_args,
+            recorder: n.recorder_args,
+            url_template: n.url_template,
+            output: n.output_dir,
+            folder_layout: n.folder_layout,
+            log_stdout: n.log_checker_stdout,
+            log_stderr: n.log_checker_stderr,
+            use_theme_color: n.color.is_none(),
+            color: n.color.unwrap_or_else(|| DEFAULT_SITE_COLOR.to_string()),
         }
     }
 
@@ -264,6 +282,7 @@ pub enum Msg {
     Draft(SiteId, DraftField),
     SaveSite(SiteId),
     RevertSite(SiteId),
+    DefaultsSite(SiteId),
     GlobalOutEdit(String),
     GlobalOutSave,
     Recheck,
@@ -595,6 +614,12 @@ impl App {
                     self.drafts.insert(id, SiteDraft::from_site(site));
                 }
             }
+            Msg::DefaultsSite(id) => {
+                if let Some(site) = self.settings.sites.iter().find(|s| s.id == id) {
+                    let draft = SiteDraft::from_defaults(&site.name, preset_for_name(&site.name));
+                    self.drafts.insert(id, draft);
+                }
+            }
             Msg::GlobalOutEdit(v) => self.global_out = v,
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
@@ -771,71 +796,6 @@ impl App {
         self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
         self.issues.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.settings = s;
-    }
-}
-
-/// Default yt-dlp path for new sites: the bundled binary on Windows/Linux, else PATH.
-fn default_exe() -> &'static str {
-    if cfg!(windows) {
-        r"bin\windows\yt-dlp\yt-dlp.exe"
-    } else if cfg!(target_os = "linux") {
-        "bin/linux/yt-dlp/yt-dlp"
-    } else {
-        "yt-dlp"
-    }
-}
-
-fn new_site(preset: Preset) -> NewSite {
-    let (name, url_template, checker, recorder, color) = match preset {
-        Preset::Twitch => (
-            "Twitch",
-            "https://twitch.tv/{username}",
-            "--cookies-from-browser firefox --dump-json {urls}",
-            r#"--cookies-from-browser firefox --fixup never --no-part -o "%(title)s [%(id)s].%(ext)s" {url}"#,
-            "#9146FF",
-        ),
-        Preset::Tiktok => (
-            "Tiktok",
-            "https://tiktok.com/@{username}/live",
-            "--cookies-from-browser firefox --dump-json {urls}",
-            r#"--cookies-from-browser firefox --downloader ffmpeg --no-part --retries 0 -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
-            "#FE2C55",
-        ),
-        Preset::Chaturbate => (
-            "Chaturbate",
-            "https://chaturbate.com/{username}",
-            "--dump-json {urls}",
-            r#"--fixup never --no-part --downloader-args ffmpeg:"-fps_mode passthrough -copyts -avoid_negative_ts make_zero" -o "%(title)s.%(ext)s" {url}"#,
-            "#F89C1C",
-        ),
-        Preset::Kick => (
-            "Kick",
-            "https://kick.com/{username}",
-            "--dump-json {urls}",
-            r#"--fixup never --no-part -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
-            "#53FC18",
-        ),
-        Preset::Blank => ("New site", "", "", "", DEFAULT_SITE_COLOR),
-    };
-    NewSite {
-        name: name.into(),
-        exe_path: default_exe().into(),
-        interval_secs: 60,
-        check_mode: CheckMode::DumpJson,
-        checker_args: checker.into(),
-        recorder_args: recorder.into(),
-        url_template: url_template.into(),
-        output_dir: String::new(),
-        folder_layout: FolderLayout::default(),
-        file_exists_grace_secs: DEFAULT_FILE_EXISTS_GRACE_SECS,
-        growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
-        stall_window_secs: if matches!(preset, Preset::Tiktok) {
-            TIKTOK_STALL_WINDOW_SECS
-        } else {
-            DEFAULT_STALL_WINDOW_SECS
-        },
-        file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
-        color: Some(color.into()),
     }
 }
 
