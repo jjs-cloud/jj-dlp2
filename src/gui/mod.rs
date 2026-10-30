@@ -760,7 +760,7 @@ fn new_site(preset: Preset) -> NewSite {
             "Tiktok",
             "https://tiktok.com/@{username}/live",
             "--cookies-from-browser firefox --dump-json {urls}",
-            r#"--cookies-from-browser firefox --no-part --retries 0 -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
+            r#"--cookies-from-browser firefox --downloader ffmpeg --no-part --retries 0 -o "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
             "#FE2C55",
         ),
         Preset::Chaturbate => (
