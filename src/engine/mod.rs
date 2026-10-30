@@ -276,13 +276,16 @@ impl Engine {
             Internal::RecorderGone(id) => {
                 let streamer = self.recorders.remove(&id).map(|h| h.streamer_id);
                 let done = self.tracked.lock().unwrap().remove(&id);
+                let stopped = done.as_ref().is_some_and(|t| t.stopping);
                 self.emit(Event::ProcessRemoved(id));
                 if let (Some(sid), Some(t)) = (streamer, done) {
                     self.on_recorder_exit(sid, t);
                 }
                 if let Some(sid) = streamer {
-                    if let Some(st) = self.states.get_mut(&sid) {
-                        st.live = false;
+                    if !stopped {
+                        if let Some(st) = self.states.get_mut(&sid) {
+                            st.live = false;
+                        }
                     }
                     self.emit_status(sid);
                 }
