@@ -1,4 +1,4 @@
-//! Policy layer: owns settings.json, applies edits and tells the engine to reload.
+//! Policy layer: owns the config files, applies edits and tells the engine to reload.
 
 use crate::api::{
     now_secs, CheckMode, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
@@ -611,9 +611,9 @@ impl Policy {
         id
     }
 
-    /// Writes settings.json; returns false (and logs) if the write failed.
+    /// Writes the config files; returns false (and logs) if the write failed.
     fn save(&self) -> bool {
-        match save_settings(&self.settings) {
+        match settings::save(&self.settings) {
             Ok(()) => true,
             Err(e) => {
                 self.log(format!("failed to save settings: {e}"));
@@ -622,7 +622,7 @@ impl Policy {
         }
     }
 
-    /// Saves settings.json, tells the engine to reload it and pushes a snapshot.
+    /// Saves the config files, tells the engine to reload them and pushes a snapshot.
     fn commit(&self) {
         if self.save() {
             self.engine.send(Command::Reload);
@@ -796,16 +796,6 @@ fn derive_name(url: &str) -> String {
     last.trim_start_matches('@').split(['?', '#']).next().unwrap_or(last).to_string()
 }
 
-/// Writes atomically via a temp file so a crash never truncates the settings.
-fn save_settings(settings: &Settings) -> std::io::Result<()> {
-    let dir = settings::config_dir();
-    std::fs::create_dir_all(&dir)?;
-    let tmp = dir.join("settings.json.tmp");
-    let json = serde_json::to_string_pretty(settings).map_err(std::io::Error::other)?;
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, settings::settings_path())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,13 +841,15 @@ mod tests {
     }
 
     #[test]
-    fn settings_without_log_fields_still_load() {
-        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
-        let s: Settings = serde_json::from_str(json).unwrap();
-        assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
-        assert_eq!(s.streamers[0].options, StreamerOptions::default());
-        assert_eq!(s.sites[0].folder_layout, FolderLayout::Streamer);
-        assert_eq!(s.streamers[0].options.folder_layout, None);
+    fn site_and_streamer_without_optional_fields_still_load() {
+        let sites = r#"[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1,"color":null}]"#;
+        let streamers = r#"[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]"#;
+        let sites: Vec<Site> = serde_json::from_str(sites).unwrap();
+        let streamers: Vec<Streamer> = serde_json::from_str(streamers).unwrap();
+        assert!(!sites[0].log_checker_stdout && !sites[0].log_checker_stderr);
+        assert_eq!(streamers[0].options, StreamerOptions::default());
+        assert_eq!(sites[0].folder_layout, FolderLayout::Streamer);
+        assert_eq!(streamers[0].options.folder_layout, None);
     }
 
     #[test]

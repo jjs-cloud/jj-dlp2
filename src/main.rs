@@ -11,7 +11,7 @@ mod testutil;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
-const USAGE: &str = "Usage: jj-dlp [--no-gui | --engine-only | --update [--rc]]\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads settings.json at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
+const USAGE: &str = "Usage: jj-dlp [--no-gui | --engine-only | --update [--rc]]\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
 
 enum Mode {
     Gui,

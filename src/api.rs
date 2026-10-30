@@ -144,7 +144,8 @@ pub struct StreamerOptions {
     pub folder_layout: Option<FolderLayout>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// In-memory view of the config files (settings.json, sites.json, streamers.json, state.json).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub next_id: u64,
     pub default_output_dir: String,
@@ -154,9 +155,9 @@ pub struct Settings {
 
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Re-reads settings.json and applies it; keeps the current settings if the file is invalid.
+    /// Re-reads the config files and applies them; keeps the current settings if the file is invalid.
     Reload,
-    /// Starts or stops recording a streamer without changing settings.json.
+    /// Starts or stops recording a streamer without changing the config files.
     SetStreamerEnabled { id: StreamerId, enabled: bool },
     /// Replaces a site's checker_args until cleared with `None`.
     #[allow(dead_code)]

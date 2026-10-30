@@ -211,7 +211,7 @@ impl Engine {
         }
     }
 
-    /// Applies settings.json: stops recorders for removed or disabled streamers and resyncs checkers.
+    /// Applies the config files: stops recorders for removed or disabled streamers and resyncs checkers.
     fn reload(&mut self) {
         let new = match settings::try_load() {
             Ok(s) => s,
@@ -636,8 +636,7 @@ mod e2e {
                 options: StreamerOptions { log_stdout: true, log_stderr: true, ..Default::default() },
             }],
         };
-        std::fs::create_dir_all(settings::config_dir()).unwrap();
-        std::fs::write(settings::settings_path(), serde_json::to_string(&settings).unwrap()).unwrap();
+        settings::save(&settings).unwrap();
     }
 
     async fn wait_for(p: &mut EngineParts, secs: u64, mut pred: impl FnMut(&Event) -> bool) -> Event {
@@ -746,8 +745,7 @@ mod e2e {
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };
-        std::fs::create_dir_all(settings::config_dir()).unwrap();
-        std::fs::write(settings::settings_path(), serde_json::to_string(&settings).unwrap()).unwrap();
+        settings::save(&settings).unwrap();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
