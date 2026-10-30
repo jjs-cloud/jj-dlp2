@@ -1582,7 +1582,6 @@ impl App {
             color_col = color_col.push(muted(&s, "Use a hex color such as #9146FF."));
         }
         let restart_group = column![
-            muted(&s, "Stream end and restart warnings"),
             row![
                 container(labeled(
                     "Consider a stream ended after x minutes:",
@@ -1591,7 +1590,7 @@ impl App {
                 .width(Length::FillPortion(1)),
                 container(labeled(
                     "Automatically clear restart warnings after x minutes (0 = never):",
-                    field("0", &d.restart_clear, DraftField::RestartClear)
+                    field("1440", &d.restart_clear, DraftField::RestartClear)
                 ))
                 .width(Length::FillPortion(1)),
                 container(labeled(
@@ -1600,11 +1599,8 @@ impl App {
                 ))
                 .width(Length::FillPortion(1)),
             ]
-            .spacing(10),
-            muted(
-                &s,
-                "A recorder that starts again within the stream-ended time after an unexpected exit counts as a restart."
-            ),
+            .spacing(10)
+            .align_y(Alignment::End),
         ]
         .spacing(4);
         let timing_color = row![

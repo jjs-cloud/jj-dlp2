@@ -118,7 +118,7 @@ pub const TIKTOK_STALL_WINDOW_SECS: u64 = 360;
 pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
 
 /// Defaults for the per-site restart warnings.
-pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 0;
+pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
 pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
