@@ -304,7 +304,13 @@ pub(crate) fn username_input_id(id: SiteId) -> iced::widget::Id {
     iced::widget::Id::from(format!("streamer-username-{:?}", id))
 }
 
+/// Scrollable id of the Sites settings list.
+pub(crate) fn sites_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("sites-scroll")
+}
+
 pub struct App {
+    pending_jump: Option<String>,
     client: PolicyClient,
     settings: Settings,
     kind: ThemeKind,
@@ -364,6 +370,7 @@ impl App {
             log: VecDeque::new(),
             drafts: HashMap::new(),
             new_streamer: HashMap::new(),
+            pending_jump: None,
             open_streamer_settings: HashSet::new(),
             settings_tab: SettingsTab::Sites,
             global_out: String::new(),
@@ -406,6 +413,17 @@ impl App {
         ])
     }
 
+    /// Scrolls the Sites list to the named site, if it exists.
+    fn jump_to_site(&self, name: &str) -> Option<Task<Msg>> {
+        let sites = &self.settings.sites;
+        let idx = sites.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
+        let y = if sites.len() > 1 { idx as f32 / (sites.len() - 1) as f32 } else { 0.0 };
+        Some(iced::widget::operation::snap_to(
+            sites_scroll_id(),
+            iced::widget::scrollable::RelativeOffset { x: 0.0, y },
+        ))
+    }
+
     fn push_log(&mut self, line: String) {
         self.log.push_front(format!("{}  {line}", uilog::stamp()));
         self.log.truncate(self.log_lines as usize);
@@ -422,6 +440,13 @@ impl App {
             Msg::Tick(_) => {
                 self.phase = (self.phase + 0.04) % 1.0;
                 self.now = now_secs();
+                // Jump on a later tick so the new editor is already laid out.
+                if let Some(name) = self.pending_jump.clone() {
+                    if let Some(task) = self.jump_to_site(&name) {
+                        self.pending_jump = None;
+                        return task;
+                    }
+                }
             }
             Msg::SetTab(t) => self.tab = t,
             Msg::SetSettingsTab(w) => self.settings_tab = w,
@@ -471,7 +496,14 @@ impl App {
                 // Named presets are added once; Blank can repeat.
                 let exists = !matches!(preset, Preset::Blank)
                     && self.settings.sites.iter().any(|s| s.name.eq_ignore_ascii_case(&site.name));
-                if !exists {
+                if exists {
+                    if let Some(task) = self.jump_to_site(&site.name) {
+                        return task;
+                    }
+                } else {
+                    if !matches!(preset, Preset::Blank) {
+                        self.pending_jump = Some(site.name.clone());
+                    }
                     self.client.send(PolicyCommand::AddSite(site));
                 }
             }

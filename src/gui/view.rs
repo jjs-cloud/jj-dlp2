@@ -1261,7 +1261,7 @@ impl App {
                 col = col.push(self.site_editor(s, site, d));
             }
         }
-        scrollable(col).height(Length::Fill).into()
+        scrollable(col).id(super::sites_scroll_id()).height(Length::Fill).into()
     }
 
     fn settings_general(&self, s: Skin) -> Element<'_, Msg> {
