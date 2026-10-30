@@ -169,6 +169,7 @@ fn compact_chips<'a>(
     st: &Streamer,
     status: StreamerStatus,
     stalled: bool,
+    restarts: u32,
 ) -> Row<'a, Msg> {
     let mut chips: Row<'a, Msg> = Row::new()
         .spacing(m.spacing / 2.0)
@@ -185,13 +186,8 @@ fn compact_chips<'a>(
     if status.live {
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
     }
-    if status.restarts > 0 {
-        chips = chips.push(mini_chip(
-            s,
-            m,
-            format!("RESTARTED {}×", status.restarts),
-            s.warn,
-        ));
+    if restarts > 0 {
+        chips = chips.push(mini_chip(s, m, format!("RESTARTED {restarts}×"), s.warn));
     }
     if st.options.log_stdout || st.options.log_stderr {
         chips = chips.push(mini_chip(s, m, "LOG", s.muted));
@@ -396,19 +392,22 @@ impl App {
     }
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
-        let title = row![
-            self.section_title(s, "STREAMERS"),
-            Space::new().width(Length::Fill),
-            toggler(self.compact)
-                .label("Compact view")
-                .on_toggle(Msg::SetCompact)
-                .text_size(12),
-        ]
-        .padding(iced::Padding {
-            right: 8.0,
-            ..Default::default()
-        })
-        .align_y(Alignment::Center);
+        let mut title = row![self.section_title(s, "STREAMERS"), Space::new().width(Length::Fill)]
+            .spacing(14)
+            .padding(iced::Padding {
+                right: 8.0,
+                ..Default::default()
+            })
+            .align_y(Alignment::Center);
+        if self.any_restart_chip() {
+            title = title.push(
+                button(btn_label(&s, "Clear restart warnings").size(12))
+                    .on_press(Msg::ClearRestarts)
+                    .padding([3.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            );
+        }
+        title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
@@ -533,6 +532,18 @@ impl App {
         self.recording_files.get(&id).is_some_and(|f| f.openable)
     }
 
+    /// The streamer's restart count, or 0 while it is below the site's threshold.
+    fn shown_restarts(&self, st: &Streamer) -> u32 {
+        let count = self.restarts.get(&st.id).copied().unwrap_or(0);
+        let threshold = self.settings.sites.iter().find(|x| x.id == st.site_id).map_or(1, |x| x.restart_threshold);
+        if count >= threshold { count } else { 0 }
+    }
+
+    /// True when at least one RESTARTED chip is showing.
+    fn any_restart_chip(&self) -> bool {
+        self.settings.streamers.iter().any(|st| self.shown_restarts(st) > 0)
+    }
+
     /// True when any active recording of the streamer is stalled.
     fn streamer_stalled(&self, id: StreamerId) -> bool {
         self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
@@ -629,7 +640,7 @@ impl App {
             )
             .width(m.time_w)
             .clip(true),
-            compact_chips(s, m, st, status, self.streamer_stalled(id)),
+            compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st)),
             toggler(st.enabled)
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
                 .size(m.toggler),
@@ -1065,8 +1076,9 @@ impl App {
         if !st.enabled {
             chips = chips.push(chip(s, "PAUSED", s.warn));
         }
-        if status.restarts > 0 {
-            chips = chips.push(chip(s, format!("RESTARTED {}×", status.restarts), s.warn));
+        let restarts = self.shown_restarts(st);
+        if restarts > 0 {
+            chips = chips.push(chip(s, format!("RESTARTED {restarts}×"), s.warn));
         }
         if st.options.log_stdout || st.options.log_stderr {
             chips = chips.push(chip(s, "LOGGING", s.muted));
@@ -1442,6 +1454,8 @@ impl App {
         let dirty = *d != SiteDraft::from_site(site);
         let valid = d.interval_secs().is_some()
             && d.end_after_minutes().is_some()
+            && d.restart_clear_minutes().is_some()
+            && d.restart_threshold().is_some()
             && d.file_checks_ok()
             && d.color_ok()
             && !d.name.trim().is_empty();
@@ -1567,12 +1581,34 @@ impl App {
         if !d.color_ok() {
             color_col = color_col.push(muted(&s, "Use a hex color such as #9146FF."));
         }
+        let restart_group = column![
+            muted(&s, "Stream end and restart warnings"),
+            row![
+                container(labeled(
+                    "Consider a stream ended after x minutes:",
+                    field("30", &d.end_after, DraftField::EndAfter)
+                ))
+                .width(Length::FillPortion(1)),
+                container(labeled(
+                    "Automatically clear restart warnings after x minutes (0 = never):",
+                    field("0", &d.restart_clear, DraftField::RestartClear)
+                ))
+                .width(Length::FillPortion(1)),
+                container(labeled(
+                    "Show restart warning from x restarts:",
+                    field("1", &d.restart_threshold, DraftField::RestartThreshold)
+                ))
+                .width(Length::FillPortion(1)),
+            ]
+            .spacing(10),
+            muted(
+                &s,
+                "A recorder that starts again within the stream-ended time after an unexpected exit counts as a restart."
+            ),
+        ]
+        .spacing(4);
         let timing_color = row![
-            container(labeled(
-                "Consider a stream ended after x minutes:",
-                field("30", &d.end_after, DraftField::EndAfter)
-            ))
-            .width(320),
+            container(restart_group).width(Length::Fill),
             color_col,
         ]
         .spacing(20)

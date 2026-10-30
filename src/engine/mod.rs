@@ -76,7 +76,6 @@ struct StreamState {
 /// Recording health of one streamer during the current live session.
 #[derive(Default)]
 struct Health {
-    restarts: u32,
     issue: Option<String>,
     last_exit: Option<String>,
 }
@@ -418,7 +417,6 @@ impl Engine {
         let live = self.states.get(&streamer_id).is_some_and(|s| s.live);
         if !live && !self.recording(streamer_id) {
             if let Some(h) = self.health.get_mut(&streamer_id) {
-                h.restarts = 0;
                 h.last_exit = None;
             }
             self.session_notes.retain(|(id, _)| *id != streamer_id);
@@ -448,7 +446,6 @@ impl Engine {
         let new_issue = problem.as_ref().filter(|p| p.hint.is_some()).map(Problem::summary);
         let repeat = {
             let h = self.health.entry(streamer_id).or_default();
-            h.restarts += 1;
             let repeat = h.last_exit.as_deref() == Some(key.as_str());
             h.last_exit = Some(key);
             if new_issue.is_some() {
@@ -516,7 +513,6 @@ impl Engine {
                 live: st.is_some_and(|s| s.live),
                 recording: self.recording(id),
                 last_checked: st.and_then(|s| s.last_checked),
-                restarts: self.health.get(&id).map_or(0, |h| h.restarts),
             },
         });
     }
@@ -624,6 +620,8 @@ mod e2e {
                 growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
                 stall_window_secs: DEFAULT_STALL_WINDOW_SECS,
                 file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
+                restart_clear_minutes: DEFAULT_RESTART_CLEAR_MINUTES,
+                restart_threshold: DEFAULT_RESTART_THRESHOLD,
                 color: None,
             }],
             streamers: vec![Streamer {
@@ -739,6 +737,8 @@ mod e2e {
                 growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
                 stall_window_secs: DEFAULT_STALL_WINDOW_SECS,
                 file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
+                restart_clear_minutes: DEFAULT_RESTART_CLEAR_MINUTES,
+                restart_threshold: DEFAULT_RESTART_THRESHOLD,
                 color: None,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
@@ -756,7 +756,6 @@ mod e2e {
             let ev = wait_for(&mut p, 40, |e| matches!(e, Event::StreamerIssue { issue: Some(m), .. } if m.contains("ffmpeg"))).await;
             let Event::StreamerIssue { id, .. } = ev else { unreachable!() };
             assert_eq!(id, 4);
-            wait_for(&mut p, 20, |e| matches!(e, Event::StreamerStatus { status, .. } if status.restarts >= 1)).await;
 
             p.client.send(Command::Shutdown);
             let thread = p.thread;

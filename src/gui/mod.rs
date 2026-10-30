@@ -107,6 +107,8 @@ pub struct SiteDraft {
     pub exe: String,
     pub interval: String,
     pub end_after: String,
+    pub restart_clear: String,
+    pub restart_threshold: String,
     pub file_exists_grace: String,
     pub growth_grace: String,
     pub stall_window: String,
@@ -130,6 +132,8 @@ impl SiteDraft {
             exe: s.exe_path.clone(),
             interval: s.interval_secs.to_string(),
             end_after: s.end_after_minutes.to_string(),
+            restart_clear: s.restart_clear_minutes.to_string(),
+            restart_threshold: s.restart_threshold.to_string(),
             file_exists_grace: s.file_exists_grace_secs.to_string(),
             growth_grace: s.growth_grace_secs.to_string(),
             stall_window: s.stall_window_secs.to_string(),
@@ -163,6 +167,15 @@ impl SiteDraft {
 
     pub fn end_after_minutes(&self) -> Option<u64> {
         self.end_after.trim().parse().ok().filter(|v| *v >= 1)
+    }
+
+    /// Minutes of quiet after which restart warnings clear; 0 turns auto-clear off.
+    pub fn restart_clear_minutes(&self) -> Option<u64> {
+        self.restart_clear.trim().parse().ok()
+    }
+
+    pub fn restart_threshold(&self) -> Option<u32> {
+        self.restart_threshold.trim().parse().ok().filter(|v| *v >= 1)
     }
 
     pub fn file_exists_grace_secs(&self) -> Option<u64> {
@@ -201,6 +214,8 @@ pub enum DraftField {
     Exe(String),
     Interval(String),
     EndAfter(String),
+    RestartClear(String),
+    RestartThreshold(String),
     FileExistsGrace(String),
     GrowthGrace(String),
     StallWindow(String),
@@ -252,6 +267,7 @@ pub enum Msg {
     GlobalOutEdit(String),
     GlobalOutSave,
     Recheck,
+    ClearRestarts,
     CopyText(String),
     ToggleProc(RecorderId),
     SetCompact(bool),
@@ -289,6 +305,7 @@ pub struct App {
     kind: ThemeKind,
     tab: Tab,
     statuses: HashMap<StreamerId, StreamerStatus>,
+    restarts: HashMap<StreamerId, u32>,
     live_since: HashMap<StreamerId, u64>,
     last_live: HashMap<StreamerId, u64>,
     checks: HashMap<SiteId, CheckInfo>,
@@ -331,6 +348,7 @@ impl App {
             kind: prefs::load_theme(),
             tab: Tab::Monitor,
             statuses: HashMap::new(),
+            restarts: HashMap::new(),
             live_since: HashMap::new(),
             last_live: HashMap::new(),
             checks: HashMap::new(),
@@ -459,6 +477,8 @@ impl App {
                         DraftField::Exe(v) => d.exe = v,
                         DraftField::Interval(v) => d.interval = v,
                         DraftField::EndAfter(v) => d.end_after = v,
+                        DraftField::RestartClear(v) => d.restart_clear = v,
+                        DraftField::RestartThreshold(v) => d.restart_threshold = v,
                         DraftField::FileExistsGrace(v) => d.file_exists_grace = v,
                         DraftField::GrowthGrace(v) => d.growth_grace = v,
                         DraftField::StallWindow(v) => d.stall_window = v,
@@ -498,8 +518,14 @@ impl App {
                         d.stall_window_secs(),
                         d.file_check_interval_secs(),
                     );
-                    if let (Some(interval), Some(end_after), true, (Some(exists), Some(growth), Some(stall), Some(every))) =
-                        (d.interval_secs(), d.end_after_minutes(), d.color_ok(), checks)
+                    let restarts = (d.restart_clear_minutes(), d.restart_threshold());
+                    if let (
+                        Some(interval),
+                        Some(end_after),
+                        true,
+                        (Some(exists), Some(growth), Some(stall), Some(every)),
+                        (Some(restart_clear), Some(restart_threshold)),
+                    ) = (d.interval_secs(), d.end_after_minutes(), d.color_ok(), checks, restarts)
                     {
                         self.client.send(PolicyCommand::UpdateSite(Site {
                             id,
@@ -519,6 +545,8 @@ impl App {
                             growth_grace_secs: growth,
                             stall_window_secs: stall,
                             file_check_interval_secs: every,
+                            restart_clear_minutes: restart_clear,
+                            restart_threshold,
                             color: d.site_color(),
                         }));
                     }
@@ -532,6 +560,7 @@ impl App {
             Msg::GlobalOutEdit(v) => self.global_out = v,
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
+            Msg::ClearRestarts => self.client.send(PolicyCommand::ClearRestarts),
             Msg::CopyText(text) => return iced::clipboard::write(text),
             Msg::SetCompact(on) => {
                 self.compact = on;
@@ -635,6 +664,7 @@ impl App {
             PolicyEvent::LiveSince(map) => self.live_since = map,
             PolicyEvent::LastLive(map) => self.last_live = map,
             PolicyEvent::RecordingFiles(map) => self.recording_files = map,
+            PolicyEvent::Restarts(map) => self.restarts = map,
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);

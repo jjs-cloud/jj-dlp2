@@ -2,7 +2,8 @@
 
 use crate::api::{
     now_secs, CheckMode, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
-    Streamer, StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES, LOG_HISTORY_MAX,
+    Streamer, StreamerId, StreamerOptions, DEFAULT_END_AFTER_MINUTES, DEFAULT_RESTART_CLEAR_MINUTES,
+    DEFAULT_RESTART_THRESHOLD, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
 use crate::settings;
@@ -17,11 +18,13 @@ mod gql;
 pub mod layout;
 pub mod live;
 mod outpath;
+mod restarts;
 pub mod uilog;
 pub mod update;
 use files::{FileTracker, Thresholds};
 pub use files::RecordingFile;
 use live::LiveTracker;
+use restarts::RestartTracker;
 use update::UpdateConfig;
 
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
@@ -62,6 +65,8 @@ pub enum PolicyCommand {
     OpenRecording(RecorderId),
     /// Re-runs the engine's setup checks.
     Recheck,
+    /// Resets every streamer's restart count.
+    ClearRestarts,
     /// Looks for a new release now, even when automatic checks are off.
     CheckForUpdate,
     /// Downloads the available update, then stops the engine and restarts into it.
@@ -86,6 +91,8 @@ pub enum PolicyEvent {
     LastLive(HashMap<StreamerId, u64>),
     /// File state of every active recording; sent whenever it changes.
     RecordingFiles(HashMap<RecorderId, RecordingFile>),
+    /// Streamer id to its restart count; streamers with none are absent.
+    Restarts(HashMap<StreamerId, u32>),
 }
 
 /// Updater state changes reported to front ends.
@@ -175,6 +182,7 @@ struct Policy {
     installing: bool,
     upd_tx: UnboundedSender<UpdateMsg>,
     files: FileTracker,
+    restarts: RestartTracker,
     last_files: HashMap<RecorderId, RecordingFile>,
     file_tx: UnboundedSender<FileJob>,
     gql_tx: UnboundedSender<GqlJob>,
@@ -202,6 +210,7 @@ impl Policy {
             installing: false,
             upd_tx,
             files: FileTracker::default(),
+            restarts: RestartTracker::default(),
             last_files: HashMap::new(),
             file_tx,
             gql_tx,
@@ -221,6 +230,8 @@ impl Policy {
         let mut cmds_open = true;
         let mut update_tick = tokio::time::interval(UPDATE_CHECK_EVERY);
         update_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut restart_tick = tokio::time::interval(Duration::from_secs(30));
+        restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
         self.log(format!("--- session started (v{}) ---", update::CURRENT));
         self.emit_settings();
@@ -251,6 +262,7 @@ impl Policy {
                 },
                 _ = &mut engine_done => break,
                 _ = update_tick.tick() => self.check_now(),
+                _ = restart_tick.tick() => self.expire_restarts(),
                 msg = update_msgs.recv() => {
                     if let Some(m) = msg {
                         self.on_update_msg(m);
@@ -282,6 +294,7 @@ impl Policy {
                 if let (Some(at), Some((site_id, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
                     self.live.status(*id, site_id, at, status.live, secs);
                 }
+                self.on_restart_status(*id, status.recording);
             }
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
@@ -303,7 +316,35 @@ impl Policy {
         Some(Thresholds::from_site(site))
     }
 
+    /// Feeds a streamer's recording flag to the restart tracker.
+    fn on_restart_status(&mut self, id: StreamerId, recording: bool) {
+        let Some((_, end_after_secs)) = live::lookup(&self.settings, id) else { return };
+        let enabled = self.settings.streamers.iter().any(|s| s.id == id && s.enabled);
+        self.restarts.on_status(id, recording, enabled, Duration::from_secs(end_after_secs), Instant::now());
+        self.flush_restarts();
+    }
+
+    /// Clears restart counts older than each site's auto-clear time.
+    fn expire_restarts(&mut self) {
+        let settings = &self.settings;
+        self.restarts.expire(Instant::now(), |id| restart_clear_minutes(settings, id));
+        self.flush_restarts();
+    }
+
+    fn flush_restarts(&mut self) {
+        if self.restarts.take_dirty() {
+            self.emit_restarts();
+        }
+    }
+
+    fn emit_restarts(&self) {
+        self.emit(PolicyEvent::Restarts(self.restarts.counts()));
+    }
+
     fn on_process_update(&mut self, p: &ProcessInfo) {
+        if p.state == RecorderState::Stopping {
+            self.restarts.stopping(p.streamer_id);
+        }
         match (&p.state, &p.root) {
             (RecorderState::Exited(_), _) | (_, None) => {
                 self.recorder_pids.remove(&p.id);
@@ -452,7 +493,9 @@ impl Policy {
     fn prune_live(&mut self) {
         let settings = &self.settings;
         self.live.retain(|id| live::lookup(settings, id).is_some());
+        self.restarts.retain(|id| live::lookup(settings, id).is_some());
         self.flush_live();
+        self.flush_restarts();
     }
 
     fn emit(&self, ev: PolicyEvent) {
@@ -595,6 +638,7 @@ impl Policy {
                 self.emit_update_config();
                 self.emit_live();
                 self.emit_last_live();
+                self.emit_restarts();
                 if let Some(a) = &self.available {
                     self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
                 }
@@ -619,6 +663,8 @@ impl Policy {
                     growth_grace_secs: n.growth_grace_secs,
                     stall_window_secs: n.stall_window_secs,
                     file_check_interval_secs: n.file_check_interval_secs,
+                    restart_clear_minutes: DEFAULT_RESTART_CLEAR_MINUTES,
+                    restart_threshold: DEFAULT_RESTART_THRESHOLD,
                     color: n.color,
                 });
                 self.commit();
@@ -671,6 +717,9 @@ impl Policy {
             PolicyCommand::SetStreamerEnabled { id, enabled } => {
                 if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
                     s.enabled = enabled;
+                    if !enabled {
+                        self.restarts.stopping(id);
+                    }
                     if self.save() {
                         self.engine.send(Command::SetStreamerEnabled { id, enabled });
                     }
@@ -700,6 +749,10 @@ impl Policy {
             }
             PolicyCommand::OpenRecording(id) => self.open_recording(id),
             PolicyCommand::Recheck => self.engine.send(Command::Recheck),
+            PolicyCommand::ClearRestarts => {
+                self.restarts.clear();
+                self.flush_restarts();
+            }
             PolicyCommand::CheckForUpdate => self.run_check(true),
             PolicyCommand::InstallUpdate => self.install_update(),
             PolicyCommand::SetUpdateConfig(cfg) => {
@@ -713,6 +766,12 @@ impl Policy {
             PolicyCommand::Shutdown => self.engine.send(Command::Shutdown),
         }
     }
+}
+
+/// The streamer's site auto-clear time for restart warnings, in minutes; 0 when unknown.
+fn restart_clear_minutes(settings: &Settings, id: StreamerId) -> u64 {
+    let site_id = settings.streamers.iter().find(|s| s.id == id).map(|s| s.site_id);
+    site_id.and_then(|sid| settings.sites.iter().find(|s| s.id == sid)).map_or(0, |s| s.restart_clear_minutes)
 }
 
 /// The site's output folder, or the global one when the site has none.
@@ -770,6 +829,8 @@ mod tests {
             growth_grace_secs: 60,
             stall_window_secs: 120,
             file_check_interval_secs: 30,
+            restart_clear_minutes: 0,
+            restart_threshold: 1,
             color: None,
         }
     }
@@ -791,7 +852,7 @@ mod tests {
 
     #[test]
     fn settings_without_log_fields_still_load() {
-        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
+        let json = r#"{"next_id":3,"default_output_dir":"o","sites":[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1}],"streamers":[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.sites[0].log_checker_stdout && !s.sites[0].log_checker_stderr);
         assert_eq!(s.streamers[0].options, StreamerOptions::default());

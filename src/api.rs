@@ -96,6 +96,10 @@ pub struct Site {
     pub stall_window_secs: u64,
     /// Seconds between checks of the recording file.
     pub file_check_interval_secs: u64,
+    /// Minutes after the latest restart at which restart warnings clear themselves; 0 keeps them until cleared by hand.
+    pub restart_clear_minutes: u64,
+    /// Restarts needed before the RESTARTED chip shows.
+    pub restart_threshold: u32,
     /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
     pub color: Option<String>,
 }
@@ -112,6 +116,10 @@ pub const DEFAULT_GROWTH_GRACE_SECS: u64 = 60;
 pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
 pub const TIKTOK_STALL_WINDOW_SECS: u64 = 360;
 pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
+
+/// Defaults for the per-site restart warnings.
+pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 0;
+pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Streamer {
@@ -168,8 +176,6 @@ pub struct StreamerStatus {
     pub recording: bool,
     /// Unix seconds of the last check that covered this streamer.
     pub last_checked: Option<u64>,
-    /// Unexpected recorder exits since the stream went live.
-    pub restarts: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
