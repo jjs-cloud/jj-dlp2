@@ -1230,7 +1230,7 @@ impl App {
     }
 
     fn settings_sites(&self, s: Skin) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(12).padding(iced::Padding {
+        let mut col = Column::new().spacing(10).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
         });
@@ -1252,7 +1252,6 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        col = col.push(add);
         if self.settings.sites.is_empty() {
             col = col.push(muted(&s, "Pick a preset to start; every field stays editable afterwards."));
         }
@@ -1261,7 +1260,8 @@ impl App {
                 col = col.push(self.site_editor(s, site, d));
             }
         }
-        scrollable(col).id(super::sites_scroll_id()).height(Length::Fill).into()
+        let list = scrollable(col).id(super::sites_scroll_id()).height(Length::Fill);
+        column![add, list].spacing(12).height(Length::Fill).into()
     }
 
     fn settings_general(&self, s: Skin) -> Element<'_, Msg> {
@@ -1438,7 +1438,7 @@ impl App {
     fn site_editor<'a>(&'a self, s: Skin, site: &'a Site, d: &'a SiteDraft) -> Element<'a, Msg> {
         let id = site.id;
         let labeled = |label: &'static str, input: Element<'a, Msg>| -> Element<'a, Msg> {
-            column![muted(&s, label), input].spacing(4).into()
+            column![muted(&s, label), input].spacing(2).into()
         };
         let field = |placeholder: &'static str,
                      value: &'a str,
@@ -1446,13 +1446,12 @@ impl App {
          -> Element<'a, Msg> {
             text_input(placeholder, value)
                 .on_input(move |v| Msg::Draft(id, f(v)))
-                .padding(8)
+                .padding(5)
+                .size(13)
                 .style(skin::input(s))
                 .into()
         };
-        let hinted = |input: Element<'a, Msg>, hint: &'static str| -> Element<'a, Msg> {
-            column![input, muted(&s, hint)].spacing(4).into()
-        };
+        let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
         let dirty = *d != SiteDraft::from_site(site);
         let valid = d.interval_secs().is_some()
             && d.end_after_minutes().is_some()
@@ -1462,100 +1461,148 @@ impl App {
             && d.color_ok()
             && !d.name.trim().is_empty();
 
-        let top = row![
-            container(labeled(
-                "Site name",
-                field("Site name", &d.name, DraftField::Name)
-            ))
-            .width(Length::Fill),
-            container(labeled(
-                "Check every (seconds, min 5)",
-                field("60", &d.interval, DraftField::Interval)
-            ))
-            .width(210),
-            container(labeled(
-                "Checker mode",
-                pick_list(CheckMode::ALL, Some(d.mode), move |m| Msg::Draft(
-                    id,
-                    DraftField::Mode(m)
-                ))
-                .padding(8)
-                .width(Length::Fill)
-                .into(),
-            ))
-            .width(170),
+        let identity = row![
+            cell(
+                labeled("Site name", field("Site name", &d.name, DraftField::Name)),
+                Length::FillPortion(2)
+            ),
+            cell(
+                labeled(
+                    "Check every (seconds, min 5)",
+                    field("60", &d.interval, DraftField::Interval)
+                ),
+                Length::Fixed(190.0)
+            ),
+            cell(
+                labeled(
+                    "Checker mode",
+                    pick_list(CheckMode::ALL, Some(d.mode), move |m| Msg::Draft(
+                        id,
+                        DraftField::Mode(m)
+                    ))
+                    .padding(5)
+                    .text_size(13)
+                    .width(Length::Fill)
+                    .into(),
+                ),
+                Length::Fixed(150.0)
+            ),
+            cell(
+                labeled(
+                    "Path to yt-dlp executable",
+                    field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)
+                ),
+                Length::FillPortion(3)
+            ),
         ]
-        .spacing(10);
+        .spacing(8);
 
-        let count = self
-            .settings
-            .streamers
-            .iter()
-            .filter(|x| x.site_id == id)
-            .count();
-        let actions = row![
-            button(btn_label(&s, "Save changes").size(13))
-                .on_press_maybe((dirty && valid).then_some(Msg::SaveSite(id)))
-                .padding([8.0, 16.0])
-                .style(skin::btn(s, BtnKind::Primary)),
-            button(t(&s, "Revert").size(13))
-                .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
-                .padding([8.0, 16.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            if dirty {
-                chip(s, "unsaved changes", s.warn)
-            } else {
-                Space::new().into()
-            },
-            Space::new().width(Length::Fill),
-            muted(&s, format!("{count} streamer(s)")),
-            button(t(&s, "Remove site").size(13))
-                .on_press(Msg::RemoveSite(id))
-                .padding([8.0, 16.0])
-                .style(skin::btn(s, BtnKind::Danger)),
+        let base = layout::base_dir(&d.output, &self.settings.default_output_dir);
+        let effective = layout::preview(base, d.folder_layout, &d.name, None).to_string();
+        let output_row = row![
+            cell(
+                labeled(
+                    "Output folder (blank = global)",
+                    field("Use the global output folder", &d.output, DraftField::Output)
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Recording subfolders",
+                    pick_list(FolderLayout::ALL, Some(d.folder_layout), move |l| Msg::Draft(
+                        id,
+                        DraftField::FolderLayout(l)
+                    ))
+                    .padding(5)
+                    .text_size(13)
+                    .width(Length::Fill)
+                    .into(),
+                ),
+                Length::Fixed(200.0)
+            ),
+            cell(
+                labeled(
+                    "Effective path",
+                    container(muted(&s, effective)).padding([5.0, 0.0]).into()
+                ),
+                Length::FillPortion(1)
+            ),
         ]
-        .spacing(10)
-        .align_y(Alignment::Center);
+        .spacing(8);
 
-        let log = |label: &'static str, on: bool, f: fn(bool) -> DraftField| {
-            toggler(on)
-                .label(label)
-                .on_toggle(move |v| Msg::Draft(id, f(v)))
-                .text_size(12)
-        };
-        let logging = row![
-            log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
-            log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
+        let timing = row![
+            cell(
+                labeled(
+                    "Consider a stream ended after (minutes)",
+                    field("30", &d.end_after, DraftField::EndAfter)
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Clear restart warnings after (minutes, 0 = never)",
+                    field("1440", &d.restart_clear, DraftField::RestartClear)
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Warning threshold (restarts)",
+                    field("1", &d.restart_threshold, DraftField::RestartThreshold)
+                ),
+                Length::FillPortion(1)
+            ),
         ]
-        .spacing(24);
+        .spacing(8)
+        .align_y(Alignment::End);
 
-        let paths = row![
-            container(labeled(
-                "Path to yt-dlp executable",
-                field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)
-            ))
-            .width(Length::FillPortion(1)),
-            container(labeled(
-                "Output folder (blank = global)",
-                field(
-                    "Use the global output folder",
-                    &d.output,
-                    DraftField::Output
-                )
-            ))
-            .width(Length::FillPortion(1)),
+        let file_checks = column![
+            row![
+                cell(
+                    labeled(
+                        "Warn if file doesn't exist after (seconds)",
+                        field("60", &d.file_exists_grace, DraftField::FileExistsGrace)
+                    ),
+                    Length::FillPortion(1)
+                ),
+                cell(
+                    labeled(
+                        "Warn if file doesn't start growing after (seconds)",
+                        field("60", &d.growth_grace, DraftField::GrowthGrace)
+                    ),
+                    Length::FillPortion(1)
+                ),
+                cell(
+                    labeled(
+                        "Warn if file stops growing for (seconds)",
+                        field("120", &d.stall_window, DraftField::StallWindow)
+                    ),
+                    Length::FillPortion(1)
+                ),
+                cell(
+                    labeled(
+                        "Check for growth every (seconds)",
+                        field("30", &d.file_check_interval, DraftField::FileCheckInterval)
+                    ),
+                    Length::FillPortion(1)
+                ),
+            ]
+            .spacing(8),
         ]
-        .spacing(10);
+        .spacing(2);
 
         let swatch = if d.use_theme_color { s.accent2 } else { skin::parse_hex(&d.color).unwrap_or(s.muted) };
-        let color_row = row![
-            container(Space::new().width(26).height(26)).style(skin::dot(swatch, 0.0)),
+        let mut color_row: Row<'a, Msg> = row![
+            muted(&s, "Site color"),
+            container(Space::new().width(22).height(22)).style(skin::dot(swatch, 0.0)),
             text_input("#RRGGBB", &d.color)
                 .on_input_maybe(
                     (!d.use_theme_color).then(|| move |v: String| Msg::Draft(id, DraftField::Color(v)))
                 )
-                .padding(8)
-                .width(120)
+                .padding(5)
+                .size(13)
+                .width(100)
                 .style(skin::input(s)),
             toggler(d.use_theme_color)
                 .label("Use theme color")
@@ -1564,91 +1611,47 @@ impl App {
         ]
         .spacing(10)
         .align_y(Alignment::Center);
-        let mut swatches: Row<'a, Msg> = Row::new().spacing(6).align_y(Alignment::Center);
         for hex in SITE_SWATCHES {
             let c = skin::parse_hex(hex).unwrap_or(s.muted);
             let selected = !d.use_theme_color && skin::parse_hex(&d.color) == Some(c);
-            swatches = swatches.push(
-                button(Space::new().width(18).height(18))
+            color_row = color_row.push(
+                button(Space::new().width(16).height(16))
                     .on_press(Msg::Draft(id, DraftField::PickColor(hex.to_string())))
                     .padding(0)
                     .style(skin::swatch(s, c, selected)),
             );
         }
-        let mut color_col = Column::new()
-            .spacing(4)
-            .push(muted(&s, "Site color"))
-            .push(color_row)
-            .push(swatches);
         if !d.color_ok() {
-            color_col = color_col.push(muted(&s, "Use a hex color such as #9146FF."));
+            color_row = color_row.push(muted(&s, "Use a hex color such as #9146FF."));
         }
-        let restart_group = column![
-            row![
-                container(labeled(
-                    "Consider a stream ended after x minutes:",
-                    field("30", &d.end_after, DraftField::EndAfter)
-                ))
-                .width(Length::FillPortion(1)),
-                container(labeled(
-                    "Automatically clear restart warnings after x minutes (0 = never):",
-                    field("1440", &d.restart_clear, DraftField::RestartClear)
-                ))
-                .width(Length::FillPortion(1)),
-                container(labeled(
-                    "Show restart warning from x restarts:",
-                    field("1", &d.restart_threshold, DraftField::RestartThreshold)
-                ))
-                .width(Length::FillPortion(1)),
-            ]
-            .spacing(10)
-            .align_y(Alignment::End),
-        ]
-        .spacing(4);
-        let timing_color = row![
-            container(restart_group).width(Length::Fill),
-            color_col,
-        ]
-        .spacing(20)
-        .align_y(Alignment::Start);
 
-        let file_checks = column![
-            muted(&s, "Recording file checks (seconds)"),
-            row![
-                container(labeled(
-                    "File must exist after",
-                    field("60", &d.file_exists_grace, DraftField::FileExistsGrace)
-                ))
-                .width(Length::FillPortion(1)),
-                container(labeled(
-                    "Check growth after",
-                    field("60", &d.growth_grace, DraftField::GrowthGrace)
-                ))
-                .width(Length::FillPortion(1)),
-                container(labeled(
-                    "Stalled after no growth for",
-                    field("120", &d.stall_window, DraftField::StallWindow)
-                ))
-                .width(Length::FillPortion(1)),
-                container(labeled(
-                    "Check every (min 5)",
-                    field("30", &d.file_check_interval, DraftField::FileCheckInterval)
-                ))
-                .width(Length::FillPortion(1)),
-            ]
-            .spacing(10),
-            muted(
-                &s,
-                "Timers start once the recording file's path is verified; a missing or stalled file shows a STALLED chip."
+        let templates = row![
+            cell(
+                labeled(
+                    "URL template ( {username} = the streamer's username )",
+                    field(
+                        "https://twitch.tv/{username}",
+                        &d.url_template,
+                        DraftField::UrlTemplate
+                    )
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Checker arguments ( {urls} = list of streamer's URL )",
+                    field("--dump-json {urls}", &d.checker, DraftField::Checker)
+                ),
+                Length::FillPortion(1)
             ),
         ]
-        .spacing(4);
+        .spacing(8);
 
-        let mut recorder_col = column![
-            field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder),
-            muted(&s, "{url} is the live stream URL (appended if missing)."),
-        ]
-        .spacing(4);
+        let mut recorder_col = column![labeled(
+            "Recorder arguments ( {url} = the streamer's URL )",
+            field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)
+        )]
+        .spacing(2);
         if !has_no_part(&d.recorder) {
             recorder_col = recorder_col.push(
                 iced::widget::text("Add --no-part: otherwise the recording file can't be verified, so Open and STALLED checks stay off.")
@@ -1658,62 +1661,57 @@ impl App {
             );
         }
 
-        let base = layout::base_dir(&d.output, &self.settings.default_output_dir);
-        let mut folders = column![
-            labeled(
-                "Recording subfolders",
-                pick_list(FolderLayout::ALL, Some(d.folder_layout), move |l| Msg::Draft(
-                    id,
-                    DraftField::FolderLayout(l)
-                ))
-                .padding(8)
-                .width(260)
-                .into(),
-            ),
-            muted(
-                &s,
-                format!(
-                    "Effective path: {}",
-                    layout::preview(base, d.folder_layout, &d.name, None)
-                )
-            ),
+        let count = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|x| x.site_id == id)
+            .count();
+        let log = |label: &'static str, on: bool, f: fn(bool) -> DraftField| {
+            toggler(on)
+                .label(label)
+                .on_toggle(move |v| Msg::Draft(id, f(v)))
+                .text_size(12)
+        };
+        let actions = row![
+            log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
+            log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
+            Space::new().width(Length::Fill),
+            if dirty {
+                chip(s, "unsaved changes", s.warn)
+            } else {
+                Space::new().into()
+            },
+            muted(&s, format!("{count} streamer(s)")),
+            button(btn_label(&s, "Save changes").size(13))
+                .on_press_maybe((dirty && valid).then_some(Msg::SaveSite(id)))
+                .padding([5.0, 12.0])
+                .style(skin::btn(s, BtnKind::Primary)),
+            button(t(&s, "Revert").size(13))
+                .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
+                .padding([5.0, 12.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "Remove site").size(13))
+                .on_press(Msg::RemoveSite(id))
+                .padding([5.0, 12.0])
+                .style(skin::btn(s, BtnKind::Danger)),
         ]
-        .spacing(4);
-        if d.folder_layout != FolderLayout::Flat && layout::has_absolute_template(&d.recorder) {
-            folders = folders.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
-        }
+        .spacing(10)
+        .align_y(Alignment::Center);
 
-        let form = column![
-            top,
-            timing_color,
-            file_checks,
-            paths,
-            folders,
-            labeled(
-                "URL template",
-                hinted(
-                    field(
-                        "https://twitch.tv/{username}",
-                        &d.url_template,
-                        DraftField::UrlTemplate
-                    ),
-                    "{username} is replaced with the name entered when adding a streamer."
-                )
-            ),
-            labeled(
-                "Checker command arguments",
-                hinted(
-                    field("--dump-json {urls}", &d.checker, DraftField::Checker),
-                    "{urls} expands to every monitored URL (appended if missing)."
-                )
-            ),
-            labeled("Recorder command arguments", recorder_col.into()),
-            logging,
-            actions,
-        ]
-        .spacing(10);
+        let mut form = Column::new().spacing(6).push(identity).push(output_row);
+        if d.folder_layout != FolderLayout::Flat && layout::has_absolute_template(&d.recorder) {
+            form = form.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
+        }
+        let form = form
+            .push(timing)
+            .push(color_row)
+            .push(file_checks)
+            .push(templates)
+            .push(recorder_col)
+            .push(actions);
         container(form)
-            .padding(14)
+            .padding(10)
             .width(Length::Fill)
             .style(skin::card(s, None))
             .into()
