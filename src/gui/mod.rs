@@ -299,6 +299,11 @@ pub struct CheckInfo {
     pub problem: Option<String>,
 }
 
+/// Widget id of a site's "Streamer username" input.
+pub(crate) fn username_input_id(id: SiteId) -> iced::widget::Id {
+    iced::widget::Id::from(format!("streamer-username-{:?}", id))
+}
+
 pub struct App {
     client: PolicyClient,
     settings: Settings,
@@ -441,6 +446,7 @@ impl App {
                         self.new_streamer.insert(id, (name, username));
                     }
                 }
+                return iced::widget::operation::focus(username_input_id(id));
             }
             Msg::RemoveStreamer(id) => self.client.send(PolicyCommand::RemoveStreamer(id)),
             Msg::ToggleStreamer(id, enabled) => self.client.send(PolicyCommand::SetStreamerEnabled { id, enabled }),

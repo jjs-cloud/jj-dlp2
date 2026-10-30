@@ -997,9 +997,9 @@ impl App {
         }
         let head = head.push(Space::new().width(Length::Fill)).push(check);
 
-        let mut col = Column::new().spacing(8).push(head);
+        let mut top = Column::new().spacing(8).push(head);
         if let Some(p) = self.checks.get(&site.id).and_then(|c| c.problem.as_deref()) {
-            col = col.push(self.warning_line(s, p));
+            top = top.push(self.warning_line(s, p));
         }
         let streamers: Vec<&Streamer> = self
             .settings
@@ -1008,10 +1008,10 @@ impl App {
             .filter(|x| x.site_id == site.id)
             .collect();
         if streamers.is_empty() {
-            col = col.push(muted(&s, "No streamers yet; add one below."));
+            top = top.push(muted(&s, "No streamers yet; add one below."));
         }
         for st in streamers {
-            col = col.push(self.streamer_row(s, st));
+            top = top.push(self.streamer_row(s, st));
         }
         let (name, username) = self.new_streamer.get(&site.id).cloned().unwrap_or_default();
         let id = site.id;
@@ -1023,6 +1023,7 @@ impl App {
                 .width(230)
                 .style(skin::input(s)),
             text_input("Streamer username", &username)
+                .id(super::username_input_id(id))
                 .on_input(move |v| Msg::NewStreamerUsername(id, v))
                 .on_submit(Msg::AddStreamer(id))
                 .padding(8)
@@ -1034,7 +1035,8 @@ impl App {
                 .style(skin::btn(s, BtnKind::Primary)),
         ]
         .spacing(8);
-        col = col.push(add);
+        // Add row sits at a fixed index so its input keeps focus when streamers are added.
+        let col = Column::new().spacing(8).push(top).push(add);
         container(col)
             .padding(14)
             .width(Length::Fill)
