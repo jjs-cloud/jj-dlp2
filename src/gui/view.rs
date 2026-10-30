@@ -1649,7 +1649,7 @@ impl App {
 
         let mut recorder_col = column![labeled(
             "Recorder arguments ( {url} = the streamer's URL )",
-            field("-o \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)
+            field("--output \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)
         )]
         .spacing(2);
         if !has_no_part(&d.recorder) {
@@ -1744,8 +1744,8 @@ impl App {
     }
 }
 
-/// Shown when an absolute `-o` path stops the subfolder setting from applying.
-const ABSOLUTE_TEMPLATE_WARNING: &str = "The recorder arguments use an absolute -o path, so subfolders are not applied.";
+/// Shown when an absolute `--output` path stops the subfolder setting from applying.
+const ABSOLUTE_TEMPLATE_WARNING: &str = "The recorder arguments use an absolute --output path, so subfolders are not applied.";
 
 fn warn_text<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).size(12).color(s.warn)

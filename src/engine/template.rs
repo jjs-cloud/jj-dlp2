@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn splits_quotes() {
-        assert_eq!(tokenize(r#"-o "a b/%(id)s" --x 'y z'"#), vec!["-o", "a b/%(id)s", "--x", "y z"]);
+        assert_eq!(tokenize(r#"--output "a b/%(id)s" --x 'y z'"#), vec!["--output", "a b/%(id)s", "--x", "y z"]);
     }
 
     #[test]
@@ -87,8 +87,8 @@ mod tests {
         let one = vec!["U".to_string()];
         assert_eq!(expand("--a {urls}", "urls", &urls), vec!["--a", "u1", "u2"]);
         assert_eq!(expand("--a", "urls", &urls), vec!["--a", "u1", "u2"]);
-        assert_eq!(expand("-o x.mp4 {url}", "url", &one), vec!["-o", "x.mp4", "U"]);
+        assert_eq!(expand("--output x.mp4 {url}", "url", &one), vec!["--output", "x.mp4", "U"]);
         assert_eq!(expand("--referer={url}", "url", &one), vec!["--referer=U"]);
-        assert_eq!(expand("-o x.mp4", "url", &one), vec!["-o", "x.mp4", "U"]);
+        assert_eq!(expand("--output x.mp4", "url", &one), vec!["--output", "x.mp4", "U"]);
     }
 }

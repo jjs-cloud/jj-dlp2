@@ -69,7 +69,7 @@ pub(super) fn is_absolute_template(template: &str) -> bool {
     template.starts_with(['/', '\\', '~']) || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
 }
 
-/// True when the recorder arguments' `-o` template is absolute, so subfolders cannot apply.
+/// True when the recorder arguments' `--output` template is absolute, so subfolders cannot apply.
 pub fn has_absolute_template(recorder_args: &str) -> bool {
     outpath::output_template(&outpath::split_args(recorder_args)).is_some_and(|t| is_absolute_template(&t))
 }
@@ -137,8 +137,8 @@ mod tests {
 
     #[test]
     fn has_absolute_template_reads_the_recorder_arguments() {
-        assert!(has_absolute_template("--no-part -o \"D:\\x\\%(title)s.%(ext)s\" {url}"));
-        assert!(!has_absolute_template("--no-part -o \"%(title)s.%(ext)s\" {url}"));
+        assert!(has_absolute_template("--no-part --output \"D:\\x\\%(title)s.%(ext)s\" {url}"));
+        assert!(!has_absolute_template("--no-part --output \"%(title)s.%(ext)s\" {url}"));
         assert!(!has_absolute_template("--no-part {url}"));
     }
 }
