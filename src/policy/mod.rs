@@ -62,6 +62,7 @@ pub struct NewSite {
     pub notify_confirmed: bool,
     pub notify_stalled: bool,
     pub notify_restarted: bool,
+    pub notify_on_launch: bool,
 }
 
 impl NewSite {
@@ -96,6 +97,7 @@ impl NewSite {
             notify_confirmed: self.notify_confirmed,
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
+            notify_on_launch: self.notify_on_launch,
         }
     }
 }
@@ -352,7 +354,8 @@ impl Policy {
             Event::StreamerStatus { id, status } => {
                 if let (Some(at), Some((site_id, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
                     let first = self.gate.first_check(*id);
-                    if self.live.status(*id, site_id, at, status.live, secs) && !first {
+                    let on_launch = self.site_of(*id).is_some_and(|s| s.notify_on_launch);
+                    if self.live.status(*id, site_id, at, status.live, secs) && (!first || on_launch) {
                         self.notify_event(*id, Kind::Live, 0);
                     }
                 }
@@ -989,6 +992,7 @@ mod tests {
             notify_confirmed: true,
             notify_stalled: true,
             notify_restarted: true,
+            notify_on_launch: false,
         }
     }
 
@@ -1009,7 +1013,7 @@ mod tests {
 
     #[test]
     fn site_and_streamer_without_optional_fields_still_load() {
-        let sites = r#"[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1,"color":null,"notify":true,"notify_desktop":true,"notify_ntfy":false,"ntfy_topic":"","notify_cooldown_minutes":null,"notify_timeout_secs":null,"notify_confirmed":true,"notify_stalled":true,"notify_restarted":true}]"#;
+        let sites = r#"[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1,"color":null,"notify":true,"notify_desktop":true,"notify_ntfy":false,"ntfy_topic":"","notify_cooldown_minutes":null,"notify_timeout_secs":null,"notify_confirmed":true,"notify_stalled":true,"notify_restarted":true,"notify_on_launch":false}]"#;
         let streamers = r#"[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]"#;
         let sites: Vec<Site> = serde_json::from_str(sites).unwrap();
         let streamers: Vec<Streamer> = serde_json::from_str(streamers).unwrap();
@@ -1084,6 +1088,7 @@ mod e2e {
                 notify_confirmed: true,
                 notify_stalled: true,
                 notify_restarted: true,
+                notify_on_launch: false,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };

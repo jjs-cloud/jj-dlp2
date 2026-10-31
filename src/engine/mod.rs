@@ -634,6 +634,7 @@ mod e2e {
                 notify_confirmed: true,
                 notify_stalled: true,
                 notify_restarted: true,
+                notify_on_launch: false,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -758,6 +759,7 @@ mod e2e {
                 notify_confirmed: true,
                 notify_stalled: true,
                 notify_restarted: true,
+                notify_on_launch: false,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };

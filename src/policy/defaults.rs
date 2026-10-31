@@ -93,6 +93,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         notify_confirmed: true,
         notify_stalled: true,
         notify_restarted: true,
+        notify_on_launch: false,
     }
 }
 

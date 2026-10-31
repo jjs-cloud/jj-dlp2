@@ -146,6 +146,8 @@ pub struct Site {
     pub notify_stalled: bool,
     /// Notify when a recording is flagged as restarted.
     pub notify_restarted: bool,
+    /// Also notify when a streamer is already live at their first check after launch.
+    pub notify_on_launch: bool,
 }
 
 /// `text` trimmed, or `fallback` when it is blank.

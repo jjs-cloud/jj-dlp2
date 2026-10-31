@@ -1739,6 +1739,7 @@ impl App {
                 log("Wait for confirmed growth", d.notify_confirmed, DraftField::NotifyConfirmed),
                 log("Notify when stalled", d.notify_stalled, DraftField::NotifyStalled),
                 log("Notify when restarted", d.notify_restarted, DraftField::NotifyRestarted),
+                log("Notify when already live at launch", d.notify_on_launch, DraftField::NotifyOnLaunch),
             ]
             .spacing(24),
         ]

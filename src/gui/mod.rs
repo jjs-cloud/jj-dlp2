@@ -126,6 +126,7 @@ pub struct SiteDraft {
     pub notify_confirmed: bool,
     pub notify_stalled: bool,
     pub notify_restarted: bool,
+    pub notify_on_launch: bool,
 }
 
 impl SiteDraft {
@@ -159,6 +160,7 @@ impl SiteDraft {
             notify_confirmed: s.notify_confirmed,
             notify_stalled: s.notify_stalled,
             notify_restarted: s.notify_restarted,
+            notify_on_launch: s.notify_on_launch,
         }
     }
 
@@ -194,6 +196,7 @@ impl SiteDraft {
             notify_confirmed: n.notify_confirmed,
             notify_stalled: n.notify_stalled,
             notify_restarted: n.notify_restarted,
+            notify_on_launch: n.notify_on_launch,
         }
     }
 
@@ -298,6 +301,7 @@ impl SiteDraft {
             notify_confirmed: self.notify_confirmed,
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
+            notify_on_launch: self.notify_on_launch,
         })
     }
 }
@@ -347,6 +351,7 @@ pub enum DraftField {
     NotifyConfirmed(bool),
     NotifyStalled(bool),
     NotifyRestarted(bool),
+    NotifyOnLaunch(bool),
 }
 
 /// A single option changed in a streamer's settings panel.
@@ -672,6 +677,7 @@ impl App {
                         DraftField::NotifyConfirmed(v) => d.notify_confirmed = v,
                         DraftField::NotifyStalled(v) => d.notify_stalled = v,
                         DraftField::NotifyRestarted(v) => d.notify_restarted = v,
+                        DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
                     }
                 }
             }
