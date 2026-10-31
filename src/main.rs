@@ -5,6 +5,7 @@ mod engine;
 mod gui;
 mod instance;
 mod policy;
+mod resets;
 mod settings;
 #[cfg(all(test, unix))]
 mod testutil;
@@ -55,6 +56,9 @@ fn main() {
             }
         }
     };
+    if !matches!(mode, Mode::Update(_)) {
+        resets::run();
+    }
     match mode {
         Mode::Gui => run_gui(),
         Mode::NoGui => run_no_gui(),
@@ -100,6 +104,9 @@ fn run_update(rc: bool) {
 
 fn run_engine_only() {
     attach_console();
+    for line in resets::take_log() {
+        println!("{line}");
+    }
     let engine = engine::start();
     let client = engine.client.clone();
     drive(

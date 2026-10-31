@@ -1,6 +1,6 @@
 //! The iced GUI. It only talks to the policy layer through `crate::policy`.
 
-mod prefs;
+pub mod prefs;
 mod skin;
 mod view;
 

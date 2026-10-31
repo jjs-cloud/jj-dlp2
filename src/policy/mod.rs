@@ -266,6 +266,9 @@ impl Policy {
         restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
         self.log(format!("--- session started (v{}) ---", update::CURRENT));
+        for line in crate::resets::take_log() {
+            self.log(line);
+        }
         self.emit_settings();
         self.emit_update_config();
         self.emit_live();

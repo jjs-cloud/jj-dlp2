@@ -1,6 +1,7 @@
 //! GUI-only preferences stored in gui.json.
 
 use super::skin::ThemeKind;
+use crate::resets::{reset_field, Key, Reset};
 use serde::{Deserialize, Serialize};
 
 pub const ROW_MIN_LIMIT: f32 = 15.0;
@@ -21,7 +22,7 @@ pub const WIN_DEFAULT_H: f32 = 820.0;
 const WIN_MIN_W: f32 = 640.0;
 const WIN_MIN_H: f32 = 420.0;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Prefs {
     theme: String,
@@ -57,11 +58,53 @@ fn read() -> Prefs {
     std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
+/// Writes gui.json.
+fn try_write(prefs: &Prefs) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(prefs).map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(crate::settings::config_dir())?;
+    std::fs::write(path(), json)
+}
+
 /// Writes gui.json, ignoring failures.
 fn write(prefs: &Prefs) {
-    let Ok(json) = serde_json::to_string_pretty(prefs) else { return };
-    let _ = std::fs::create_dir_all(crate::settings::config_dir());
-    let _ = std::fs::write(path(), json);
+    let _ = try_write(prefs);
+}
+
+/// Applies the gui.json resets in memory; returns log lines.
+fn reset_prefs(prefs: &mut Prefs, resets: &[&Reset]) -> Vec<String> {
+    let d = Prefs::default();
+    let mut log = Vec::new();
+    for r in resets {
+        let w = &r.when;
+        let (field, change) = match r.key {
+            Key::GuiTheme => ("theme", reset_field(&mut prefs.theme, d.theme.clone(), w)),
+            Key::GuiCompact => ("compact", reset_field(&mut prefs.compact, d.compact, w)),
+            Key::GuiRowMin => ("row_min", reset_field(&mut prefs.row_min, d.row_min, w)),
+            Key::GuiRowMax => ("row_max", reset_field(&mut prefs.row_max, d.row_max, w)),
+            Key::GuiTwoColWidth => ("two_col_w", reset_field(&mut prefs.two_col_w, d.two_col_w, w)),
+            Key::GuiNameClip => ("name_clip", reset_field(&mut prefs.name_clip, d.name_clip, w)),
+            Key::GuiLogLines => ("log_lines", reset_field(&mut prefs.log_lines, d.log_lines, w)),
+            Key::GuiRememberSize => ("remember_size", reset_field(&mut prefs.remember_size, d.remember_size, w)),
+            Key::GuiWindowWidth => ("win_w", reset_field(&mut prefs.win_w, d.win_w, w)),
+            Key::GuiWindowHeight => ("win_h", reset_field(&mut prefs.win_h, d.win_h, w)),
+            _ => continue,
+        };
+        if let Some(c) = change {
+            log.push(format!("gui.json {field} reset: {c}"));
+        }
+    }
+    log
+}
+
+/// Applies the gui.json resets and saves once if anything changed; returns log lines.
+pub fn apply_resets(resets: &[&Reset]) -> std::io::Result<Vec<String>> {
+    let mut prefs = read();
+    let before = prefs.clone();
+    let lines = reset_prefs(&mut prefs, resets);
+    if prefs != before {
+        try_write(&prefs)?;
+    }
+    Ok(lines)
 }
 
 /// Reads the saved theme.
@@ -166,5 +209,22 @@ pub fn startup_window_size() -> (f32, f32) {
         (prefs.win_w.max(WIN_MIN_W), prefs.win_h.max(WIN_MIN_H))
     } else {
         (WIN_DEFAULT_W, WIN_DEFAULT_H)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resets::Val;
+
+    #[test]
+    fn prefs_reset_to_defaults() {
+        let mut p = Prefs { row_max: 40.0, compact: true, ..Prefs::default() };
+        let a = Reset::always(2, Key::GuiRowMax);
+        let b = Reset::if_equals(2, Key::GuiCompact, Val::Flag(false));
+        let log = reset_prefs(&mut p, &[&a, &b]);
+        assert_eq!(p.row_max, ROW_MAX_DEFAULT);
+        assert!(p.compact);
+        assert_eq!(log.len(), 1);
     }
 }

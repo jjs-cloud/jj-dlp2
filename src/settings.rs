@@ -71,10 +71,14 @@ pub fn try_load() -> Result<Settings, String> {
     Ok(Settings { next_id: state.next_id, default_output_dir: globals.default_output_dir, sites, streamers })
 }
 
+/// Whether any of the four main config files exists.
+pub fn any_config_exists() -> bool {
+    [settings_path(), sites_path(), streamers_path(), state_path()].iter().any(|p| p.exists())
+}
+
 /// Reads the config files, falling back to defaults if none exist or they are invalid.
 pub fn load() -> Settings {
-    let any_exists = [settings_path(), sites_path(), streamers_path(), state_path()].iter().any(|p| p.exists());
-    if !any_exists {
+    if !any_config_exists() {
         return default_settings();
     }
     try_load().unwrap_or_else(|e| {
