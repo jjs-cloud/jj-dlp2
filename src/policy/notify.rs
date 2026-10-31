@@ -53,27 +53,39 @@ pub fn topic_valid(topic: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotRecordingReason {
     Disabled,
+    IntroDelay,
+}
+
+impl NotRecordingReason {
+    /// True when the reason only delays starting: a running recording is left alone and a recording notice follows once it clears.
+    pub fn only_delays_start(self) -> bool {
+        matches!(self, NotRecordingReason::IntroDelay)
+    }
 }
 
 impl std::fmt::Display for NotRecordingReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NotRecordingReason::Disabled => f.write_str("Disabled"),
+            NotRecordingReason::IntroDelay => f.write_str("Intro Delay"),
         }
     }
 }
 
-/// The reason a streamer will not be recorded, if any.
-fn not_recording_reason(enabled: bool) -> Option<NotRecordingReason> {
-    (!enabled).then_some(NotRecordingReason::Disabled)
+/// What a live notification says about the recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveStatus {
+    NotRecording(NotRecordingReason),
+    Unconfirmed,
+    Confirmed,
 }
 
 /// Body of the live notification: recording status, the reason when not recording, then the site.
-pub fn live_body(enabled: bool, confirmed: bool, site: &str) -> String {
-    let status = match not_recording_reason(enabled) {
-        Some(reason) => format!("\u{1F7E1} Status: Not recording\nReason: {reason}"),
-        None if confirmed => "\u{1F534} Status: Recording (confirmed)".to_string(),
-        None => "\u{1F534} Status: Recording (unconfirmed)".to_string(),
+pub fn live_body(status: LiveStatus, site: &str) -> String {
+    let status = match status {
+        LiveStatus::NotRecording(reason) => format!("\u{1F7E1} Status: Not recording\nReason: {reason}"),
+        LiveStatus::Confirmed => "\u{1F534} Status: Recording (confirmed)".to_string(),
+        LiveStatus::Unconfirmed => "\u{1F534} Status: Recording (unconfirmed)".to_string(),
     };
     format!("{status}\nSite: {site}")
 }
@@ -155,6 +167,7 @@ pub struct Gate {
     last_sent: HashMap<(StreamerId, Kind), Instant>,
     held: HashSet<StreamerId>,
     seen: HashSet<StreamerId>,
+    deferred: HashSet<StreamerId>,
 }
 
 impl Gate {
@@ -182,11 +195,27 @@ impl Gate {
         self.held.remove(&id)
     }
 
+    /// Notes that a not-recording notice went out and a recording notice should follow.
+    pub fn defer(&mut self, id: StreamerId) {
+        self.deferred.insert(id);
+    }
+
+    /// Clears the follow-up note; true when one was waiting.
+    pub fn take_deferred(&mut self, id: StreamerId) -> bool {
+        self.deferred.remove(&id)
+    }
+
+    /// Forgets when a notification kind was last sent, so the next one skips the cooldown.
+    pub fn clear_sent(&mut self, id: StreamerId, kind: Kind) {
+        self.last_sent.remove(&(id, kind));
+    }
+
     /// Keeps only the streamers the predicate accepts.
     pub fn retain(&mut self, mut keep: impl FnMut(StreamerId) -> bool) {
         self.last_sent.retain(|(id, _), _| keep(*id));
         self.held.retain(|id| keep(*id));
         self.seen.retain(|id| keep(*id));
+        self.deferred.retain(|id| keep(*id));
     }
 }
 
@@ -207,9 +236,19 @@ mod tests {
 
     #[test]
     fn live_body_reports_status_reason_and_site() {
-        assert_eq!(live_body(false, false, "Twitch"), "\u{1F7E1} Status: Not recording\nReason: Disabled\nSite: Twitch");
-        assert_eq!(live_body(true, true, "Twitch"), "\u{1F534} Status: Recording (confirmed)\nSite: Twitch");
-        assert_eq!(live_body(true, false, "Twitch"), "\u{1F534} Status: Recording (unconfirmed)\nSite: Twitch");
+        let not_recording = |r| LiveStatus::NotRecording(r);
+        let disabled = live_body(not_recording(NotRecordingReason::Disabled), "Twitch");
+        assert_eq!(disabled, "\u{1F7E1} Status: Not recording\nReason: Disabled\nSite: Twitch");
+        let delay = live_body(not_recording(NotRecordingReason::IntroDelay), "Twitch");
+        assert_eq!(delay, "\u{1F7E1} Status: Not recording\nReason: Intro Delay\nSite: Twitch");
+        assert_eq!(live_body(LiveStatus::Confirmed, "Twitch"), "\u{1F534} Status: Recording (confirmed)\nSite: Twitch");
+        assert_eq!(live_body(LiveStatus::Unconfirmed, "Twitch"), "\u{1F534} Status: Recording (unconfirmed)\nSite: Twitch");
+    }
+
+    #[test]
+    fn only_the_intro_delay_just_delays_the_start() {
+        assert!(NotRecordingReason::IntroDelay.only_delays_start());
+        assert!(!NotRecordingReason::Disabled.only_delays_start());
     }
 
     #[test]
@@ -223,6 +262,18 @@ mod tests {
         assert!(g.ready(1, Kind::Stalled, cd, t0));
         assert!(g.ready(2, Kind::Live, cd, t0));
         assert!(g.ready(1, Kind::Live, Duration::ZERO, t0));
+    }
+
+    #[test]
+    fn deferred_notice_is_taken_once_and_clear_sent_skips_the_cooldown() {
+        let (mut g, t0) = (Gate::default(), Instant::now());
+        g.defer(1);
+        assert!(g.take_deferred(1));
+        assert!(!g.take_deferred(1));
+        g.mark_sent(1, Kind::Live, t0);
+        assert!(!g.ready(1, Kind::Live, Duration::from_secs(60), t0));
+        g.clear_sent(1, Kind::Live);
+        assert!(g.ready(1, Kind::Live, Duration::from_secs(60), t0));
     }
 
     #[test]

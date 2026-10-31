@@ -133,6 +133,11 @@ impl LiveTracker {
         self.spans.clone()
     }
 
+    /// The time the streamer was first seen live in its current span, if it has one.
+    pub fn span_start(&self, id: StreamerId) -> Option<u64> {
+        self.spans.get(&id).copied()
+    }
+
     /// Streamer id to the time it was most recently seen live.
     pub fn last_live(&self) -> HashMap<StreamerId, u64> {
         self.last_live.clone()

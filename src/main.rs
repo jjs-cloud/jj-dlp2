@@ -68,7 +68,7 @@ fn main() {
 }
 
 fn run_gui() {
-    let policy = policy::start(engine::start());
+    let policy = policy::start();
     gui::install_event_stream(policy.events);
     if let Err(e) = gui::run(policy.client.clone()) {
         eprintln!("GUI error: {e}");
@@ -80,7 +80,7 @@ fn run_gui() {
 
 fn run_no_gui() {
     attach_console();
-    let policy = policy::start(engine::start());
+    let policy = policy::start();
     let client = policy.client.clone();
     drive(
         policy.events,
@@ -107,7 +107,7 @@ fn run_engine_only() {
     for line in resets::take_log() {
         println!("{line}");
     }
-    let engine = engine::start();
+    let engine = engine::start(api::Control::Autonomous);
     let client = engine.client.clone();
     drive(
         engine.events,

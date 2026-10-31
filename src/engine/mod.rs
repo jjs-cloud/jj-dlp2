@@ -49,7 +49,7 @@ pub struct EngineParts {
 }
 
 /// Starts the engine on its own thread and runtime.
-pub fn start() -> EngineParts {
+pub fn start(control: Control) -> EngineParts {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
     let thread = std::thread::Builder::new()
@@ -60,7 +60,7 @@ pub fn start() -> EngineParts {
                 .enable_all()
                 .build()
                 .expect("tokio runtime");
-            rt.block_on(Engine::new(ev_tx).run(cmd_rx));
+            rt.block_on(Engine::new(ev_tx, control).run(cmd_rx));
         })
         .expect("spawn engine thread");
     EngineParts { client: EngineClient::new(cmd_tx), events: ev_rx, thread }
@@ -81,6 +81,7 @@ struct Health {
 }
 
 struct Engine {
+    control: Control,
     settings: Settings,
     events: UnboundedSender<Event>,
     internal_tx: UnboundedSender<Internal>,
@@ -100,9 +101,10 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(events: UnboundedSender<Event>) -> Self {
+    fn new(events: UnboundedSender<Event>, control: Control) -> Self {
         let (internal_tx, internal_rx) = mpsc::unbounded_channel();
         Self {
+            control,
             settings: settings::load(),
             events,
             internal_tx,
@@ -169,17 +171,8 @@ impl Engine {
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::Reload => self.reload(),
-            Command::SetStreamerEnabled { id, enabled } => {
-                if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
-                    s.enabled = enabled;
-                    if enabled {
-                        self.maybe_start_recording(id);
-                    } else {
-                        self.stop_streamer_recorders(id);
-                    }
-                    self.emit_status(id);
-                }
-            }
+            Command::StartRecording { id } => self.start_recording(id),
+            Command::StopRecording { id } => self.stop_streamer_recorders(id),
             Command::SetCheckerOverride { site_id, args } => {
                 if !self.settings.sites.iter().any(|s| s.id == site_id) {
                     self.log(format!("checker override ignored: unknown site {site_id}"));
@@ -243,11 +236,7 @@ impl Engine {
         let streamers = self.settings.streamers.clone();
         for s in streamers.iter().filter(|s| kept.contains(&s.id)) {
             self.apply_log_options(s);
-            if s.enabled {
-                self.maybe_start_recording(s.id);
-            } else {
-                self.stop_streamer_recorders(s.id);
-            }
+            self.follow_enabled(s.id);
             self.emit_status(s.id);
         }
     }
@@ -379,7 +368,7 @@ impl Engine {
         }
         for s in &streamers {
             self.refresh_health(s.id);
-            self.maybe_start_recording(s.id);
+            self.follow_enabled(s.id);
             self.emit_status(s.id);
         }
     }
@@ -520,7 +509,19 @@ impl Engine {
         });
     }
 
-    fn maybe_start_recording(&mut self, streamer_id: StreamerId) {
+    /// Autonomous engines start or stop a streamer's recorders to match its enabled flag; managed engines do nothing.
+    fn follow_enabled(&mut self, streamer_id: StreamerId) {
+        if self.control != Control::Autonomous {
+            return;
+        }
+        if self.settings.streamers.iter().any(|s| s.id == streamer_id && s.enabled) {
+            self.start_recording(streamer_id);
+        } else {
+            self.stop_streamer_recorders(streamer_id);
+        }
+    }
+
+    fn start_recording(&mut self, streamer_id: StreamerId) {
         if self.shutting_down || self.recording(streamer_id) {
             return;
         }
@@ -528,9 +529,6 @@ impl Engine {
         let Some(entry) = self.states.get(&streamer_id).filter(|s| s.live).and_then(|s| s.entry.clone()) else {
             return;
         };
-        if !streamer.enabled {
-            return;
-        }
         let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id).cloned() else { return };
 
         let out_dir = if site.output_dir.trim().is_empty() {
@@ -668,7 +666,7 @@ mod e2e {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut p = start();
+            let mut p = start(Control::Autonomous);
             let mut seen_pids: Vec<u32> = Vec::new();
             let full = |info: &ProcessInfo| info.has_bootloader && info.ytdlp.is_some() && !info.ffmpeg.is_empty();
             let ev = wait_for(&mut p, 60, |e| matches!(e, Event::ProcessUpdate(i) if full(i))).await;
@@ -683,7 +681,8 @@ mod e2e {
             assert!(checker_log.contains("--- stdout ---") && checker_log.contains("vid1"), "{checker_log}");
             assert!(checker_log.contains("--- stderr ---"), "{checker_log}");
 
-            p.client.send(Command::SetStreamerEnabled { id: info.streamer_id, enabled: false });
+            write_settings(&dir, &script, false);
+            p.client.send(Command::Reload);
             wait_for(&mut p, 30, |e| matches!(e, Event::ProcessRemoved(_))).await;
             for kind in ["stdout", "stderr"] {
                 let path = logs.join(format!("fake.live1.{kind}.log"));
@@ -709,6 +708,38 @@ mod e2e {
             write_settings(&dir, &script, true);
             p.client.send(Command::Reload);
             wait_for(&mut p, 40, |e| matches!(e, Event::ProcessUpdate(i) if full(i))).await;
+
+            p.client.send(Command::Shutdown);
+            let thread = p.thread;
+            tokio::task::spawn_blocking(move || thread.join()).await.unwrap().unwrap();
+        });
+    }
+
+    #[test]
+    fn managed_engine_records_only_when_told() {
+        let sb = Sandbox::new("engine-managed");
+        write_settings(&sb.dir, &sb.script, true);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut p = start(Control::Managed);
+            let ev = wait_for(&mut p, 40, |e| matches!(e, Event::StreamerStatus { status, .. } if status.live)).await;
+            let Event::StreamerStatus { id, status } = ev else { unreachable!() };
+            assert!(!status.recording);
+
+            let started = async {
+                while let Some(ev) = p.events.recv().await {
+                    if matches!(ev, Event::ProcessUpdate(_)) {
+                        return;
+                    }
+                }
+            };
+            assert!(tokio::time::timeout(Duration::from_secs(3), started).await.is_err(), "recorder started unasked");
+
+            p.client.send(Command::StartRecording { id });
+            wait_for(&mut p, 40, |e| matches!(e, Event::ProcessUpdate(_))).await;
+            p.client.send(Command::StopRecording { id });
+            wait_for(&mut p, 30, |e| matches!(e, Event::ProcessRemoved(_))).await;
 
             p.client.send(Command::Shutdown);
             let thread = p.thread;
@@ -767,7 +798,7 @@ mod e2e {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut p = start();
+            let mut p = start(Control::Autonomous);
             let ev = wait_for(&mut p, 30, |e| matches!(e, Event::SiteChecked { ok: false, .. })).await;
             let Event::SiteChecked { problem, .. } = ev else { unreachable!() };
             assert!(problem.unwrap().contains("Something unexpected"));

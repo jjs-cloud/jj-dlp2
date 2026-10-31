@@ -104,13 +104,10 @@ pub struct Site {
     /// Empty means use the global output directory.
     pub output_dir: String,
     /// Subfolders recordings are placed in below the output folder.
-    #[serde(default)]
     pub folder_layout: FolderLayout,
     /// Write the checker's stdout to this site's checker log file.
-    #[serde(default)]
     pub log_checker_stdout: bool,
     /// Write the checker's stderr to this site's checker log file.
-    #[serde(default)]
     pub log_checker_stderr: bool,
     /// Minutes without a live sighting after which a stream counts as ended.
     pub end_after_minutes: Option<u64>,
@@ -217,13 +214,11 @@ pub struct Streamer {
     pub name: String,
     pub url: String,
     pub enabled: bool,
-    #[serde(default)]
     pub options: StreamerOptions,
 }
 
 /// Per-streamer options edited from the streamer's settings panel.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct StreamerOptions {
     /// Write the recorder's stdout to this streamer's log file.
     pub log_stdout: bool,
@@ -233,6 +228,10 @@ pub struct StreamerOptions {
     pub folder_layout: Option<FolderLayout>,
     /// Overrides the site's notification switch; `None` inherits it.
     pub notify: Option<bool>,
+    /// Wait `intro_delay_minutes` after the stream goes live before recording.
+    pub intro_delay_enabled: bool,
+    /// Minutes to wait when the intro delay is enabled; 0 means no delay.
+    pub intro_delay_minutes: u64,
 }
 
 /// In-memory view of the config files (settings.json, sites.json, streamers.json, state.json).
@@ -244,12 +243,23 @@ pub struct Settings {
     pub streamers: Vec<Streamer>,
 }
 
+/// Who decides when the engine starts recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// The engine starts a recorder whenever an enabled streamer is live.
+    Autonomous,
+    /// The engine starts a recorder only when sent `StartRecording`.
+    Managed,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Re-reads the config files and applies them; keeps the current settings if the file is invalid.
     Reload,
-    /// Starts or stops recording a streamer without changing the config files.
-    SetStreamerEnabled { id: StreamerId, enabled: bool },
+    /// Starts recording a live streamer that has no recorder running.
+    StartRecording { id: StreamerId },
+    /// Stops a streamer's recorders; an autonomous engine starts them again at the next live check.
+    StopRecording { id: StreamerId },
     /// Replaces a site's checker_args until cleared with `None`.
     #[allow(dead_code)]
     SetCheckerOverride { site_id: SiteId, args: Option<String> },

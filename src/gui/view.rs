@@ -1213,6 +1213,32 @@ impl App {
             muted(&s, format!("Effective: {}", on_off(st.options.notify.unwrap_or(site_on)))),
         ]
         .spacing(4);
+        let minutes = self.intro_minutes.get(&id).cloned().unwrap_or_else(|| match st.options.intro_delay_minutes {
+            0 => String::new(),
+            m => m.to_string(),
+        });
+        let delay_effective = match (st.options.intro_delay_enabled, st.options.intro_delay_minutes) {
+            (true, m) if m > 0 => format!("Effective: waits {m} min after going live"),
+            _ => "Effective: Off".to_string(),
+        };
+        // TODO(split): add the option to split the intro into its own file here once splitting exists.
+        let intro_delay = column![
+            muted(&s, "Intro delay"),
+            log("Wait before recording", st.options.intro_delay_enabled, OptionField::IntroDelayEnabled),
+            row![
+                text_input("Minutes", &minutes)
+                    .on_input(move |v| Msg::IntroMinutesEdit(id, v))
+                    .on_submit(Msg::IntroMinutesSave(id))
+                    .padding(8)
+                    .width(100)
+                    .style(skin::input(s)),
+                muted(&s, "minutes after going live (press Enter to save)"),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            muted(&s, delay_effective),
+        ]
+        .spacing(4);
         column![
             muted(
                 &s,
@@ -1233,6 +1259,7 @@ impl App {
             .spacing(24),
             folders,
             notifications,
+            intro_delay,
         ]
         .spacing(8)
         .into()

@@ -361,6 +361,8 @@ pub enum OptionField {
     LogStderr(bool),
     FolderLayout(Option<FolderLayout>),
     Notify(Option<bool>),
+    IntroDelayEnabled(bool),
+    IntroDelayMinutes(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -381,6 +383,8 @@ pub enum Msg {
     ToggleStreamer(StreamerId, bool),
     ToggleStreamerSettings(StreamerId),
     StreamerOption(StreamerId, OptionField),
+    IntroMinutesEdit(StreamerId, String),
+    IntroMinutesSave(StreamerId),
     AddSite(Preset),
     RemoveSite(SiteId),
     Draft(SiteId, DraftField),
@@ -452,6 +456,8 @@ pub struct App {
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
     open_streamer_settings: HashSet<StreamerId>,
+    /// Intro delay minutes being typed per streamer, until saved with Enter.
+    intro_minutes: HashMap<StreamerId, String>,
     settings_tab: SettingsTab,
     global_out: String,
     phase: f32,
@@ -496,6 +502,7 @@ impl App {
             new_streamer: HashMap::new(),
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
+            intro_minutes: HashMap::new(),
             settings_tab: SettingsTab::Sites,
             global_out: String::new(),
             phase: 0.0,
@@ -535,6 +542,21 @@ impl App {
             iced::time::every(Duration::from_millis(100)).map(Msg::Tick),
             window::resize_events().map(on_resize),
         ])
+    }
+
+    /// Sends a streamer's options with one field changed.
+    fn set_streamer_option(&self, id: StreamerId, field: OptionField) {
+        let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        let mut options = st.options.clone();
+        match field {
+            OptionField::LogStdout(v) => options.log_stdout = v,
+            OptionField::LogStderr(v) => options.log_stderr = v,
+            OptionField::FolderLayout(v) => options.folder_layout = v,
+            OptionField::Notify(v) => options.notify = v,
+            OptionField::IntroDelayEnabled(v) => options.intro_delay_enabled = v,
+            OptionField::IntroDelayMinutes(v) => options.intro_delay_minutes = v,
+        }
+        self.client.send(PolicyCommand::SetStreamerOptions { id, options });
     }
 
     /// Scrolls the Sites list to the named site, if it exists.
@@ -604,16 +626,15 @@ impl App {
                     self.open_streamer_settings.insert(id);
                 }
             }
-            Msg::StreamerOption(id, field) => {
-                if let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) {
-                    let mut options = st.options.clone();
-                    match field {
-                        OptionField::LogStdout(v) => options.log_stdout = v,
-                        OptionField::LogStderr(v) => options.log_stderr = v,
-                        OptionField::FolderLayout(v) => options.folder_layout = v,
-                        OptionField::Notify(v) => options.notify = v,
-                    }
-                    self.client.send(PolicyCommand::SetStreamerOptions { id, options });
+            Msg::StreamerOption(id, field) => self.set_streamer_option(id, field),
+            Msg::IntroMinutesEdit(id, v) => {
+                if v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit()) {
+                    self.intro_minutes.insert(id, v);
+                }
+            }
+            Msg::IntroMinutesSave(id) => {
+                if let Some(text) = self.intro_minutes.remove(&id) {
+                    self.set_streamer_option(id, OptionField::IntroDelayMinutes(text.parse().unwrap_or(0)));
                 }
             }
             Msg::AddSite(preset) => {

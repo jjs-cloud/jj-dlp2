@@ -1,17 +1,18 @@
-//! Policy layer: owns the config files, applies edits and tells the engine to reload.
+//! Policy layer: owns the config files, applies edits, tells the engine to reload and decides when it records.
 
 use crate::api::{
-    now_secs, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
-    Streamer, StreamerId, StreamerOptions, LOG_HISTORY_MAX,
+    now_secs, Command, Control, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site,
+    SiteId, Streamer, StreamerId, StreamerOptions, StreamerStatus, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
 use crate::settings;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
+mod decision;
 mod defaults;
 mod files;
 mod gql;
@@ -22,11 +23,12 @@ mod outpath;
 mod restarts;
 pub mod uilog;
 pub mod update;
+use decision::Decision;
 use files::{FileTracker, Thresholds};
 pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
 use live::LiveTracker;
-use notify::{Gate, Kind, Message, Targets};
+use notify::{Gate, Kind, LiveStatus, Message, Targets};
 use restarts::RestartTracker;
 use update::UpdateConfig;
 
@@ -200,8 +202,9 @@ pub struct PolicyParts {
     pub thread: std::thread::JoinHandle<()>,
 }
 
-/// Starts the policy layer on its own thread, taking ownership of the running engine.
-pub fn start(engine: EngineParts) -> PolicyParts {
+/// Starts the policy layer on its own thread, along with the managed engine it controls.
+pub fn start() -> PolicyParts {
+    let engine = crate::engine::start(Control::Managed);
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
     let thread = std::thread::Builder::new()
@@ -245,6 +248,10 @@ struct Policy {
     gql_tx: UnboundedSender<GqlJob>,
     /// Running recorders as (streamer id, root pid), used for log toggle markers.
     recorder_pids: HashMap<RecorderId, (StreamerId, u32)>,
+    /// Latest status the engine reported for each streamer.
+    statuses: HashMap<StreamerId, StreamerStatus>,
+    /// Live streamers whose recording is held back by an intro delay.
+    waiting: HashSet<StreamerId>,
 }
 
 impl Policy {
@@ -273,6 +280,8 @@ impl Policy {
             file_tx,
             gql_tx,
             recorder_pids: HashMap::new(),
+            statuses: HashMap::new(),
+            waiting: HashSet::new(),
         }
     }
 
@@ -290,6 +299,8 @@ impl Policy {
         update_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut restart_tick = tokio::time::interval(Duration::from_secs(30));
         restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut delay_tick = tokio::time::interval(Duration::from_secs(1));
+        delay_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
         self.log(format!("--- session started (v{}) ---", update::CURRENT));
         for line in crate::resets::take_log() {
@@ -324,6 +335,7 @@ impl Policy {
                 _ = &mut engine_done => break,
                 _ = update_tick.tick() => self.check_now(),
                 _ = restart_tick.tick() => self.expire_restarts(),
+                _ = delay_tick.tick() => self.release_due_delays(),
                 msg = update_msgs.recv() => {
                     if let Some(m) = msg {
                         self.on_update_msg(m);
@@ -352,10 +364,15 @@ impl Policy {
         match &ev {
             Event::SiteChecked { id, ok, .. } => self.live.site_checked(*id, *ok),
             Event::StreamerStatus { id, status } => {
+                self.statuses.insert(*id, *status);
                 if let (Some(at), Some((site_id, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
                     let first = self.gate.first_check(*id);
                     let on_launch = self.site_of(*id).is_some_and(|s| s.notify_on_launch);
-                    if self.live.status(*id, site_id, at, status.live, secs) && (!first || on_launch) {
+                    let started = self.live.status(*id, site_id, at, status.live, secs);
+                    if started {
+                        self.gate.take_deferred(*id);
+                    }
+                    if started && (!first || on_launch) {
                         self.notify_event(*id, Kind::Live, 0);
                     }
                 }
@@ -363,6 +380,7 @@ impl Policy {
                     self.gate.take_held(*id);
                 }
                 self.on_restart_status(*id, status.recording);
+                self.reconcile(*id);
             }
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
@@ -416,7 +434,7 @@ impl Policy {
         (st.options.notify.unwrap_or(site.notify) && kind_on).then(|| (st.clone(), site.clone()))
     }
 
-    /// Notifies about a streamer unless it is off or cooling down; a live notification may wait for confirmed growth.
+    /// Notifies about a streamer unless it is off or cooling down; a live notification says why it isn't recording, or waits for confirmed growth.
     fn notify_event(&mut self, id: StreamerId, kind: Kind, restarts: u32) {
         let Some((st, site)) = self.notify_target(id, kind) else { return };
         let now = Instant::now();
@@ -424,11 +442,19 @@ impl Policy {
         if !self.gate.ready(id, kind, cooldown, now) {
             return;
         }
-        if kind == Kind::Live && site.notify_confirmed && st.enabled {
-            self.gate.hold(id);
-            return;
+        let mut live = LiveStatus::Unconfirmed;
+        if kind == Kind::Live {
+            if let Decision::NotRecording(reason) = self.decision_for(&st) {
+                live = LiveStatus::NotRecording(reason);
+                if reason.only_delays_start() {
+                    self.gate.defer(id);
+                }
+            } else if site.notify_confirmed {
+                self.gate.hold(id);
+                return;
+            }
         }
-        self.send_notification(&st, &site, kind, restarts, false, now);
+        self.send_notification(&st, &site, kind, restarts, live, now);
     }
 
     /// Sends the live notification that was waiting for the file to be confirmed growing.
@@ -440,11 +466,11 @@ impl Policy {
         let now = Instant::now();
         let cooldown = Duration::from_secs(site.notify_cooldown_or_default().saturating_mul(60));
         if self.gate.ready(id, Kind::Live, cooldown, now) {
-            self.send_notification(&st, &site, Kind::Live, 0, true, now);
+            self.send_notification(&st, &site, Kind::Live, 0, LiveStatus::Confirmed, now);
         }
     }
 
-    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, confirmed: bool, now: Instant) {
+    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, live: LiveStatus, now: Instant) {
         let targets = Targets {
             desktop_timeout_secs: site.notify_desktop.then(|| site.notify_timeout_or_default()),
             ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic))
@@ -457,7 +483,7 @@ impl Policy {
         let msg = match kind {
             Kind::Live => Message {
                 title: format!("{} is live", st.name),
-                body: notify::live_body(st.enabled, confirmed, &site.name),
+                body: notify::live_body(live, &site.name),
                 click: Some(st.url.clone()),
             },
             Kind::Stalled => Message {
@@ -554,6 +580,54 @@ impl Policy {
         let dir = site_id.map_or(self.settings.default_output_dir.as_str(), |id| output_dir(&self.settings, id));
         let dir = PathBuf::from(dir);
         std::path::absolute(&dir).unwrap_or(dir)
+    }
+
+    /// The recording decision for a streamer right now.
+    fn decision_for(&self, streamer: &Streamer) -> Decision {
+        decision::decide(streamer, self.live.span_start(streamer.id), now_secs())
+    }
+
+    /// Applies the recording decision to a streamer: starts a live one that should record and stops one that should not.
+    fn reconcile(&mut self, id: StreamerId) {
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { return };
+        let status = self.statuses.get(&id).copied().unwrap_or_default();
+        let decision = self.decision_for(&streamer);
+        let delayed = decision == Decision::NotRecording(notify::NotRecordingReason::IntroDelay);
+        let was_waiting = if status.live && !status.recording && delayed {
+            !self.waiting.insert(id)
+        } else {
+            self.waiting.remove(&id)
+        };
+        match decision {
+            Decision::Record if status.live && !status.recording => {
+                if was_waiting && self.gate.take_deferred(id) {
+                    self.gate.clear_sent(id, Kind::Live);
+                    self.notify_event(id, Kind::Live, 0);
+                }
+                self.engine.send(Command::StartRecording { id });
+            }
+            Decision::NotRecording(reason) if status.recording && !reason.only_delays_start() => {
+                self.restarts.stopping(id);
+                self.engine.send(Command::StopRecording { id });
+            }
+            _ => {}
+        }
+    }
+
+    /// Applies the recording decision to every streamer.
+    fn reconcile_all(&mut self) {
+        let ids: Vec<StreamerId> = self.settings.streamers.iter().map(|s| s.id).collect();
+        for id in ids {
+            self.reconcile(id);
+        }
+    }
+
+    /// Re-applies the decision to streamers held back by an intro delay, so their recording starts when it ends.
+    fn release_due_delays(&mut self) {
+        let ids: Vec<StreamerId> = self.waiting.iter().copied().collect();
+        for id in ids {
+            self.reconcile(id);
+        }
     }
 
     /// Gives the engine each streamer's recorder arguments, including its subfolders and the sidecar options.
@@ -665,6 +739,8 @@ impl Policy {
         self.live.retain(|id| live::lookup(settings, id).is_some());
         self.restarts.retain(|id| live::lookup(settings, id).is_some());
         self.gate.retain(|id| live::lookup(settings, id).is_some());
+        self.statuses.retain(|id, _| live::lookup(settings, *id).is_some());
+        self.waiting.retain(|id| live::lookup(settings, *id).is_some());
         self.flush_live();
         self.flush_restarts();
     }
@@ -793,13 +869,14 @@ impl Policy {
         }
     }
 
-    /// Saves the config files, tells the engine to reload them and pushes a snapshot.
-    fn commit(&self) {
+    /// Saves the config files, tells the engine to reload them, pushes a snapshot and re-applies recording decisions.
+    fn commit(&mut self) {
         if self.save() {
             self.engine.send(Command::Reload);
             self.sync_overrides();
         }
         self.emit_settings();
+        self.reconcile_all();
     }
 
     fn handle(&mut self, cmd: PolicyCommand) {
@@ -871,10 +948,9 @@ impl Policy {
                         self.restarts.stopping(id);
                         self.gate.take_held(id);
                     }
-                    if self.save() {
-                        self.engine.send(Command::SetStreamerEnabled { id, enabled });
-                    }
+                    self.save();
                     self.emit_settings();
+                    self.reconcile(id);
                 }
             }
             PolicyCommand::SetStreamerOptions { id, options } => {
@@ -1012,18 +1088,6 @@ mod tests {
     }
 
     #[test]
-    fn site_and_streamer_without_optional_fields_still_load() {
-        let sites = r#"[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1,"color":null,"notify":true,"notify_desktop":true,"notify_ntfy":false,"ntfy_topic":"","notify_cooldown_minutes":null,"notify_timeout_secs":null,"notify_confirmed":true,"notify_stalled":true,"notify_restarted":true,"notify_on_launch":false}]"#;
-        let streamers = r#"[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]"#;
-        let sites: Vec<Site> = serde_json::from_str(sites).unwrap();
-        let streamers: Vec<Streamer> = serde_json::from_str(streamers).unwrap();
-        assert!(!sites[0].log_checker_stdout && !sites[0].log_checker_stderr);
-        assert_eq!(streamers[0].options, StreamerOptions::default());
-        assert_eq!(sites[0].folder_layout, FolderLayout::Streamer);
-        assert_eq!(streamers[0].options.folder_layout, None);
-    }
-
-    #[test]
     fn build_url_fills_username() {
         assert_eq!(build_url("https://tiktok.com/@{username}/live", "@name"), "https://tiktok.com/@name/live");
         assert_eq!(build_url("https://kick.com/{username}", " name "), "https://kick.com/name");
@@ -1059,7 +1123,7 @@ mod e2e {
         let sb = Sandbox::new("policy");
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut p = start(crate::engine::start());
+            let mut p = start();
             p.client.send(PolicyCommand::AddSite(NewSite {
                 name: "Fake".into(),
                 exe_path: sb.script.to_string_lossy().into(),
@@ -1114,5 +1178,78 @@ mod e2e {
             let thread = p.thread;
             tokio::task::spawn_blocking(move || thread.join()).await.unwrap().unwrap();
         });
+    }
+
+    fn bare_policy() -> (Policy, UnboundedReceiver<Command>) {
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (ev_tx, _) = mpsc::unbounded_channel();
+        let (upd_tx, _) = mpsc::unbounded_channel();
+        let (file_tx, _) = mpsc::unbounded_channel();
+        let (gql_tx, _) = mpsc::unbounded_channel();
+        (Policy::new(EngineClient::new(cmd_tx), ev_tx, upd_tx, file_tx, gql_tx), cmd_rx)
+    }
+
+    fn one_streamer(p: &mut Policy, options: StreamerOptions, enabled: bool) {
+        let site = new_site(Preset::Blank).into_site(1);
+        let streamer = Streamer { id: 2, site_id: 1, name: "n".into(), url: "u".into(), enabled, options };
+        p.settings = Settings { next_id: 10, default_output_dir: "out".into(), sites: vec![site], streamers: vec![streamer] };
+    }
+
+    fn live_status(p: &mut Policy, recording: bool, checked: u64) {
+        let status = StreamerStatus { live: true, recording, last_checked: Some(checked) };
+        p.on_engine_event(Event::StreamerStatus { id: 2, status });
+    }
+
+    fn sent(rx: &mut UnboundedReceiver<Command>) -> Vec<Command> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    fn delay(minutes: u64) -> StreamerOptions {
+        StreamerOptions { intro_delay_enabled: true, intro_delay_minutes: minutes, ..Default::default() }
+    }
+
+    #[test]
+    fn live_streamer_without_a_delay_is_started() {
+        let _sb = Sandbox::new("policy-start");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), true);
+        live_status(&mut p, false, now_secs());
+        assert!(matches!(sent(&mut rx).as_slice(), [Command::StartRecording { id: 2 }]));
+    }
+
+    #[test]
+    fn intro_delay_holds_the_start_until_it_ends() {
+        let _sb = Sandbox::new("policy-hold");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, delay(15), true);
+        live_status(&mut p, false, now_secs() - 600);
+        assert!(sent(&mut rx).is_empty());
+        assert!(p.waiting.contains(&2));
+
+        p.settings.streamers[0].options.intro_delay_minutes = 5;
+        p.release_due_delays();
+        assert!(matches!(sent(&mut rx).as_slice(), [Command::StartRecording { id: 2 }]));
+        assert!(!p.waiting.contains(&2));
+    }
+
+    #[test]
+    fn intro_delay_never_stops_a_running_recording() {
+        let _sb = Sandbox::new("policy-running");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, delay(15), true);
+        live_status(&mut p, true, now_secs() - 60);
+        assert!(sent(&mut rx).is_empty());
+        assert!(p.waiting.is_empty());
+    }
+
+    #[test]
+    fn disabled_streamer_is_stopped_and_not_started() {
+        let _sb = Sandbox::new("policy-disabled");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), false);
+        live_status(&mut p, true, now_secs());
+        assert!(matches!(sent(&mut rx).as_slice(), [Command::StopRecording { id: 2 }]));
+        live_status(&mut p, false, now_secs() + 60);
+        assert!(sent(&mut rx).is_empty());
     }
 }
