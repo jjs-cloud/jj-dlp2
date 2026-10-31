@@ -212,9 +212,9 @@ impl SiteDraft {
         parse_opt(&self.file_check_interval, 5)
     }
 
-    /// The site this draft describes, or `None` while the name is blank or a field is invalid.
+    /// The site this draft describes, or `None` while the name or URL template is blank or a field is invalid.
     pub fn to_new_site(&self) -> Option<NewSite> {
-        if self.name.trim().is_empty() || !self.color_ok() {
+        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || !self.color_ok() {
             return None;
         }
         Some(NewSite {

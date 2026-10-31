@@ -1455,13 +1455,21 @@ impl App {
                 .style(skin::input(s))
                 .into()
         };
+        let required_field = |label: &'static str, value: &'a str, f: fn(String) -> DraftField| -> Element<'a, Msg> {
+            let input = text_input("", value)
+                .on_input(move |v| Msg::Draft(id, f(v)))
+                .padding(5)
+                .size(13)
+                .style(skin::input_required(s, value.trim().is_empty()));
+            column![muted(&s, label), input].spacing(2).into()
+        };
         let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
         let dirty = saved.is_none_or(|site| *d != SiteDraft::from_site(site));
         let valid = d.to_new_site().is_some();
 
         let identity = row![
             cell(
-                labeled("Site name", field("Example: Twitch", &d.name, DraftField::Name)),
+                required_field("Site name (example: Twitch)", &d.name, DraftField::Name),
                 Length::FillPortion(1)
             ),
             cell(
@@ -1584,7 +1592,7 @@ impl App {
                 .padding(5)
                 .size(13)
                 .width(100)
-                .style(skin::input(s)),
+                .style(skin::input_required(s, !d.color_ok())),
             toggler(d.use_theme_color)
                 .label("Use theme color")
                 .on_toggle(move |v| Msg::Draft(id, DraftField::UseThemeColor(v)))
@@ -1608,13 +1616,10 @@ impl App {
 
         let templates = row![
             cell(
-                labeled(
-                    "URL template ( {username} = the streamer's username )",
-                    field(
-                        "Example: https://twitch.tv/{username}",
-                        &d.url_template,
-                        DraftField::UrlTemplate
-                    )
+                required_field(
+                    "URL template (example: https://twitch.tv/{username})",
+                    &d.url_template,
+                    DraftField::UrlTemplate
                 ),
                 Length::FillPortion(1)
             ),

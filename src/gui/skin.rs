@@ -330,13 +330,20 @@ pub fn column_frame(s: Skin) -> impl Fn(&Theme) -> container::Style {
 }
 
 pub fn input(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
+    input_required(s, false)
+}
+
+/// Input style that shows a red border while `invalid` is true.
+pub fn input_required(s: Skin, invalid: bool) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
         let focused = matches!(status, text_input::Status::Focused { .. });
         let hovered = matches!(status, text_input::Status::Hovered | text_input::Status::Focused { is_hovered: true });
         text_input::Style {
             background: Background::Color(with_alpha(s.bg, 0.7)),
             border: Border {
-                color: if focused {
+                color: if invalid {
+                    s.danger
+                } else if focused {
                     s.accent
                 } else if hovered {
                     with_alpha(s.accent, 0.6)
