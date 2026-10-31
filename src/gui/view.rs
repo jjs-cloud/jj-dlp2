@@ -399,9 +399,9 @@ impl App {
                 ..Default::default()
             })
             .align_y(Alignment::Center);
-        if self.any_restart_chip() {
+        if self.any_restart_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id)) {
             title = title.push(
-                button(btn_label(&s, "Clear restart warnings").size(12))
+                button(btn_label(&s, "Clear warnings").size(12))
                     .on_press(Msg::ClearRestarts)
                     .padding([3.0, 10.0])
                     .style(skin::btn(s, BtnKind::Ghost)),

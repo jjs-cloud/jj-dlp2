@@ -766,6 +766,8 @@ impl Policy {
             PolicyCommand::ClearRestarts => {
                 self.restarts.clear();
                 self.flush_restarts();
+                self.files.dismiss_stalls();
+                self.emit_files();
             }
             PolicyCommand::CheckForUpdate => self.run_check(true),
             PolicyCommand::InstallUpdate => self.install_update(),

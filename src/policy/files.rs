@@ -137,6 +137,8 @@ struct Entry {
     last_size: Option<u64>,
     last_growth: Option<Instant>,
     stall: Option<String>,
+    /// The stall was cleared by hand and stays hidden until the file recovers.
+    dismissed: bool,
 }
 
 impl Entry {
@@ -157,6 +159,7 @@ impl Entry {
             last_size: None,
             last_growth: None,
             stall: None,
+            dismissed: false,
         }
     }
 
@@ -265,6 +268,9 @@ impl Entry {
             (Some(_), None) => logs.push(format!("{}: recording file is growing again", self.name)),
             _ => {}
         }
+        if reason.is_none() {
+            self.dismissed = false;
+        }
         self.stall = reason;
     }
 
@@ -291,6 +297,7 @@ impl FileTracker {
         let mut up = Update::default();
         if !e.live {
             e.stall = None;
+            e.dismissed = false;
             return up;
         }
         if e.check == PathCheck::Pending {
@@ -319,6 +326,13 @@ impl FileTracker {
         up
     }
 
+    /// Hides every current stall until its file recovers.
+    pub fn dismiss_stalls(&mut self) {
+        for e in self.entries.values_mut().filter(|e| e.stall.is_some()) {
+            e.dismissed = true;
+        }
+    }
+
     /// Forgets a recording and returns its streamer.
     pub fn remove(&mut self, id: RecorderId) -> Option<StreamerId> {
         self.entries.remove(&id).map(|e| e.streamer_id)
@@ -334,7 +348,7 @@ impl FileTracker {
             .iter()
             .map(|(id, e)| {
                 let openable = e.trusted_path().is_some() && e.exists;
-                (*id, RecordingFile { openable, stalled: e.stall.is_some() })
+                (*id, RecordingFile { openable, stalled: e.stall.is_some() && !e.dismissed })
             })
             .collect()
     }
