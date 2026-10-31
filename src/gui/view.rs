@@ -549,6 +549,17 @@ impl App {
         self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
     }
 
+    /// Row tint: red while STALLED shows, else yellow while RESTARTED shows.
+    fn row_tint(&self, s: Skin, st: &Streamer) -> Option<Color> {
+        if self.streamer_stalled(st.id) {
+            Some(s.danger)
+        } else if self.shown_restarts(st) > 0 {
+            Some(s.warn)
+        } else {
+            None
+        }
+    }
+
     /// Seconds the streamer has been live; only while the checker reports it live.
     fn live_for(&self, id: StreamerId, status: StreamerStatus) -> Option<u64> {
         if !status.live {
@@ -652,7 +663,7 @@ impl App {
             .width(Length::Fill)
             .padding([0.0, m.pad_h])
             .clip(true)
-            .style(skin::stripe(s, shaded))
+            .style(skin::stripe_tinted(s, shaded, self.row_tint(s, st)))
             .into()
     }
 
@@ -1140,7 +1151,7 @@ impl App {
         container(body)
             .padding([8.0, 12.0])
             .width(Length::Fill)
-            .style(skin::inset(s))
+            .style(skin::inset_tinted(s, self.row_tint(s, st)))
             .into()
     }
 

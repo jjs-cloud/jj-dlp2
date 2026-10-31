@@ -192,6 +192,22 @@ pub fn inset(s: Skin) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// Like `inset`, but a `tint` recolors the fill and border.
+pub fn inset_tinted(s: Skin, tint: Option<Color>) -> impl Fn(&Theme) -> container::Style {
+    move |_| match tint {
+        Some(c) => container::Style {
+            background: Some(Background::Color(with_alpha(c, 0.18))),
+            border: Border { color: with_alpha(c, 0.6), width: 1.0, radius: Radius::from(s.radius * 0.6) },
+            ..Default::default()
+        },
+        None => container::Style {
+            background: Some(Background::Color(with_alpha(s.bg, 0.55))),
+            border: Border { color: with_alpha(s.border, 0.6), width: 1.0, radius: Radius::from(s.radius * 0.6) },
+            ..Default::default()
+        },
+    }
+}
+
 pub fn chip(_s: Skin, color: Color) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(with_alpha(color, 0.14))),
@@ -312,10 +328,13 @@ pub fn tile(s: Skin, color: Color, selected: bool) -> impl Fn(&Theme, button::St
     }
 }
 
-/// Faint row background for dense lists; `shaded` alternates rows.
-pub fn stripe(s: Skin, shaded: bool) -> impl Fn(&Theme) -> container::Style {
+/// Faint row background for dense lists; `shaded` alternates rows and `tint` overrides it.
+pub fn stripe_tinted(s: Skin, shaded: bool, tint: Option<Color>) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: shaded.then(|| Background::Color(with_alpha(s.surface_hi, 0.35))),
+        background: match tint {
+            Some(c) => Some(Background::Color(with_alpha(c, 0.18))),
+            None => shaded.then(|| Background::Color(with_alpha(s.surface_hi, 0.35))),
+        },
         border: Border { radius: Radius::from(3.0), ..Default::default() },
         ..Default::default()
     }
