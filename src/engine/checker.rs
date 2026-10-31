@@ -1,7 +1,7 @@
 //! Per-site checker: runs yt-dlp for all of a site's URLs and detects live streams.
 
 use super::{diagnose, exepath, hide_window, logfile, template, Internal};
-use crate::api::{now_secs, CheckMode, Site};
+use crate::api::{now_secs, CheckOutput, Site};
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -53,14 +53,14 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
     loop {
         let snap = rx.borrow_and_update().clone();
         let started = Instant::now();
-        if !snap.urls.is_empty() && !snap.site.exe_path.trim().is_empty() {
+        if !snap.urls.is_empty() {
             let result = run_check(&snap, &internal).await;
             let msg = Internal::CheckResult { site_id: snap.site.id, at: now_secs(), result };
             if internal.send(msg).is_err() {
                 return;
             }
         }
-        let interval = Duration::from_secs(snap.site.interval_secs.max(5));
+        let interval = Duration::from_secs(snap.site.interval_or_default().max(5));
         let wait = interval.saturating_sub(started.elapsed());
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
@@ -70,8 +70,12 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
 }
 
 async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) -> Result<CheckReport, String> {
-    let args = template::expand(&snap.site.checker_args, "urls", &snap.urls);
-    let exe = exepath::resolve(&snap.site.exe_path);
+    let template = snap.site.checker_or_default();
+    let Some(kind) = CheckOutput::detect(template) else {
+        return Ok(CheckReport { entries: Vec::new(), problem: Some(diagnose::missing_output_flag()) });
+    };
+    let args = template::expand(template, "urls", &snap.urls);
+    let exe = exepath::resolve(snap.site.exe_or_default());
     if let Some(note) = exe.note {
         let _ = internal.send(Internal::Log(note));
     }
@@ -89,7 +93,7 @@ async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) ->
         .map_err(|e| format!("failed to start '{}': {e}", exe.exe))?;
     log_output(&snap.site, &exe.exe, &args, &output, started.elapsed());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let entries = parse_output(snap.site.check_mode, &stdout);
+    let entries = parse_output(kind, &stdout);
     let stderr: Vec<String> = String::from_utf8_lossy(&output.stderr).lines().map(str::to_string).collect();
     let status = output.status;
     let problem = diagnose::check_problem(&stderr, status.success(), status.code(), !entries.is_empty());
@@ -120,10 +124,10 @@ fn log_output(site: &Site, exe: &str, args: &[String], output: &std::process::Ou
     logfile::append(&logfile::checker_path(&site.name), &block);
 }
 
-fn parse_output(mode: CheckMode, stdout: &str) -> Vec<LiveEntry> {
-    match mode {
-        CheckMode::DumpJson => stdout.lines().filter_map(parse_json_line).collect(),
-        CheckMode::Simulate => stdout.lines().filter_map(parse_simulate_line).collect(),
+fn parse_output(kind: CheckOutput, stdout: &str) -> Vec<LiveEntry> {
+    match kind {
+        CheckOutput::Json => stdout.lines().filter_map(parse_json_line).collect(),
+        CheckOutput::Simulate => stdout.lines().filter_map(parse_simulate_line).collect(),
     }
 }
 

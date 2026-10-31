@@ -539,10 +539,10 @@ impl Engine {
             site.output_dir.clone()
         };
         let url = if entry.webpage_url.is_empty() { streamer.url.clone() } else { entry.webpage_url.clone() };
-        let template = self.recorder_overrides.get(&streamer_id).unwrap_or(&site.recorder_args);
+        let template = self.recorder_overrides.get(&streamer_id).map_or_else(|| site.recorder_or_default(), String::as_str);
         let args = template::expand(template, "url", &[url]);
         let log_path = |on: bool, kind: &str| on.then(|| logfile::stream_path(&site.name, &streamer.name, kind));
-        let exe = exepath::resolve(&site.exe_path);
+        let exe = exepath::resolve(site.exe_or_default());
         if let Some(note) = exe.note {
             self.log(note);
         }
@@ -609,8 +609,7 @@ mod e2e {
                 id: 1,
                 name: "Fake".into(),
                 exe_path: script.to_string_lossy().into(),
-                interval_secs: 5,
-                check_mode: CheckMode::DumpJson,
+                interval_secs: Some(5),
                 checker_args: "--dump-json {urls}".into(),
                 recorder_args: "RECORD {url}".into(),
                 url_template: String::new(),
@@ -618,13 +617,13 @@ mod e2e {
                 folder_layout: FolderLayout::default(),
                 log_checker_stdout: true,
                 log_checker_stderr: true,
-                end_after_minutes: 30,
-                file_exists_grace_secs: 60,
-                growth_grace_secs: 60,
-                stall_window_secs: 120,
-                file_check_interval_secs: 30,
-                restart_clear_minutes: 1440,
-                restart_threshold: 1,
+                end_after_minutes: Some(30),
+                file_exists_grace_secs: Some(60),
+                growth_grace_secs: Some(60),
+                stall_window_secs: Some(120),
+                file_check_interval_secs: Some(30),
+                restart_clear_minutes: Some(1440),
+                restart_threshold: Some(1),
                 color: None,
             }],
             streamers: vec![Streamer {
@@ -725,8 +724,7 @@ mod e2e {
                 id: 1,
                 name: "Fake".into(),
                 exe_path: sb.script.to_string_lossy().into(),
-                interval_secs: 5,
-                check_mode: CheckMode::DumpJson,
+                interval_secs: Some(5),
                 checker_args: "--dump-json {urls}".into(),
                 recorder_args: "RECORD {url}".into(),
                 url_template: String::new(),
@@ -734,13 +732,13 @@ mod e2e {
                 folder_layout: FolderLayout::default(),
                 log_checker_stdout: false,
                 log_checker_stderr: false,
-                end_after_minutes: 30,
-                file_exists_grace_secs: 60,
-                growth_grace_secs: 60,
-                stall_window_secs: 120,
-                file_check_interval_secs: 30,
-                restart_clear_minutes: 1440,
-                restart_threshold: 1,
+                end_after_minutes: Some(30),
+                file_exists_grace_secs: Some(60),
+                growth_grace_secs: Some(60),
+                stall_window_secs: Some(120),
+                file_check_interval_secs: Some(30),
+                restart_clear_minutes: Some(1440),
+                restart_threshold: Some(1),
                 color: None,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],

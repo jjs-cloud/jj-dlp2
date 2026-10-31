@@ -1,7 +1,7 @@
 //! Policy layer: owns the config files, applies edits and tells the engine to reload.
 
 use crate::api::{
-    now_secs, CheckMode, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
+    now_secs, Command, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site, SiteId,
     Streamer, StreamerId, StreamerOptions, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
@@ -22,7 +22,7 @@ mod restarts;
 pub mod uilog;
 pub mod update;
 use files::{FileTracker, Thresholds};
-pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_JSON_ARGS, DEFAULT_SIM_ARGS, DEFAULT_SITE_COLOR};
+pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
 use live::LiveTracker;
 use restarts::RestartTracker;
@@ -35,8 +35,7 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 pub struct NewSite {
     pub name: String,
     pub exe_path: String,
-    pub interval_secs: u64,
-    pub check_mode: CheckMode,
+    pub interval_secs: Option<u64>,
     pub checker_args: String,
     pub recorder_args: String,
     pub url_template: String,
@@ -44,14 +43,41 @@ pub struct NewSite {
     pub folder_layout: FolderLayout,
     pub log_checker_stdout: bool,
     pub log_checker_stderr: bool,
-    pub end_after_minutes: u64,
-    pub file_exists_grace_secs: u64,
-    pub growth_grace_secs: u64,
-    pub stall_window_secs: u64,
-    pub file_check_interval_secs: u64,
-    pub restart_clear_minutes: u64,
-    pub restart_threshold: u32,
+    pub end_after_minutes: Option<u64>,
+    pub file_exists_grace_secs: Option<u64>,
+    pub growth_grace_secs: Option<u64>,
+    pub stall_window_secs: Option<u64>,
+    pub file_check_interval_secs: Option<u64>,
+    pub restart_clear_minutes: Option<u64>,
+    pub restart_threshold: Option<u32>,
     pub color: Option<String>,
+}
+
+impl NewSite {
+    /// The stored site with the given id.
+    pub fn into_site(self, id: SiteId) -> Site {
+        Site {
+            id,
+            name: self.name,
+            exe_path: self.exe_path,
+            interval_secs: self.interval_secs,
+            checker_args: self.checker_args,
+            recorder_args: self.recorder_args,
+            url_template: self.url_template,
+            output_dir: self.output_dir,
+            folder_layout: self.folder_layout,
+            log_checker_stdout: self.log_checker_stdout,
+            log_checker_stderr: self.log_checker_stderr,
+            end_after_minutes: self.end_after_minutes,
+            file_exists_grace_secs: self.file_exists_grace_secs,
+            growth_grace_secs: self.growth_grace_secs,
+            stall_window_secs: self.stall_window_secs,
+            file_check_interval_secs: self.file_check_interval_secs,
+            restart_clear_minutes: self.restart_clear_minutes,
+            restart_threshold: self.restart_threshold,
+            color: self.color,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -399,7 +425,7 @@ impl Policy {
             let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { continue };
             let layout = streamer.options.folder_layout.unwrap_or(site.folder_layout);
             let dirs = layout::dirs(layout, &site.name, &streamer.name);
-            let args = outpath::recorder_override(&site.recorder_args, &dirs, &outpath::sidecar_path(streamer.id));
+            let args = outpath::recorder_override(site.recorder_or_default(), &dirs, &outpath::sidecar_path(streamer.id));
             self.engine.send(Command::SetRecorderOverride { streamer_id: streamer.id, args });
         }
     }
@@ -651,28 +677,7 @@ impl Policy {
             }
             PolicyCommand::AddSite(n) => {
                 let id = self.alloc_id();
-                self.settings.sites.push(Site {
-                    id,
-                    name: n.name,
-                    exe_path: n.exe_path,
-                    interval_secs: n.interval_secs,
-                    check_mode: n.check_mode,
-                    checker_args: n.checker_args,
-                    recorder_args: n.recorder_args,
-                    url_template: n.url_template,
-                    output_dir: n.output_dir,
-                    folder_layout: n.folder_layout,
-                    log_checker_stdout: n.log_checker_stdout,
-                    log_checker_stderr: n.log_checker_stderr,
-                    end_after_minutes: n.end_after_minutes,
-                    file_exists_grace_secs: n.file_exists_grace_secs,
-                    growth_grace_secs: n.growth_grace_secs,
-                    stall_window_secs: n.stall_window_secs,
-                    file_check_interval_secs: n.file_check_interval_secs,
-                    restart_clear_minutes: n.restart_clear_minutes,
-                    restart_threshold: n.restart_threshold,
-                    color: n.color,
-                });
+                self.settings.sites.push(n.into_site(id));
                 self.commit();
             }
             PolicyCommand::UpdateSite(site) => {
@@ -774,10 +779,10 @@ impl Policy {
     }
 }
 
-/// The streamer's site auto-clear time for restart warnings, in minutes; 0 when unknown.
+/// The streamer's site auto-clear time for restart warnings, in minutes; 0 when the site is unknown.
 fn restart_clear_minutes(settings: &Settings, id: StreamerId) -> u64 {
     let site_id = settings.streamers.iter().find(|s| s.id == id).map(|s| s.site_id);
-    site_id.and_then(|sid| settings.sites.iter().find(|s| s.id == sid)).map_or(0, |s| s.restart_clear_minutes)
+    site_id.and_then(|sid| settings.sites.iter().find(|s| s.id == sid)).map_or(0, |s| s.restart_clear_or_default())
 }
 
 /// The site's output folder, or the global one when the site has none.
@@ -811,8 +816,7 @@ mod tests {
             id,
             name: "s".into(),
             exe_path: "yt-dlp".into(),
-            interval_secs: 60,
-            check_mode: CheckMode::DumpJson,
+            interval_secs: Some(60),
             checker_args: String::new(),
             recorder_args: String::new(),
             url_template: String::new(),
@@ -820,13 +824,13 @@ mod tests {
             folder_layout: FolderLayout::default(),
             log_checker_stdout: false,
             log_checker_stderr: false,
-            end_after_minutes: 30,
-            file_exists_grace_secs: 60,
-            growth_grace_secs: 60,
-            stall_window_secs: 120,
-            file_check_interval_secs: 30,
-            restart_clear_minutes: 0,
-            restart_threshold: 1,
+            end_after_minutes: Some(30),
+            file_exists_grace_secs: Some(60),
+            growth_grace_secs: Some(60),
+            stall_window_secs: Some(120),
+            file_check_interval_secs: Some(30),
+            restart_clear_minutes: Some(0),
+            restart_threshold: Some(1),
             color: None,
         }
     }
@@ -898,8 +902,7 @@ mod e2e {
             p.client.send(PolicyCommand::AddSite(NewSite {
                 name: "Fake".into(),
                 exe_path: sb.script.to_string_lossy().into(),
-                interval_secs: 5,
-                check_mode: CheckMode::DumpJson,
+                interval_secs: Some(5),
                 checker_args: "--dump-json {urls}".into(),
                 recorder_args: "RECORD {url}".into(),
                 url_template: "https://x.test/{username}".into(),
@@ -907,13 +910,13 @@ mod e2e {
                 folder_layout: FolderLayout::default(),
                 log_checker_stdout: false,
                 log_checker_stderr: false,
-                end_after_minutes: 30,
-                file_exists_grace_secs: 60,
-                growth_grace_secs: 60,
-                stall_window_secs: 120,
-                file_check_interval_secs: 30,
-                restart_clear_minutes: 1440,
-                restart_threshold: 1,
+                end_after_minutes: Some(30),
+                file_exists_grace_secs: Some(60),
+                growth_grace_secs: Some(60),
+                stall_window_secs: Some(120),
+                file_check_interval_secs: Some(30),
+                restart_clear_minutes: Some(1440),
+                restart_threshold: Some(1),
                 color: None,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;

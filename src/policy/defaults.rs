@@ -1,24 +1,10 @@
-//! Defaults for new sites: the presets and every per-site default value.
+//! Presets for new sites; only site-specific fields are pre-filled, the rest fall back at run time.
 
 use super::NewSite;
-use crate::api::{CheckMode, FolderLayout};
-
-pub const DEFAULT_JSON_ARGS: &str = "--dump-json --no-warnings --skip-download {urls}";
-pub const DEFAULT_SIM_ARGS: &str =
-    "--simulate --no-warnings --match-filter is_live --print \"%(original_url)s|%(webpage_url)s\" {urls}";
+use crate::api::FolderLayout;
 
 /// Colour given to new blank sites.
 pub const DEFAULT_SITE_COLOR: &str = "#7AA2F7";
-
-const DEFAULT_INTERVAL_SECS: u64 = 60;
-const DEFAULT_END_AFTER_MINUTES: u64 = 30;
-const DEFAULT_FILE_EXISTS_GRACE_SECS: u64 = 60;
-const DEFAULT_GROWTH_GRACE_SECS: u64 = 60;
-const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
-const TIKTOK_STALL_WINDOW_SECS: u64 = 360;
-const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
-const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
-const DEFAULT_RESTART_THRESHOLD: u32 = 1;
 
 /// Starting point for a new site.
 #[derive(Debug, Clone, Copy)]
@@ -27,29 +13,19 @@ pub enum Preset {
     Tiktok,
     Chaturbate,
     Kick,
+    Youtube,
     Blank,
 }
 
 /// The named preset whose site name matches `name` (ignoring case), else `Blank`.
 pub fn preset_for_name(name: &str) -> Preset {
-    [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick]
+    [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube]
         .into_iter()
         .find(|p| new_site(*p).name.eq_ignore_ascii_case(name.trim()))
         .unwrap_or(Preset::Blank)
 }
 
-/// Default yt-dlp path for new sites: the bundled binary on Windows/Linux, else PATH.
-fn default_exe() -> &'static str {
-    if cfg!(windows) {
-        r"bin\windows\yt-dlp\yt-dlp.exe"
-    } else if cfg!(target_os = "linux") {
-        "bin/linux/yt-dlp/yt-dlp"
-    } else {
-        "yt-dlp"
-    }
-}
-
-/// Every setting of a new site for `preset`.
+/// A new site for `preset`: name, URL template, checker/recorder arguments and colour; everything else is blank.
 pub fn new_site(preset: Preset) -> NewSite {
     let (name, url_template, checker, recorder, color) = match preset {
         Preset::Twitch => (
@@ -64,7 +40,7 @@ pub fn new_site(preset: Preset) -> NewSite {
             "https://tiktok.com/@{username}/live",
             "--cookies-from-browser firefox --dump-json {urls}",
             r#"--cookies-from-browser firefox --downloader ffmpeg --no-part --retries 0 --output "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
-            "#FE2C55",
+            "#19F0FF",
         ),
         Preset::Chaturbate => (
             "Chaturbate",
@@ -80,13 +56,19 @@ pub fn new_site(preset: Preset) -> NewSite {
             r#"--fixup never --no-part --output "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
             "#53FC18",
         ),
-        Preset::Blank => ("New site", "", "", "", DEFAULT_SITE_COLOR),
+        Preset::Youtube => (
+            "Youtube",
+            "https://www.youtube.com/@{username}/live",
+            "--dump-json {urls}",
+            r#"--fixup never --no-part --replace-in-metadata uploader_id "^@" "" --output "%(uploader_id)s %(epoch>%Y-%m-%d %H_%M_%S)s [%(id)s].%(ext)s" {url}"#,
+            "#FE2C55",
+        ),
+        Preset::Blank => ("", "", "", "", DEFAULT_SITE_COLOR),
     };
     NewSite {
         name: name.into(),
-        exe_path: default_exe().into(),
-        interval_secs: DEFAULT_INTERVAL_SECS,
-        check_mode: CheckMode::DumpJson,
+        exe_path: String::new(),
+        interval_secs: None,
         checker_args: checker.into(),
         recorder_args: recorder.into(),
         url_template: url_template.into(),
@@ -94,17 +76,34 @@ pub fn new_site(preset: Preset) -> NewSite {
         folder_layout: FolderLayout::default(),
         log_checker_stdout: false,
         log_checker_stderr: false,
-        end_after_minutes: DEFAULT_END_AFTER_MINUTES,
-        file_exists_grace_secs: DEFAULT_FILE_EXISTS_GRACE_SECS,
-        growth_grace_secs: DEFAULT_GROWTH_GRACE_SECS,
-        stall_window_secs: if matches!(preset, Preset::Tiktok) {
-            TIKTOK_STALL_WINDOW_SECS
-        } else {
-            DEFAULT_STALL_WINDOW_SECS
-        },
-        file_check_interval_secs: DEFAULT_FILE_CHECK_INTERVAL_SECS,
-        restart_clear_minutes: DEFAULT_RESTART_CLEAR_MINUTES,
-        restart_threshold: DEFAULT_RESTART_THRESHOLD,
+        end_after_minutes: None,
+        file_exists_grace_secs: None,
+        growth_grace_secs: None,
+        stall_window_secs: None,
+        file_check_interval_secs: None,
+        restart_clear_minutes: None,
+        restart_threshold: None,
         color: Some(color.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{DEFAULT_CHECKER_ARGS, DEFAULT_EXE, DEFAULT_INTERVAL_SECS};
+
+    #[test]
+    fn blank_site_has_no_values_and_falls_back() {
+        let site = new_site(Preset::Blank).into_site(1);
+        assert!(site.name.is_empty() && site.url_template.is_empty());
+        assert_eq!(site.interval_or_default(), DEFAULT_INTERVAL_SECS);
+        assert_eq!(site.checker_or_default(), DEFAULT_CHECKER_ARGS);
+        assert_eq!(site.exe_or_default(), DEFAULT_EXE);
+    }
+
+    #[test]
+    fn presets_are_found_by_name() {
+        assert!(matches!(preset_for_name("youtube"), Preset::Youtube));
+        assert!(matches!(preset_for_name("unknown"), Preset::Blank));
     }
 }

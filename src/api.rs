@@ -7,28 +7,49 @@ pub type SiteId = u64;
 pub type StreamerId = u64;
 pub type RecorderId = u64;
 
-/// How a site's checker output is interpreted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum CheckMode {
+/// How a site's checker output is parsed, chosen from its checker arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckOutput {
     /// One JSON object per stdout line (`--dump-json`).
-    #[default]
-    DumpJson,
+    Json,
     /// Pipe-separated stdout lines (`--simulate --print ...`).
     Simulate,
 }
 
-impl CheckMode {
-    pub const ALL: [CheckMode; 2] = [CheckMode::DumpJson, CheckMode::Simulate];
-}
-
-impl std::fmt::Display for CheckMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CheckMode::DumpJson => write!(f, "--dump-json"),
-            CheckMode::Simulate => write!(f, "--simulate"),
+impl CheckOutput {
+    /// Detects the format from the arguments; `--dump-json` wins, and `None` means neither flag is present.
+    pub fn detect(args: &str) -> Option<Self> {
+        let has = |flags: [&str; 2]| args.split_whitespace().any(|t| flags.contains(&t));
+        if has(["--dump-json", "-j"]) {
+            Some(Self::Json)
+        } else if has(["--simulate", "-s"]) {
+            Some(Self::Simulate)
+        } else {
+            None
         }
     }
 }
+
+/// Checker arguments used when a site's own are blank.
+pub const DEFAULT_CHECKER_ARGS: &str = "--dump-json {urls}";
+/// Recorder arguments used when a site's own are blank.
+pub const DEFAULT_RECORDER_ARGS: &str = r#"--fixup never --no-part --output "%(title)s.%(ext)s" {url}"#;
+/// yt-dlp path used when a site's own is blank: the bundled binary on Windows/Linux, else PATH.
+pub const DEFAULT_EXE: &str = if cfg!(windows) {
+    r"bin\windows\yt-dlp\yt-dlp.exe"
+} else if cfg!(target_os = "linux") {
+    "bin/linux/yt-dlp/yt-dlp"
+} else {
+    "yt-dlp"
+};
+pub const DEFAULT_INTERVAL_SECS: u64 = 60;
+pub const DEFAULT_END_AFTER_MINUTES: u64 = 30;
+pub const DEFAULT_FILE_EXISTS_GRACE_SECS: u64 = 60;
+pub const DEFAULT_GROWTH_GRACE_SECS: u64 = 60;
+pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
+pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
+pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
+pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
 
 /// Subfolders recordings are placed in below the output folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -68,10 +89,13 @@ impl std::fmt::Display for FolderLayout {
 pub struct Site {
     pub id: SiteId,
     pub name: String,
+    /// Blank uses `DEFAULT_EXE`.
     pub exe_path: String,
-    pub interval_secs: u64,
-    pub check_mode: CheckMode,
+    /// Blank (`None`) uses the default for this and the other timing fields below.
+    pub interval_secs: Option<u64>,
+    /// Blank uses `DEFAULT_CHECKER_ARGS`.
     pub checker_args: String,
+    /// Blank uses `DEFAULT_RECORDER_ARGS`.
     pub recorder_args: String,
     /// Stream URL pattern; `{username}` is replaced with the name typed when adding a streamer.
     pub url_template: String,
@@ -87,21 +111,73 @@ pub struct Site {
     #[serde(default)]
     pub log_checker_stderr: bool,
     /// Minutes without a live sighting after which a stream counts as ended.
-    pub end_after_minutes: u64,
+    pub end_after_minutes: Option<u64>,
     /// Seconds after the recording file's path is verified before the file must exist.
-    pub file_exists_grace_secs: u64,
+    pub file_exists_grace_secs: Option<u64>,
     /// Seconds after the path is verified before file growth is checked.
-    pub growth_grace_secs: u64,
+    pub growth_grace_secs: Option<u64>,
     /// Seconds without file growth after which a recording counts as stalled.
-    pub stall_window_secs: u64,
+    pub stall_window_secs: Option<u64>,
     /// Seconds between checks of the recording file.
-    pub file_check_interval_secs: u64,
+    pub file_check_interval_secs: Option<u64>,
     /// Minutes after the latest restart at which restart warnings clear themselves; 0 keeps them until cleared by hand.
-    pub restart_clear_minutes: u64,
+    pub restart_clear_minutes: Option<u64>,
     /// Restarts needed before the RESTARTED chip shows.
-    pub restart_threshold: u32,
+    pub restart_threshold: Option<u32>,
     /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
     pub color: Option<String>,
+}
+
+/// `text` trimmed, or `fallback` when it is blank.
+fn or_default<'a>(text: &'a str, fallback: &'a str) -> &'a str {
+    let t = text.trim();
+    if t.is_empty() { fallback } else { t }
+}
+
+impl Site {
+    pub fn exe_or_default(&self) -> &str {
+        or_default(&self.exe_path, DEFAULT_EXE)
+    }
+
+    pub fn checker_or_default(&self) -> &str {
+        or_default(&self.checker_args, DEFAULT_CHECKER_ARGS)
+    }
+
+    pub fn recorder_or_default(&self) -> &str {
+        or_default(&self.recorder_args, DEFAULT_RECORDER_ARGS)
+    }
+
+    pub fn interval_or_default(&self) -> u64 {
+        self.interval_secs.unwrap_or(DEFAULT_INTERVAL_SECS)
+    }
+
+    pub fn end_after_or_default(&self) -> u64 {
+        self.end_after_minutes.unwrap_or(DEFAULT_END_AFTER_MINUTES)
+    }
+
+    pub fn exists_grace_or_default(&self) -> u64 {
+        self.file_exists_grace_secs.unwrap_or(DEFAULT_FILE_EXISTS_GRACE_SECS)
+    }
+
+    pub fn growth_grace_or_default(&self) -> u64 {
+        self.growth_grace_secs.unwrap_or(DEFAULT_GROWTH_GRACE_SECS)
+    }
+
+    pub fn stall_window_or_default(&self) -> u64 {
+        self.stall_window_secs.unwrap_or(DEFAULT_STALL_WINDOW_SECS)
+    }
+
+    pub fn file_check_or_default(&self) -> u64 {
+        self.file_check_interval_secs.unwrap_or(DEFAULT_FILE_CHECK_INTERVAL_SECS)
+    }
+
+    pub fn restart_clear_or_default(&self) -> u64 {
+        self.restart_clear_minutes.unwrap_or(DEFAULT_RESTART_CLEAR_MINUTES)
+    }
+
+    pub fn restart_threshold_or_default(&self) -> u32 {
+        self.restart_threshold.unwrap_or(DEFAULT_RESTART_THRESHOLD)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,4 +318,17 @@ pub fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_kind_is_detected_from_flags() {
+        assert_eq!(CheckOutput::detect("--dump-json {urls}"), Some(CheckOutput::Json));
+        assert_eq!(CheckOutput::detect("-s --print x {urls}"), Some(CheckOutput::Simulate));
+        assert_eq!(CheckOutput::detect("--simulate --dump-json {urls}"), Some(CheckOutput::Json));
+        assert_eq!(CheckOutput::detect("--cookies-from-browser firefox {urls}"), None);
+    }
 }

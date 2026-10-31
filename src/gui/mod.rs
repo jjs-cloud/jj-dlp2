@@ -8,8 +8,8 @@ use crate::api::*;
 use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
 use crate::policy::{
-    new_site, preset_for_name, PolicyClient, PolicyCommand, PolicyEvent, Preset, RecordingFile, UpdateEvent, DEFAULT_JSON_ARGS,
-    DEFAULT_SIM_ARGS, DEFAULT_SITE_COLOR,
+    new_site, preset_for_name, NewSite, PolicyClient, PolicyCommand, PolicyEvent, Preset, RecordingFile, UpdateEvent,
+    DEFAULT_SITE_COLOR,
 };
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
@@ -23,6 +23,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 pub const SITE_SWATCHES: [&str; 10] = [
     "#9146FF", "#FE2C55", "#F89C1C", "#53FC18", "#19F0FF", "#FF2BD6", "#FFD24A", "#7AA2F7", "#F38BA8", "#B8FFC8",
 ];
+
+/// Draft key for the unsaved blank site; real site ids start at 1.
+pub const NEW_SITE_ID: SiteId = 0;
 
 static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
 /// Latest window size, read when the app exits.
@@ -104,7 +107,6 @@ pub struct SiteDraft {
     pub growth_grace: String,
     pub stall_window: String,
     pub file_check_interval: String,
-    pub mode: CheckMode,
     pub checker: String,
     pub recorder: String,
     pub url_template: String,
@@ -121,15 +123,14 @@ impl SiteDraft {
         Self {
             name: s.name.clone(),
             exe: s.exe_path.clone(),
-            interval: s.interval_secs.to_string(),
-            end_after: s.end_after_minutes.to_string(),
-            restart_clear: s.restart_clear_minutes.to_string(),
-            restart_threshold: s.restart_threshold.to_string(),
-            file_exists_grace: s.file_exists_grace_secs.to_string(),
-            growth_grace: s.growth_grace_secs.to_string(),
-            stall_window: s.stall_window_secs.to_string(),
-            file_check_interval: s.file_check_interval_secs.to_string(),
-            mode: s.check_mode,
+            interval: opt_text(s.interval_secs),
+            end_after: opt_text(s.end_after_minutes),
+            restart_clear: opt_text(s.restart_clear_minutes),
+            restart_threshold: opt_text(s.restart_threshold),
+            file_exists_grace: opt_text(s.file_exists_grace_secs),
+            growth_grace: opt_text(s.growth_grace_secs),
+            stall_window: opt_text(s.stall_window_secs),
+            file_check_interval: opt_text(s.file_check_interval_secs),
             checker: s.checker_args.clone(),
             recorder: s.recorder_args.clone(),
             url_template: s.url_template.clone(),
@@ -148,15 +149,14 @@ impl SiteDraft {
         Self {
             name: name.to_string(),
             exe: n.exe_path,
-            interval: n.interval_secs.to_string(),
-            end_after: n.end_after_minutes.to_string(),
-            restart_clear: n.restart_clear_minutes.to_string(),
-            restart_threshold: n.restart_threshold.to_string(),
-            file_exists_grace: n.file_exists_grace_secs.to_string(),
-            growth_grace: n.growth_grace_secs.to_string(),
-            stall_window: n.stall_window_secs.to_string(),
-            file_check_interval: n.file_check_interval_secs.to_string(),
-            mode: n.check_mode,
+            interval: opt_text(n.interval_secs),
+            end_after: opt_text(n.end_after_minutes),
+            restart_clear: opt_text(n.restart_clear_minutes),
+            restart_threshold: opt_text(n.restart_threshold),
+            file_exists_grace: opt_text(n.file_exists_grace_secs),
+            growth_grace: opt_text(n.growth_grace_secs),
+            stall_window: opt_text(n.stall_window_secs),
+            file_check_interval: opt_text(n.file_check_interval_secs),
             checker: n.checker_args,
             recorder: n.recorder_args,
             url_template: n.url_template,
@@ -179,51 +179,79 @@ impl SiteDraft {
         (!self.use_theme_color).then(|| format!("#{}", self.color.trim().trim_start_matches('#').to_uppercase()))
     }
 
-    pub fn interval_secs(&self) -> Option<u64> {
-        self.interval.trim().parse().ok().filter(|v| *v >= 5)
+    pub fn interval_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.interval, 5)
     }
 
-    pub fn end_after_minutes(&self) -> Option<u64> {
-        self.end_after.trim().parse().ok().filter(|v| *v >= 1)
+    pub fn end_after_minutes(&self) -> Option<Option<u64>> {
+        parse_opt(&self.end_after, 1)
     }
 
     /// Minutes of quiet after which restart warnings clear; 0 turns auto-clear off.
-    pub fn restart_clear_minutes(&self) -> Option<u64> {
-        self.restart_clear.trim().parse().ok()
+    pub fn restart_clear_minutes(&self) -> Option<Option<u64>> {
+        parse_opt(&self.restart_clear, 0)
     }
 
-    pub fn restart_threshold(&self) -> Option<u32> {
-        self.restart_threshold.trim().parse().ok().filter(|v| *v >= 1)
+    pub fn restart_threshold(&self) -> Option<Option<u32>> {
+        parse_opt(&self.restart_threshold, 1)
     }
 
-    pub fn file_exists_grace_secs(&self) -> Option<u64> {
-        parse_secs(&self.file_exists_grace, 1)
+    pub fn file_exists_grace_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.file_exists_grace, 1)
     }
 
-    pub fn growth_grace_secs(&self) -> Option<u64> {
-        parse_secs(&self.growth_grace, 1)
+    pub fn growth_grace_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.growth_grace, 1)
     }
 
-    pub fn stall_window_secs(&self) -> Option<u64> {
-        parse_secs(&self.stall_window, 1)
+    pub fn stall_window_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.stall_window, 1)
     }
 
-    pub fn file_check_interval_secs(&self) -> Option<u64> {
-        parse_secs(&self.file_check_interval, 5)
+    pub fn file_check_interval_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.file_check_interval, 5)
     }
 
-    /// True when all four recording-file timings parse.
-    pub fn file_checks_ok(&self) -> bool {
-        self.file_exists_grace_secs().is_some()
-            && self.growth_grace_secs().is_some()
-            && self.stall_window_secs().is_some()
-            && self.file_check_interval_secs().is_some()
+    /// The site this draft describes, or `None` while the name is blank or a field is invalid.
+    pub fn to_new_site(&self) -> Option<NewSite> {
+        if self.name.trim().is_empty() || !self.color_ok() {
+            return None;
+        }
+        Some(NewSite {
+            name: self.name.trim().to_string(),
+            exe_path: self.exe.trim().to_string(),
+            interval_secs: self.interval_secs()?,
+            checker_args: self.checker.trim().to_string(),
+            recorder_args: self.recorder.trim().to_string(),
+            url_template: self.url_template.trim().to_string(),
+            output_dir: self.output.trim().to_string(),
+            folder_layout: self.folder_layout,
+            log_checker_stdout: self.log_stdout,
+            log_checker_stderr: self.log_stderr,
+            end_after_minutes: self.end_after_minutes()?,
+            file_exists_grace_secs: self.file_exists_grace_secs()?,
+            growth_grace_secs: self.growth_grace_secs()?,
+            stall_window_secs: self.stall_window_secs()?,
+            file_check_interval_secs: self.file_check_interval_secs()?,
+            restart_clear_minutes: self.restart_clear_minutes()?,
+            restart_threshold: self.restart_threshold()?,
+            color: self.site_color(),
+        })
     }
 }
 
-/// Parses whole seconds, rejecting values below `min`.
-fn parse_secs(text: &str, min: u64) -> Option<u64> {
-    text.trim().parse().ok().filter(|v| *v >= min)
+/// A number's text, or blank for `None`.
+fn opt_text<T: ToString>(v: Option<T>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_default()
+}
+
+/// Parses an optional whole number: blank is `Some(None)`, invalid or below `min` is `None`.
+fn parse_opt<T: std::str::FromStr + PartialOrd>(text: &str, min: T) -> Option<Option<T>> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Some(None);
+    }
+    t.parse().ok().filter(|v| *v >= min).map(Some)
 }
 
 #[derive(Debug, Clone)]
@@ -238,7 +266,6 @@ pub enum DraftField {
     GrowthGrace(String),
     StallWindow(String),
     FileCheckInterval(String),
-    Mode(CheckMode),
     Checker(String),
     Recorder(String),
     UrlTemplate(String),
@@ -511,22 +538,31 @@ impl App {
                 }
             }
             Msg::AddSite(preset) => {
+                if matches!(preset, Preset::Blank) {
+                    self.drafts.entry(NEW_SITE_ID).or_insert_with(|| SiteDraft::from_defaults("", Preset::Blank));
+                    return iced::widget::operation::snap_to(
+                        sites_scroll_id(),
+                        iced::widget::scrollable::RelativeOffset { x: 0.0, y: 0.0 },
+                    );
+                }
                 let site = new_site(preset);
-                // Named presets are added once; Blank can repeat.
-                let exists = !matches!(preset, Preset::Blank)
-                    && self.settings.sites.iter().any(|s| s.name.eq_ignore_ascii_case(&site.name));
-                if exists {
+                // Named presets are added once.
+                if self.settings.sites.iter().any(|s| s.name.eq_ignore_ascii_case(&site.name)) {
                     if let Some(task) = self.jump_to_site(&site.name) {
                         return task;
                     }
                 } else {
-                    if !matches!(preset, Preset::Blank) {
-                        self.pending_jump = Some(site.name.clone());
-                    }
+                    self.pending_jump = Some(site.name.clone());
                     self.client.send(PolicyCommand::AddSite(site));
                 }
             }
-            Msg::RemoveSite(id) => self.client.send(PolicyCommand::RemoveSite(id)),
+            Msg::RemoveSite(id) => {
+                if id == NEW_SITE_ID {
+                    self.drafts.remove(&id);
+                } else {
+                    self.client.send(PolicyCommand::RemoveSite(id));
+                }
+            }
             Msg::Draft(id, field) => {
                 if let Some(d) = self.drafts.get_mut(&id) {
                     match field {
@@ -540,17 +576,6 @@ impl App {
                         DraftField::GrowthGrace(v) => d.growth_grace = v,
                         DraftField::StallWindow(v) => d.stall_window = v,
                         DraftField::FileCheckInterval(v) => d.file_check_interval = v,
-                        DraftField::Mode(m) => {
-                            let swap = |cur: &str, from: &str, to: &str| (cur.trim() == from).then(|| to.to_string());
-                            let new_args = match m {
-                                CheckMode::Simulate => swap(&d.checker, DEFAULT_JSON_ARGS, DEFAULT_SIM_ARGS),
-                                CheckMode::DumpJson => swap(&d.checker, DEFAULT_SIM_ARGS, DEFAULT_JSON_ARGS),
-                            };
-                            if let Some(a) = new_args {
-                                d.checker = a;
-                            }
-                            d.mode = m;
-                        }
                         DraftField::Checker(v) => d.checker = v,
                         DraftField::Recorder(v) => d.recorder = v,
                         DraftField::UrlTemplate(v) => d.url_template = v,
@@ -568,44 +593,13 @@ impl App {
                 }
             }
             Msg::SaveSite(id) => {
-                if let Some(d) = self.drafts.get(&id) {
-                    let checks = (
-                        d.file_exists_grace_secs(),
-                        d.growth_grace_secs(),
-                        d.stall_window_secs(),
-                        d.file_check_interval_secs(),
-                    );
-                    let restarts = (d.restart_clear_minutes(), d.restart_threshold());
-                    if let (
-                        Some(interval),
-                        Some(end_after),
-                        true,
-                        (Some(exists), Some(growth), Some(stall), Some(every)),
-                        (Some(restart_clear), Some(restart_threshold)),
-                    ) = (d.interval_secs(), d.end_after_minutes(), d.color_ok(), checks, restarts)
-                    {
-                        self.client.send(PolicyCommand::UpdateSite(Site {
-                            id,
-                            name: d.name.trim().to_string(),
-                            exe_path: d.exe.trim().to_string(),
-                            interval_secs: interval,
-                            check_mode: d.mode,
-                            checker_args: d.checker.trim().to_string(),
-                            recorder_args: d.recorder.trim().to_string(),
-                            url_template: d.url_template.trim().to_string(),
-                            output_dir: d.output.trim().to_string(),
-                            folder_layout: d.folder_layout,
-                            log_checker_stdout: d.log_stdout,
-                            log_checker_stderr: d.log_stderr,
-                            end_after_minutes: end_after,
-                            file_exists_grace_secs: exists,
-                            growth_grace_secs: growth,
-                            stall_window_secs: stall,
-                            file_check_interval_secs: every,
-                            restart_clear_minutes: restart_clear,
-                            restart_threshold,
-                            color: d.site_color(),
-                        }));
+                if let Some(site) = self.drafts.get(&id).and_then(SiteDraft::to_new_site) {
+                    if id == NEW_SITE_ID {
+                        self.drafts.remove(&NEW_SITE_ID);
+                        self.pending_jump = Some(site.name.clone());
+                        self.client.send(PolicyCommand::AddSite(site));
+                    } else {
+                        self.client.send(PolicyCommand::UpdateSite(site.into_site(id)));
                     }
                 }
             }
@@ -780,7 +774,7 @@ impl App {
         if self.global_out.is_empty() || self.global_out == self.settings.default_output_dir {
             self.global_out = s.default_output_dir.clone();
         }
-        self.drafts.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
+        self.drafts.retain(|id, _| *id == NEW_SITE_ID || s.sites.iter().any(|x| x.id == *id));
         for site in &s.sites {
             let old = self.settings.sites.iter().find(|o| o.id == site.id);
             let editing = match (self.drafts.get(&site.id), old) {

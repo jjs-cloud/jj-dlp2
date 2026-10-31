@@ -95,6 +95,12 @@ pub fn check_problem(lines: &[String], success: bool, code: Option<i32>, has_ent
     Some(Problem { line, hint: None })
 }
 
+/// Problem for checker arguments that contain neither `--dump-json` nor `--simulate`.
+pub fn missing_output_flag() -> Problem {
+    let hint = "The checker arguments need --dump-json or --simulate, so no live streams can be detected.";
+    Problem { line: "ERROR: checker arguments have no --dump-json or --simulate".to_string(), hint: Some(hint.to_string()) }
+}
+
 pub fn describe_exit(code: Option<i32>) -> String {
     code.map_or_else(|| "terminated by a signal".to_string(), |c| format!("exit code {c}"))
 }

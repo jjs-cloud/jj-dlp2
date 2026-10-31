@@ -32,7 +32,7 @@ pub struct LiveTracker {
 pub fn lookup(settings: &Settings, id: StreamerId) -> Option<(SiteId, u64)> {
     let site_id = settings.streamers.iter().find(|s| s.id == id)?.site_id;
     let site = settings.sites.iter().find(|s| s.id == site_id)?;
-    Some((site_id, site.end_after_minutes.saturating_mul(60)))
+    Some((site_id, site.end_after_or_default().saturating_mul(60)))
 }
 
 impl LiveTracker {

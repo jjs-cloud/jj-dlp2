@@ -56,7 +56,7 @@ async fn ffmpeg_available(sites: &[Site]) -> bool {
     if sites.iter().any(sets_location) {
         return true;
     }
-    if cfg!(windows) && sites.iter().any(|s| ffmpeg_beside_ytdlp(&s.exe_path)) {
+    if cfg!(windows) && sites.iter().any(|s| ffmpeg_beside_ytdlp(s.exe_or_default())) {
         return true;
     }
     let mut cmd = Command::new("ffmpeg");

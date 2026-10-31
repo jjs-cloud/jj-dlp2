@@ -2,7 +2,7 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, OptionField, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
+    App, DraftField, Msg, NEW_SITE_ID, OptionField, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
 use crate::policy::{layout, Preset};
@@ -535,7 +535,7 @@ impl App {
     /// The streamer's restart count, or 0 while it is below the site's threshold.
     fn shown_restarts(&self, st: &Streamer) -> u32 {
         let count = self.restarts.get(&st.id).copied().unwrap_or(0);
-        let threshold = self.settings.sites.iter().find(|x| x.id == st.site_id).map_or(1, |x| x.restart_threshold);
+        let threshold = self.settings.sites.iter().find(|x| x.id == st.site_id).map_or(1, |x| x.restart_threshold_or_default());
         if count >= threshold { count } else { 0 }
     }
 
@@ -1239,6 +1239,7 @@ impl App {
             ("Tiktok", Preset::Tiktok),
             ("Chaturbate", Preset::Chaturbate),
             ("Kick", Preset::Kick),
+            ("Youtube", Preset::Youtube),
             ("Blank", Preset::Blank),
         ];
         let mut add = row![self.section_title(s, "ADD SITE")]
@@ -1252,12 +1253,16 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        if self.settings.sites.is_empty() {
+        let new_draft = self.drafts.get(&NEW_SITE_ID);
+        if self.settings.sites.is_empty() && new_draft.is_none() {
             col = col.push(muted(&s, "Pick a preset to start; every field stays editable afterwards."));
+        }
+        if let Some(d) = new_draft {
+            col = col.push(self.site_editor(s, NEW_SITE_ID, None, d));
         }
         for site in &self.settings.sites {
             if let Some(d) = self.drafts.get(&site.id) {
-                col = col.push(self.site_editor(s, site, d));
+                col = col.push(self.site_editor(s, site.id, Some(site), d));
             }
         }
         let list = scrollable(col).id(super::sites_scroll_id()).height(Length::Fill);
@@ -1435,12 +1440,11 @@ impl App {
         scrollable(col).height(Length::Fill).into()
     }
 
-    fn site_editor<'a>(&'a self, s: Skin, site: &'a Site, d: &'a SiteDraft) -> Element<'a, Msg> {
-        let id = site.id;
+    fn site_editor<'a>(&'a self, s: Skin, id: SiteId, saved: Option<&Site>, d: &'a SiteDraft) -> Element<'a, Msg> {
         let labeled = |label: &'static str, input: Element<'a, Msg>| -> Element<'a, Msg> {
             column![muted(&s, label), input].spacing(2).into()
         };
-        let field = |placeholder: &'static str,
+        let field = |placeholder: &str,
                      value: &'a str,
                      f: fn(String) -> DraftField|
          -> Element<'a, Msg> {
@@ -1452,47 +1456,24 @@ impl App {
                 .into()
         };
         let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
-        let dirty = *d != SiteDraft::from_site(site);
-        let valid = d.interval_secs().is_some()
-            && d.end_after_minutes().is_some()
-            && d.restart_clear_minutes().is_some()
-            && d.restart_threshold().is_some()
-            && d.file_checks_ok()
-            && d.color_ok()
-            && !d.name.trim().is_empty();
+        let dirty = saved.is_none_or(|site| *d != SiteDraft::from_site(site));
+        let valid = d.to_new_site().is_some();
 
         let identity = row![
             cell(
-                labeled("Site name", field("Site name", &d.name, DraftField::Name)),
-                Length::FillPortion(2)
+                labeled("Site name", field("Example: Twitch", &d.name, DraftField::Name)),
+                Length::FillPortion(1)
             ),
             cell(
                 labeled(
-                    "Check every (seconds, min 5)",
-                    field("60", &d.interval, DraftField::Interval)
+                    "Check every (seconds)",
+                    field(&DEFAULT_INTERVAL_SECS.to_string(), &d.interval, DraftField::Interval)
                 ),
-                Length::Fixed(190.0)
+                Length::FillPortion(1)
             ),
             cell(
-                labeled(
-                    "Checker mode",
-                    pick_list(CheckMode::ALL, Some(d.mode), move |m| Msg::Draft(
-                        id,
-                        DraftField::Mode(m)
-                    ))
-                    .padding(5)
-                    .text_size(13)
-                    .width(Length::Fill)
-                    .into(),
-                ),
-                Length::Fixed(150.0)
-            ),
-            cell(
-                labeled(
-                    "Path to yt-dlp executable",
-                    field("yt-dlp or C:\\tools\\yt-dlp.exe", &d.exe, DraftField::Exe)
-                ),
-                Length::FillPortion(3)
+                labeled("Path to yt-dlp executable", field(DEFAULT_EXE, &d.exe, DraftField::Exe)),
+                Length::FillPortion(1)
             ),
         ]
         .spacing(8);
@@ -1535,21 +1516,21 @@ impl App {
             cell(
                 labeled(
                     "Consider a stream ended after (minutes)",
-                    field("30", &d.end_after, DraftField::EndAfter)
+                    field(&DEFAULT_END_AFTER_MINUTES.to_string(), &d.end_after, DraftField::EndAfter)
                 ),
                 Length::FillPortion(1)
             ),
             cell(
                 labeled(
                     "Clear restart warnings after (minutes, 0 = never)",
-                    field("1440", &d.restart_clear, DraftField::RestartClear)
+                    field(&DEFAULT_RESTART_CLEAR_MINUTES.to_string(), &d.restart_clear, DraftField::RestartClear)
                 ),
                 Length::FillPortion(1)
             ),
             cell(
                 labeled(
                     "Warning threshold (restarts)",
-                    field("1", &d.restart_threshold, DraftField::RestartThreshold)
+                    field(&DEFAULT_RESTART_THRESHOLD.to_string(), &d.restart_threshold, DraftField::RestartThreshold)
                 ),
                 Length::FillPortion(1)
             ),
@@ -1562,28 +1543,28 @@ impl App {
                 cell(
                     labeled(
                         "Warn if file doesn't exist after (seconds)",
-                        field("60", &d.file_exists_grace, DraftField::FileExistsGrace)
+                        field(&DEFAULT_FILE_EXISTS_GRACE_SECS.to_string(), &d.file_exists_grace, DraftField::FileExistsGrace)
                     ),
                     Length::FillPortion(1)
                 ),
                 cell(
                     labeled(
                         "Warn if file doesn't start growing after (seconds)",
-                        field("60", &d.growth_grace, DraftField::GrowthGrace)
+                        field(&DEFAULT_GROWTH_GRACE_SECS.to_string(), &d.growth_grace, DraftField::GrowthGrace)
                     ),
                     Length::FillPortion(1)
                 ),
                 cell(
                     labeled(
                         "Warn if file stops growing for (seconds)",
-                        field("120", &d.stall_window, DraftField::StallWindow)
+                        field(&DEFAULT_STALL_WINDOW_SECS.to_string(), &d.stall_window, DraftField::StallWindow)
                     ),
                     Length::FillPortion(1)
                 ),
                 cell(
                     labeled(
                         "Check for growth every (seconds)",
-                        field("30", &d.file_check_interval, DraftField::FileCheckInterval)
+                        field(&DEFAULT_FILE_CHECK_INTERVAL_SECS.to_string(), &d.file_check_interval, DraftField::FileCheckInterval)
                     ),
                     Length::FillPortion(1)
                 ),
@@ -1630,7 +1611,7 @@ impl App {
                 labeled(
                     "URL template ( {username} = the streamer's username )",
                     field(
-                        "https://twitch.tv/{username}",
+                        "Example: https://twitch.tv/{username}",
                         &d.url_template,
                         DraftField::UrlTemplate
                     )
@@ -1640,19 +1621,23 @@ impl App {
             cell(
                 labeled(
                     "Checker arguments ( {urls} = list of streamer's URL )",
-                    field("--dump-json {urls}", &d.checker, DraftField::Checker)
+                    field(DEFAULT_CHECKER_ARGS, &d.checker, DraftField::Checker)
                 ),
                 Length::FillPortion(1)
             ),
         ]
         .spacing(8);
+        let mut templates = column![templates].spacing(2);
+        if !d.checker.trim().is_empty() && CheckOutput::detect(&d.checker).is_none() {
+            templates = templates.push(warn_text(&s, CHECKER_FLAG_WARNING));
+        }
 
         let mut recorder_col = column![labeled(
             "Recorder arguments ( {url} = the streamer's URL )",
-            field("--output \"%(title)s.%(ext)s\" {url}", &d.recorder, DraftField::Recorder)
+            field(DEFAULT_RECORDER_ARGS, &d.recorder, DraftField::Recorder)
         )]
         .spacing(2);
-        if !has_no_part(&d.recorder) {
+        if !d.recorder.trim().is_empty() && !has_no_part(&d.recorder) {
             recorder_col = recorder_col.push(
                 iced::widget::text("Add --no-part: otherwise the recording file can't be verified, so Open and STALLED checks stay off.")
                     .font(s.font)
@@ -1673,35 +1658,60 @@ impl App {
                 .on_toggle(move |v| Msg::Draft(id, f(v)))
                 .text_size(12)
         };
-        let actions = row![
+        let mut actions: Row<'a, Msg> = row![
             log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
             log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
             Space::new().width(Length::Fill),
-            if dirty {
-                chip(s, "unsaved changes", s.warn)
-            } else {
-                Space::new().into()
-            },
-            muted(&s, format!("{count} streamer(s)")),
-            button(btn_label(&s, "Save changes").size(13))
-                .on_press_maybe((dirty && valid).then_some(Msg::SaveSite(id)))
-                .padding([5.0, 12.0])
-                .style(skin::btn(s, BtnKind::Primary)),
-            button(t(&s, "Revert").size(13))
-                .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
-                .padding([5.0, 12.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Defaults").size(13))
-                .on_press(Msg::DefaultsSite(id))
-                .padding([5.0, 12.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Remove site").size(13))
-                .on_press(Msg::RemoveSite(id))
-                .padding([5.0, 12.0])
-                .style(skin::btn(s, BtnKind::Danger)),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
+        if saved.is_some() {
+            actions = actions
+                .push(if dirty {
+                    chip(s, "unsaved changes", s.warn)
+                } else {
+                    Space::new().into()
+                })
+                .push(muted(&s, format!("{count} streamer(s)")))
+                .push(
+                    button(btn_label(&s, "Save changes").size(13))
+                        .on_press_maybe((dirty && valid).then_some(Msg::SaveSite(id)))
+                        .padding([5.0, 12.0])
+                        .style(skin::btn(s, BtnKind::Primary)),
+                )
+                .push(
+                    button(t(&s, "Revert").size(13))
+                        .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
+                        .padding([5.0, 12.0])
+                        .style(skin::btn(s, BtnKind::Ghost)),
+                )
+                .push(
+                    button(t(&s, "Defaults").size(13))
+                        .on_press(Msg::DefaultsSite(id))
+                        .padding([5.0, 12.0])
+                        .style(skin::btn(s, BtnKind::Ghost)),
+                )
+                .push(
+                    button(t(&s, "Remove site").size(13))
+                        .on_press(Msg::RemoveSite(id))
+                        .padding([5.0, 12.0])
+                        .style(skin::btn(s, BtnKind::Danger)),
+                );
+        } else {
+            actions = actions
+                .push(
+                    button(btn_label(&s, "Add site").size(13))
+                        .on_press_maybe(valid.then_some(Msg::SaveSite(id)))
+                        .padding([5.0, 12.0])
+                        .style(skin::btn(s, BtnKind::Primary)),
+                )
+                .push(
+                    button(t(&s, "Discard").size(13))
+                        .on_press(Msg::RemoveSite(id))
+                        .padding([5.0, 12.0])
+                        .style(skin::btn(s, BtnKind::Ghost)),
+                );
+        }
 
         let mut form = Column::new().spacing(6).push(identity).push(output_row);
         if d.folder_layout != FolderLayout::Flat && layout::has_absolute_template(&d.recorder) {
@@ -1743,6 +1753,9 @@ impl App {
             .into()
     }
 }
+
+/// Shown when the checker arguments cannot tell the app how to read yt-dlp's output.
+const CHECKER_FLAG_WARNING: &str = "Add --dump-json or --simulate: otherwise no live streams can be detected.";
 
 /// Shown when an absolute `--output` path stops the subfolder setting from applying.
 const ABSOLUTE_TEMPLATE_WARNING: &str = "The recorder arguments use an absolute --output path, so subfolders are not applied.";

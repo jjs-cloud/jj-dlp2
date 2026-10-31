@@ -36,10 +36,10 @@ impl Thresholds {
     pub fn from_site(site: &Site) -> Self {
         let secs = |v: u64| Duration::from_secs(v.max(1));
         Self {
-            exists_grace: secs(site.file_exists_grace_secs),
-            growth_grace: secs(site.growth_grace_secs),
-            stall_window: secs(site.stall_window_secs),
-            interval: secs(site.file_check_interval_secs),
+            exists_grace: secs(site.exists_grace_or_default()),
+            growth_grace: secs(site.growth_grace_or_default()),
+            stall_window: secs(site.stall_window_or_default()),
+            interval: secs(site.file_check_or_default()),
         }
     }
 }
