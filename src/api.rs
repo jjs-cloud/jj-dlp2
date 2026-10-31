@@ -50,6 +50,8 @@ pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
 pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 30;
 pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
 pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
+pub const DEFAULT_NOTIFY_COOLDOWN_MINUTES: u64 = 30;
+pub const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 15;
 
 /// Subfolders recordings are placed in below the output folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -126,6 +128,24 @@ pub struct Site {
     pub restart_threshold: Option<u32>,
     /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
     pub color: Option<String>,
+    /// Master switch for notifications about this site's streamers.
+    pub notify: bool,
+    /// Show a native desktop notification.
+    pub notify_desktop: bool,
+    /// Send an ntfy notification to `ntfy_topic`.
+    pub notify_ntfy: bool,
+    /// Topic name used for ntfy notifications.
+    pub ntfy_topic: String,
+    /// Minutes before the same notification kind can be sent again for a streamer; blank uses the default.
+    pub notify_cooldown_minutes: Option<u64>,
+    /// Seconds a desktop notification stays up; blank uses the default.
+    pub notify_timeout_secs: Option<u64>,
+    /// Hold the live notification until the recording file is confirmed growing.
+    pub notify_confirmed: bool,
+    /// Notify when a recording is flagged as stalled.
+    pub notify_stalled: bool,
+    /// Notify when a recording is flagged as restarted.
+    pub notify_restarted: bool,
 }
 
 /// `text` trimmed, or `fallback` when it is blank.
@@ -178,6 +198,14 @@ impl Site {
     pub fn restart_threshold_or_default(&self) -> u32 {
         self.restart_threshold.unwrap_or(DEFAULT_RESTART_THRESHOLD)
     }
+
+    pub fn notify_cooldown_or_default(&self) -> u64 {
+        self.notify_cooldown_minutes.unwrap_or(DEFAULT_NOTIFY_COOLDOWN_MINUTES)
+    }
+
+    pub fn notify_timeout_or_default(&self) -> u64 {
+        self.notify_timeout_secs.unwrap_or(DEFAULT_NOTIFY_TIMEOUT_SECS)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,6 +229,8 @@ pub struct StreamerOptions {
     pub log_stderr: bool,
     /// Overrides the site's subfolder layout; `None` inherits it.
     pub folder_layout: Option<FolderLayout>,
+    /// Overrides the site's notification switch; `None` inherits it.
+    pub notify: Option<bool>,
 }
 
 /// In-memory view of the config files (settings.json, sites.json, streamers.json, state.json).

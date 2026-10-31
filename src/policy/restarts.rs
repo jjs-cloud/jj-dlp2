@@ -89,6 +89,11 @@ impl RestartTracker {
         self.entries.iter().filter(|(_, e)| e.count > 0).map(|(id, e)| (*id, e.count)).collect()
     }
 
+    /// The streamer's restart count.
+    pub fn count(&self, id: StreamerId) -> u32 {
+        self.entries.get(&id).map_or(0, |e| e.count)
+    }
+
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
     }

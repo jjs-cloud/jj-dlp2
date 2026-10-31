@@ -112,6 +112,17 @@ fn ffmpeg_info(pids: &[u32], fallback_cwd: &Path) -> (Option<PathBuf>, PathBuf) 
 pub struct Update {
     pub logs: Vec<String>,
     pub job: Option<Job>,
+    /// Set when this update flagged the streamer's recording as stalled.
+    pub stalled_for: Option<StreamerId>,
+    /// Set when this update first confirmed the streamer's file growing.
+    pub confirmed_for: Option<StreamerId>,
+}
+
+/// What one stat result changed.
+#[derive(Debug, Default, Clone, Copy)]
+struct StatEffect {
+    stalled: bool,
+    confirmed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +148,8 @@ struct Entry {
     last_size: Option<u64>,
     last_growth: Option<Instant>,
     stall: Option<String>,
+    /// The file has been seen growing since its path was verified.
+    confirmed: bool,
     /// The stall was cleared by hand and stays hidden until the file recovers.
     dismissed: bool,
 }
@@ -159,6 +172,7 @@ impl Entry {
             last_size: None,
             last_growth: None,
             stall: None,
+            confirmed: false,
             dismissed: false,
         }
     }
@@ -203,6 +217,7 @@ impl Entry {
         self.last_size = None;
         self.last_growth = None;
         self.stall = None;
+        self.confirmed = false;
     }
 
     fn conflict(&mut self, ffmpeg: Option<&Path>, sidecar: &[SidecarPath], logs: &mut Vec<String>) {
@@ -246,12 +261,17 @@ impl Entry {
     }
 
     /// Records a stat result and raises or clears the stalled state.
-    fn apply_stat(&mut self, stat: Stat, now: Instant, logs: &mut Vec<String>) {
-        let Some(agreed_at) = self.agreed_at else { return };
+    fn apply_stat(&mut self, stat: Stat, now: Instant, logs: &mut Vec<String>) -> StatEffect {
+        let Some(agreed_at) = self.agreed_at else { return StatEffect::default() };
         let th = self.th;
+        let mut effect = StatEffect::default();
         let reason = match stat {
             Stat::Size(size) => {
                 self.exists = true;
+                if !self.confirmed && self.last_size.is_some_and(|prev| size > prev) {
+                    self.confirmed = true;
+                    effect.confirmed = true;
+                }
                 if size > self.last_size.unwrap_or(0) {
                     self.last_growth = Some(now);
                 }
@@ -271,7 +291,9 @@ impl Entry {
         if reason.is_none() {
             self.dismissed = false;
         }
+        effect.stalled = self.stall.is_none() && reason.is_some();
         self.stall = reason;
+        effect
     }
 
     /// Marks the file as absent; it only counts as a failure once the exists grace has passed.
@@ -321,7 +343,9 @@ impl FileTracker {
             .as_ref()
             .is_some_and(|(path, _)| e.trusted_path().is_some_and(|trusted| same_path(path, trusted)));
         if let (true, Some((_, stat))) = (current, res.stat) {
-            e.apply_stat(stat, now, &mut up.logs);
+            let effect = e.apply_stat(stat, now, &mut up.logs);
+            up.stalled_for = effect.stalled.then_some(e.streamer_id);
+            up.confirmed_for = effect.confirmed.then_some(e.streamer_id);
         }
         up
     }
@@ -552,6 +576,19 @@ mod tests {
         let up = tr.on_job(1, size(300), at(t0, 240));
         assert!(up.logs[0].contains("growing again"), "{:?}", up.logs);
         assert!(!tr.snapshot()[&1].stalled);
+    }
+
+    #[test]
+    fn growth_is_confirmed_once_and_a_stall_is_flagged_once() {
+        let t0 = Instant::now();
+        let mut tr = agreed(t0);
+        let size = |n| stat_of("/r/a.ts", Stat::Size(n));
+        assert_eq!(tr.on_job(1, size(100), at(t0, 30)).confirmed_for, None);
+        assert_eq!(tr.on_job(1, size(200), at(t0, 60)).confirmed_for, Some(2));
+        assert_eq!(tr.on_job(1, size(300), at(t0, 90)).confirmed_for, None);
+        assert_eq!(tr.on_job(1, size(300), at(t0, 200)).stalled_for, None);
+        assert_eq!(tr.on_job(1, size(300), at(t0, 215)).stalled_for, Some(2));
+        assert_eq!(tr.on_job(1, size(300), at(t0, 245)).stalled_for, None);
     }
 
     #[test]

@@ -84,6 +84,15 @@ pub fn new_site(preset: Preset) -> NewSite {
         restart_clear_minutes: None,
         restart_threshold: None,
         color: Some(color.into()),
+        notify: true,
+        notify_desktop: true,
+        notify_ntfy: false,
+        ntfy_topic: String::new(),
+        notify_cooldown_minutes: None,
+        notify_timeout_secs: None,
+        notify_confirmed: true,
+        notify_stalled: true,
+        notify_restarted: true,
     }
 }
 

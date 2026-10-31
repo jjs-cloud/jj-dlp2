@@ -1195,6 +1195,29 @@ impl App {
         if effective != FolderLayout::Flat && site.is_some_and(|x| layout::has_absolute_template(&x.recorder_args)) {
             folders = folders.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
         }
+        let site_on = site.is_some_and(|x| x.notify);
+        let notify_choices = vec![
+            NotifyChoice { value: None, label: format!("Inherit ({})", on_off(site_on)) },
+            NotifyChoice { value: Some(true), label: "On".to_string() },
+            NotifyChoice { value: Some(false), label: "Off".to_string() },
+        ];
+        let notify_selected = notify_choices.iter().find(|c| c.value == st.options.notify).cloned();
+        let recording = self.statuses.get(&id).is_some_and(|x| x.recording) && st.enabled;
+        let mut notifications = column![
+            muted(&s, "Notifications"),
+            pick_list(notify_choices, notify_selected, move |c: NotifyChoice| Msg::StreamerOption(
+                id,
+                OptionField::Notify(c.value)
+            ))
+            .padding(8)
+            .width(260),
+            muted(&s, format!("Effective: {}", on_off(st.options.notify.unwrap_or(site_on)))),
+            muted(&s, if recording { "Status: Recording" } else { "Status: Not recording" }),
+        ]
+        .spacing(4);
+        if let Some(reason) = not_recording_reason(st, recording) {
+            notifications = notifications.push(muted(&s, format!("Reason: {reason}")));
+        }
         column![
             muted(
                 &s,
@@ -1214,6 +1237,7 @@ impl App {
             ]
             .spacing(24),
             folders,
+            notifications,
         ]
         .spacing(8)
         .into()
@@ -1674,6 +1698,51 @@ impl App {
                 .on_toggle(move |v| Msg::Draft(id, f(v)))
                 .text_size(12)
         };
+        let topic_input = text_input("", &d.ntfy_topic)
+            .on_input(move |v| Msg::Draft(id, DraftField::NtfyTopic(v)))
+            .padding(5)
+            .size(13)
+            .style(skin::input_required(s, !d.ntfy_ok()));
+        let can_test = d.ntfy_ok() && !d.test_targets().is_empty();
+        let notifications = column![
+            row![
+                log("Notifications", d.notify, DraftField::Notify),
+                log("Desktop", d.notify_desktop, DraftField::NotifyDesktop),
+                log("ntfy", d.notify_ntfy, DraftField::NotifyNtfy),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Send test").size(12))
+                    .on_press_maybe(can_test.then_some(Msg::TestNotify(id)))
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+            row![
+                cell(
+                    labeled(
+                        "Cooldown (minutes)",
+                        field(&DEFAULT_NOTIFY_COOLDOWN_MINUTES.to_string(), &d.notify_cooldown, DraftField::NotifyCooldown)
+                    ),
+                    Length::FillPortion(1)
+                ),
+                cell(
+                    labeled(
+                        "Timeout (seconds)",
+                        field(&DEFAULT_NOTIFY_TIMEOUT_SECS.to_string(), &d.notify_timeout, DraftField::NotifyTimeout)
+                    ),
+                    Length::FillPortion(1)
+                ),
+                cell(labeled("NTFY topic (example: j73hd92xl)", topic_input.into()), Length::FillPortion(2)),
+            ]
+            .spacing(8),
+            row![
+                log("Wait for confirmed growth", d.notify_confirmed, DraftField::NotifyConfirmed),
+                log("Notify when stalled", d.notify_stalled, DraftField::NotifyStalled),
+                log("Notify when restarted", d.notify_restarted, DraftField::NotifyRestarted),
+            ]
+            .spacing(24),
+        ]
+        .spacing(6);
         let mut actions: Row<'a, Msg> = row![
             log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
             log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
@@ -1737,6 +1806,7 @@ impl App {
             .push(timing)
             .push(color_row)
             .push(file_checks)
+            .push(notifications)
             .push(templates)
             .push(recorder_col)
             .push(actions);
@@ -1791,6 +1861,41 @@ impl std::fmt::Display for LayoutChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.label)
     }
+}
+
+/// One entry in a streamer's notification dropdown: on, off, or `None` to inherit the site's.
+#[derive(Clone, PartialEq)]
+struct NotifyChoice {
+    value: Option<bool>,
+    label: String,
+}
+
+impl std::fmt::Display for NotifyChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "On" } else { "Off" }
+}
+
+/// Why a streamer is not recording; more reasons can be added here.
+enum NotRecordingReason {
+    Disabled,
+}
+
+impl std::fmt::Display for NotRecordingReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotRecordingReason::Disabled => f.write_str("Disabled"),
+        }
+    }
+}
+
+/// The reason a streamer is not recording, when it is known.
+fn not_recording_reason(st: &Streamer, recording: bool) -> Option<NotRecordingReason> {
+    (!recording && !st.enabled).then_some(NotRecordingReason::Disabled)
 }
 
 /// True when the recorder arguments contain a `--no-part` token.

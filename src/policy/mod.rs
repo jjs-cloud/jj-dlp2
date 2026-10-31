@@ -17,6 +17,7 @@ mod files;
 mod gql;
 pub mod layout;
 pub mod live;
+pub mod notify;
 mod outpath;
 mod restarts;
 pub mod uilog;
@@ -25,6 +26,7 @@ use files::{FileTracker, Thresholds};
 pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
 use live::LiveTracker;
+use notify::{Gate, Kind, Message, Targets};
 use restarts::RestartTracker;
 use update::UpdateConfig;
 
@@ -51,6 +53,15 @@ pub struct NewSite {
     pub restart_clear_minutes: Option<u64>,
     pub restart_threshold: Option<u32>,
     pub color: Option<String>,
+    pub notify: bool,
+    pub notify_desktop: bool,
+    pub notify_ntfy: bool,
+    pub ntfy_topic: String,
+    pub notify_cooldown_minutes: Option<u64>,
+    pub notify_timeout_secs: Option<u64>,
+    pub notify_confirmed: bool,
+    pub notify_stalled: bool,
+    pub notify_restarted: bool,
 }
 
 impl NewSite {
@@ -76,6 +87,15 @@ impl NewSite {
             restart_clear_minutes: self.restart_clear_minutes,
             restart_threshold: self.restart_threshold,
             color: self.color,
+            notify: self.notify,
+            notify_desktop: self.notify_desktop,
+            notify_ntfy: self.notify_ntfy,
+            ntfy_topic: self.ntfy_topic,
+            notify_cooldown_minutes: self.notify_cooldown_minutes,
+            notify_timeout_secs: self.notify_timeout_secs,
+            notify_confirmed: self.notify_confirmed,
+            notify_stalled: self.notify_stalled,
+            notify_restarted: self.notify_restarted,
         }
     }
 }
@@ -95,6 +115,8 @@ pub enum PolicyCommand {
     OpenOutputDir(SiteId),
     /// Opens the file a recorder is writing, once its path is verified.
     OpenRecording(RecorderId),
+    /// Sends a test notification to the given targets, ignoring cooldowns.
+    TestNotification { site_name: String, targets: Targets },
     /// Re-runs the engine's setup checks.
     Recheck,
     /// Resets every streamer's restart count.
@@ -216,6 +238,7 @@ struct Policy {
     files: FileTracker,
     restarts: RestartTracker,
     last_files: HashMap<RecorderId, RecordingFile>,
+    gate: Gate,
     file_tx: UnboundedSender<FileJob>,
     gql_tx: UnboundedSender<GqlJob>,
     /// Running recorders as (streamer id, root pid), used for log toggle markers.
@@ -244,6 +267,7 @@ impl Policy {
             files: FileTracker::default(),
             restarts: RestartTracker::default(),
             last_files: HashMap::new(),
+            gate: Gate::default(),
             file_tx,
             gql_tx,
             recorder_pids: HashMap::new(),
@@ -327,7 +351,13 @@ impl Policy {
             Event::SiteChecked { id, ok, .. } => self.live.site_checked(*id, *ok),
             Event::StreamerStatus { id, status } => {
                 if let (Some(at), Some((site_id, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
-                    self.live.status(*id, site_id, at, status.live, secs);
+                    let first = self.gate.first_check(*id);
+                    if self.live.status(*id, site_id, at, status.live, secs) && !first {
+                        self.notify_event(*id, Kind::Live, 0);
+                    }
+                }
+                if !status.live && !status.recording {
+                    self.gate.take_held(*id);
                 }
                 self.on_restart_status(*id, status.recording);
             }
@@ -355,8 +385,104 @@ impl Policy {
     fn on_restart_status(&mut self, id: StreamerId, recording: bool) {
         let Some((_, end_after_secs)) = live::lookup(&self.settings, id) else { return };
         let enabled = self.settings.streamers.iter().any(|s| s.id == id && s.enabled);
+        let before = self.restarts.count(id);
         self.restarts.on_status(id, recording, enabled, Duration::from_secs(end_after_secs), Instant::now());
+        let after = self.restarts.count(id);
+        let threshold = self.site_of(id).map_or(1, |s| s.restart_threshold_or_default());
+        if before < threshold && after >= threshold {
+            self.notify_event(id, Kind::Restarted, after);
+        }
         self.flush_restarts();
+    }
+
+    /// The site a streamer belongs to.
+    fn site_of(&self, streamer_id: StreamerId) -> Option<&Site> {
+        let site_id = self.settings.streamers.iter().find(|s| s.id == streamer_id)?.site_id;
+        self.settings.sites.iter().find(|s| s.id == site_id)
+    }
+
+    /// The streamer and site when notifications of `kind` are on for the streamer.
+    fn notify_target(&self, id: StreamerId, kind: Kind) -> Option<(Streamer, Site)> {
+        let st = self.settings.streamers.iter().find(|s| s.id == id)?;
+        let site = self.site_of(id)?;
+        let kind_on = match kind {
+            Kind::Live => true,
+            Kind::Stalled => site.notify_stalled,
+            Kind::Restarted => site.notify_restarted,
+        };
+        (st.options.notify.unwrap_or(site.notify) && kind_on).then(|| (st.clone(), site.clone()))
+    }
+
+    /// Notifies about a streamer unless it is off or cooling down; a live notification may wait for confirmed growth.
+    fn notify_event(&mut self, id: StreamerId, kind: Kind, restarts: u32) {
+        let Some((st, site)) = self.notify_target(id, kind) else { return };
+        let now = Instant::now();
+        let cooldown = Duration::from_secs(site.notify_cooldown_or_default().saturating_mul(60));
+        if !self.gate.ready(id, kind, cooldown, now) {
+            return;
+        }
+        if kind == Kind::Live && site.notify_confirmed && st.enabled {
+            self.gate.hold(id);
+            return;
+        }
+        self.send_notification(&st, &site, kind, restarts, now);
+    }
+
+    /// Sends the live notification that was waiting for the file to be confirmed growing.
+    fn on_growth_confirmed(&mut self, id: StreamerId) {
+        if !self.gate.take_held(id) {
+            return;
+        }
+        let Some((st, site)) = self.notify_target(id, Kind::Live) else { return };
+        let now = Instant::now();
+        let cooldown = Duration::from_secs(site.notify_cooldown_or_default().saturating_mul(60));
+        if self.gate.ready(id, Kind::Live, cooldown, now) {
+            self.send_notification(&st, &site, Kind::Live, 0, now);
+        }
+    }
+
+    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, now: Instant) {
+        let targets = Targets {
+            desktop_timeout_secs: site.notify_desktop.then(|| site.notify_timeout_or_default()),
+            ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic))
+                .then(|| site.ntfy_topic.trim().to_string()),
+        };
+        if targets.is_empty() {
+            return;
+        }
+        self.gate.mark_sent(st.id, kind, now);
+        let msg = match kind {
+            Kind::Live => Message {
+                title: format!("{} is live", st.name),
+                body: site.name.clone(),
+                click: Some(st.url.clone()),
+            },
+            Kind::Stalled => Message {
+                title: format!("{}: recording stalled", st.name),
+                body: format!("{}: the recording file is missing or has stopped growing", site.name),
+                click: Some(st.url.clone()),
+            },
+            Kind::Restarted => Message {
+                title: format!("{}: recording restarted", st.name),
+                body: format!("{}: restarted {restarts} time(s)", site.name),
+                click: Some(st.url.clone()),
+            },
+        };
+        self.dispatch_notification(msg, targets, false);
+    }
+
+    /// Delivers a notification on a blocking thread and logs any failure.
+    fn dispatch_notification(&self, msg: Message, targets: Targets, test: bool) {
+        if cfg!(test) {
+            return;
+        }
+        let events = self.events.clone();
+        tokio::task::spawn_blocking(move || {
+            for line in notify::deliver(&msg, &targets, test) {
+                uilog::append(&line);
+                let _ = events.send(PolicyEvent::Log(line));
+            }
+        });
     }
 
     /// Clears restart counts older than each site's auto-clear time.
@@ -400,6 +526,12 @@ impl Policy {
 
     /// Logs the tracker's messages, starts a requested job on a blocking thread and publishes changes.
     fn apply_file_update(&mut self, id: RecorderId, up: files::Update) {
+        if let Some(streamer_id) = up.stalled_for {
+            self.notify_event(streamer_id, Kind::Stalled, 0);
+        }
+        if let Some(streamer_id) = up.confirmed_for {
+            self.on_growth_confirmed(streamer_id);
+        }
         for line in up.logs {
             self.log(line);
         }
@@ -529,6 +661,7 @@ impl Policy {
         let settings = &self.settings;
         self.live.retain(|id| live::lookup(settings, id).is_some());
         self.restarts.retain(|id| live::lookup(settings, id).is_some());
+        self.gate.retain(|id| live::lookup(settings, id).is_some());
         self.flush_live();
         self.flush_restarts();
     }
@@ -733,6 +866,7 @@ impl Policy {
                     s.enabled = enabled;
                     if !enabled {
                         self.restarts.stopping(id);
+                        self.gate.take_held(id);
                     }
                     if self.save() {
                         self.engine.send(Command::SetStreamerEnabled { id, enabled });
@@ -762,6 +896,15 @@ impl Policy {
                 let _ = open::that_detached(output_dir(&self.settings, site_id));
             }
             PolicyCommand::OpenRecording(id) => self.open_recording(id),
+            PolicyCommand::TestNotification { site_name, targets } => {
+                let msg = Message {
+                    title: "jj-dlp test notification".to_string(),
+                    body: format!("{site_name}: notifications are working"),
+                    click: None,
+                };
+                self.log(format!("sending test notification for {site_name}"));
+                self.dispatch_notification(msg, targets, true);
+            }
             PolicyCommand::Recheck => self.engine.send(Command::Recheck),
             PolicyCommand::ClearRestarts => {
                 self.restarts.clear();
@@ -837,6 +980,15 @@ mod tests {
             restart_clear_minutes: Some(0),
             restart_threshold: Some(1),
             color: None,
+            notify: false,
+            notify_desktop: true,
+            notify_ntfy: false,
+            ntfy_topic: String::new(),
+            notify_cooldown_minutes: None,
+            notify_timeout_secs: None,
+            notify_confirmed: true,
+            notify_stalled: true,
+            notify_restarted: true,
         }
     }
 
@@ -857,7 +1009,7 @@ mod tests {
 
     #[test]
     fn site_and_streamer_without_optional_fields_still_load() {
-        let sites = r#"[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1,"color":null}]"#;
+        let sites = r#"[{"id":1,"name":"s","exe_path":"y","interval_secs":60,"check_mode":"DumpJson","checker_args":"","recorder_args":"","url_template":"","output_dir":"","end_after_minutes":30,"file_exists_grace_secs":60,"growth_grace_secs":60,"stall_window_secs":120,"file_check_interval_secs":30,"restart_clear_minutes":0,"restart_threshold":1,"color":null,"notify":true,"notify_desktop":true,"notify_ntfy":false,"ntfy_topic":"","notify_cooldown_minutes":null,"notify_timeout_secs":null,"notify_confirmed":true,"notify_stalled":true,"notify_restarted":true}]"#;
         let streamers = r#"[{"id":2,"site_id":1,"name":"n","url":"u","enabled":true}]"#;
         let sites: Vec<Site> = serde_json::from_str(sites).unwrap();
         let streamers: Vec<Streamer> = serde_json::from_str(streamers).unwrap();
@@ -923,6 +1075,15 @@ mod e2e {
                 restart_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
                 color: None,
+                notify: false,
+                notify_desktop: true,
+                notify_ntfy: false,
+                ntfy_topic: String::new(),
+                notify_cooldown_minutes: None,
+                notify_timeout_secs: None,
+                notify_confirmed: true,
+                notify_stalled: true,
+                notify_restarted: true,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };

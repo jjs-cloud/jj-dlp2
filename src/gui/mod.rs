@@ -5,6 +5,7 @@ mod skin;
 mod view;
 
 use crate::api::*;
+use crate::policy::notify::{self, Targets};
 use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
 use crate::policy::{
@@ -116,6 +117,15 @@ pub struct SiteDraft {
     pub log_stderr: bool,
     pub use_theme_color: bool,
     pub color: String,
+    pub notify: bool,
+    pub notify_desktop: bool,
+    pub notify_ntfy: bool,
+    pub ntfy_topic: String,
+    pub notify_cooldown: String,
+    pub notify_timeout: String,
+    pub notify_confirmed: bool,
+    pub notify_stalled: bool,
+    pub notify_restarted: bool,
 }
 
 impl SiteDraft {
@@ -140,6 +150,15 @@ impl SiteDraft {
             log_stderr: s.log_checker_stderr,
             use_theme_color: s.color.is_none(),
             color: s.color.clone().unwrap_or_else(|| DEFAULT_SITE_COLOR.to_string()),
+            notify: s.notify,
+            notify_desktop: s.notify_desktop,
+            notify_ntfy: s.notify_ntfy,
+            ntfy_topic: s.ntfy_topic.clone(),
+            notify_cooldown: opt_text(s.notify_cooldown_minutes),
+            notify_timeout: opt_text(s.notify_timeout_secs),
+            notify_confirmed: s.notify_confirmed,
+            notify_stalled: s.notify_stalled,
+            notify_restarted: s.notify_restarted,
         }
     }
 
@@ -166,6 +185,15 @@ impl SiteDraft {
             log_stderr: n.log_checker_stderr,
             use_theme_color: n.color.is_none(),
             color: n.color.unwrap_or_else(|| DEFAULT_SITE_COLOR.to_string()),
+            notify: n.notify,
+            notify_desktop: n.notify_desktop,
+            notify_ntfy: n.notify_ntfy,
+            ntfy_topic: n.ntfy_topic,
+            notify_cooldown: opt_text(n.notify_cooldown_minutes),
+            notify_timeout: opt_text(n.notify_timeout_secs),
+            notify_confirmed: n.notify_confirmed,
+            notify_stalled: n.notify_stalled,
+            notify_restarted: n.notify_restarted,
         }
     }
 
@@ -212,9 +240,34 @@ impl SiteDraft {
         parse_opt(&self.file_check_interval, 5)
     }
 
+    /// Minutes before the same notification can repeat; 0 turns the cooldown off.
+    pub fn notify_cooldown_minutes(&self) -> Option<Option<u64>> {
+        parse_opt(&self.notify_cooldown, 0)
+    }
+
+    pub fn notify_timeout_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.notify_timeout, 1)
+    }
+
+    /// False while ntfy is on without a usable topic.
+    pub fn ntfy_ok(&self) -> bool {
+        !self.notify_ntfy || notify::topic_valid(&self.ntfy_topic)
+    }
+
+    /// The channels the draft has switched on, used by the test button.
+    pub fn test_targets(&self) -> Targets {
+        Targets {
+            desktop_timeout_secs: self
+                .notify_desktop
+                .then(|| self.notify_timeout_secs().flatten().unwrap_or(DEFAULT_NOTIFY_TIMEOUT_SECS)),
+            ntfy_topic: (self.notify_ntfy && notify::topic_valid(&self.ntfy_topic))
+                .then(|| self.ntfy_topic.trim().to_string()),
+        }
+    }
+
     /// The site this draft describes, or `None` while the name or URL template is blank or a field is invalid.
     pub fn to_new_site(&self) -> Option<NewSite> {
-        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || !self.color_ok() {
+        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || !self.color_ok() || !self.ntfy_ok() {
             return None;
         }
         Some(NewSite {
@@ -236,6 +289,15 @@ impl SiteDraft {
             restart_clear_minutes: self.restart_clear_minutes()?,
             restart_threshold: self.restart_threshold()?,
             color: self.site_color(),
+            notify: self.notify,
+            notify_desktop: self.notify_desktop,
+            notify_ntfy: self.notify_ntfy,
+            ntfy_topic: self.ntfy_topic.trim().to_string(),
+            notify_cooldown_minutes: self.notify_cooldown_minutes()?,
+            notify_timeout_secs: self.notify_timeout_secs()?,
+            notify_confirmed: self.notify_confirmed,
+            notify_stalled: self.notify_stalled,
+            notify_restarted: self.notify_restarted,
         })
     }
 }
@@ -276,6 +338,15 @@ pub enum DraftField {
     Color(String),
     UseThemeColor(bool),
     PickColor(String),
+    Notify(bool),
+    NotifyDesktop(bool),
+    NotifyNtfy(bool),
+    NtfyTopic(String),
+    NotifyCooldown(String),
+    NotifyTimeout(String),
+    NotifyConfirmed(bool),
+    NotifyStalled(bool),
+    NotifyRestarted(bool),
 }
 
 /// A single option changed in a streamer's settings panel.
@@ -284,6 +355,7 @@ pub enum OptionField {
     LogStdout(bool),
     LogStderr(bool),
     FolderLayout(Option<FolderLayout>),
+    Notify(Option<bool>),
 }
 
 #[derive(Debug, Clone)]
@@ -310,6 +382,7 @@ pub enum Msg {
     SaveSite(SiteId),
     RevertSite(SiteId),
     DefaultsSite(SiteId),
+    TestNotify(SiteId),
     GlobalOutEdit(String),
     GlobalOutSave,
     Recheck,
@@ -533,6 +606,7 @@ impl App {
                         OptionField::LogStdout(v) => options.log_stdout = v,
                         OptionField::LogStderr(v) => options.log_stderr = v,
                         OptionField::FolderLayout(v) => options.folder_layout = v,
+                        OptionField::Notify(v) => options.notify = v,
                     }
                     self.client.send(PolicyCommand::SetStreamerOptions { id, options });
                 }
@@ -589,6 +663,15 @@ impl App {
                             d.color = v;
                             d.use_theme_color = false;
                         }
+                        DraftField::Notify(v) => d.notify = v,
+                        DraftField::NotifyDesktop(v) => d.notify_desktop = v,
+                        DraftField::NotifyNtfy(v) => d.notify_ntfy = v,
+                        DraftField::NtfyTopic(v) => d.ntfy_topic = v,
+                        DraftField::NotifyCooldown(v) => d.notify_cooldown = v,
+                        DraftField::NotifyTimeout(v) => d.notify_timeout = v,
+                        DraftField::NotifyConfirmed(v) => d.notify_confirmed = v,
+                        DraftField::NotifyStalled(v) => d.notify_stalled = v,
+                        DraftField::NotifyRestarted(v) => d.notify_restarted = v,
                     }
                 }
             }
@@ -606,6 +689,15 @@ impl App {
             Msg::RevertSite(id) => {
                 if let Some(site) = self.settings.sites.iter().find(|s| s.id == id) {
                     self.drafts.insert(id, SiteDraft::from_site(site));
+                }
+            }
+            Msg::TestNotify(id) => {
+                if let Some(d) = self.drafts.get(&id) {
+                    let targets = d.test_targets();
+                    if d.ntfy_ok() && !targets.is_empty() {
+                        let site_name = if d.name.trim().is_empty() { "Site".to_string() } else { d.name.trim().to_string() };
+                        self.client.send(PolicyCommand::TestNotification { site_name, targets });
+                    }
                 }
             }
             Msg::DefaultsSite(id) => {

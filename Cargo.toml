@@ -27,6 +27,7 @@ tar = "0.4"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tauri-winrt-notification = "0.7"
 
 [profile.release]
 opt-level = 3

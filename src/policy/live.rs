@@ -67,16 +67,18 @@ impl LiveTracker {
         self.site_ok.insert(site, ok);
     }
 
-    /// Applies one check's result for a streamer; repeats of the same check are ignored.
-    pub fn status(&mut self, id: StreamerId, site: SiteId, checked: u64, live: bool, end_after_secs: u64) {
+    /// Applies one check's result for a streamer; repeats of the same check are ignored. Returns true when a live span began.
+    pub fn status(&mut self, id: StreamerId, site: SiteId, checked: u64, live: bool, end_after_secs: u64) -> bool {
         if self.seen_check.insert(id, checked) == Some(checked) {
-            return;
+            return false;
         }
+        let mut started = false;
         if live {
             if !self.spans.contains_key(&id) {
                 self.spans.insert(id, checked);
                 self.dirty = true;
                 self.span_changed = true;
+                started = true;
             }
             if self.last_live.get(&id).is_none_or(|l| checked > *l) {
                 self.last_live.insert(id, checked);
@@ -91,6 +93,7 @@ impl LiveTracker {
                 self.span_changed = true;
             }
         }
+        started
     }
 
     /// Adds last-live times for streamers that have none; returns how many were added.
