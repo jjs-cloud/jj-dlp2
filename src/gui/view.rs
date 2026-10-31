@@ -1202,8 +1202,7 @@ impl App {
             NotifyChoice { value: Some(false), label: "Off".to_string() },
         ];
         let notify_selected = notify_choices.iter().find(|c| c.value == st.options.notify).cloned();
-        let recording = self.statuses.get(&id).is_some_and(|x| x.recording) && st.enabled;
-        let mut notifications = column![
+        let notifications = column![
             muted(&s, "Notifications"),
             pick_list(notify_choices, notify_selected, move |c: NotifyChoice| Msg::StreamerOption(
                 id,
@@ -1212,12 +1211,8 @@ impl App {
             .padding(8)
             .width(260),
             muted(&s, format!("Effective: {}", on_off(st.options.notify.unwrap_or(site_on)))),
-            muted(&s, if recording { "Status: Recording" } else { "Status: Not recording" }),
         ]
         .spacing(4);
-        if let Some(reason) = not_recording_reason(st, recording) {
-            notifications = notifications.push(muted(&s, format!("Reason: {reason}")));
-        }
         column![
             muted(
                 &s,
@@ -1879,24 +1874,6 @@ impl std::fmt::Display for NotifyChoice {
 
 fn on_off(on: bool) -> &'static str {
     if on { "On" } else { "Off" }
-}
-
-/// Why a streamer is not recording; more reasons can be added here.
-enum NotRecordingReason {
-    Disabled,
-}
-
-impl std::fmt::Display for NotRecordingReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NotRecordingReason::Disabled => f.write_str("Disabled"),
-        }
-    }
-}
-
-/// The reason a streamer is not recording, when it is known.
-fn not_recording_reason(st: &Streamer, recording: bool) -> Option<NotRecordingReason> {
-    (!recording && !st.enabled).then_some(NotRecordingReason::Disabled)
 }
 
 /// True when the recorder arguments contain a `--no-part` token.

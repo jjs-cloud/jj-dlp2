@@ -49,6 +49,35 @@ pub fn topic_valid(topic: &str) -> bool {
     !t.is_empty() && t.len() <= TOPIC_MAX && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Why a streamer is not recording; more reasons can be added here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotRecordingReason {
+    Disabled,
+}
+
+impl std::fmt::Display for NotRecordingReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotRecordingReason::Disabled => f.write_str("Disabled"),
+        }
+    }
+}
+
+/// The reason a streamer will not be recorded, if any.
+fn not_recording_reason(enabled: bool) -> Option<NotRecordingReason> {
+    (!enabled).then_some(NotRecordingReason::Disabled)
+}
+
+/// Body of the live notification: recording status, the reason when not recording, then the site.
+pub fn live_body(enabled: bool, confirmed: bool, site: &str) -> String {
+    let status = match not_recording_reason(enabled) {
+        Some(reason) => format!("\u{1F7E1} Status: Not recording\nReason: {reason}"),
+        None if confirmed => "\u{1F534} Status: Recording (confirmed)".to_string(),
+        None => "\u{1F534} Status: Recording (unconfirmed)".to_string(),
+    };
+    format!("{status}\nSite: {site}")
+}
+
 /// Sends a message to every target and returns the log lines for failures; blocks, so call it off the async threads.
 pub fn deliver(msg: &Message, targets: &Targets, always_log_missing: bool) -> Vec<String> {
     let mut logs = Vec::new();
@@ -174,6 +203,13 @@ mod tests {
         assert!(!topic_valid("a/b"));
         assert!(!topic_valid("a b"));
         assert!(!topic_valid(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn live_body_reports_status_reason_and_site() {
+        assert_eq!(live_body(false, false, "Twitch"), "\u{1F7E1} Status: Not recording\nReason: Disabled\nSite: Twitch");
+        assert_eq!(live_body(true, true, "Twitch"), "\u{1F534} Status: Recording (confirmed)\nSite: Twitch");
+        assert_eq!(live_body(true, false, "Twitch"), "\u{1F534} Status: Recording (unconfirmed)\nSite: Twitch");
     }
 
     #[test]

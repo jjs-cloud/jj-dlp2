@@ -428,7 +428,7 @@ impl Policy {
             self.gate.hold(id);
             return;
         }
-        self.send_notification(&st, &site, kind, restarts, now);
+        self.send_notification(&st, &site, kind, restarts, false, now);
     }
 
     /// Sends the live notification that was waiting for the file to be confirmed growing.
@@ -440,11 +440,11 @@ impl Policy {
         let now = Instant::now();
         let cooldown = Duration::from_secs(site.notify_cooldown_or_default().saturating_mul(60));
         if self.gate.ready(id, Kind::Live, cooldown, now) {
-            self.send_notification(&st, &site, Kind::Live, 0, now);
+            self.send_notification(&st, &site, Kind::Live, 0, true, now);
         }
     }
 
-    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, now: Instant) {
+    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, confirmed: bool, now: Instant) {
         let targets = Targets {
             desktop_timeout_secs: site.notify_desktop.then(|| site.notify_timeout_or_default()),
             ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic))
@@ -457,7 +457,7 @@ impl Policy {
         let msg = match kind {
             Kind::Live => Message {
                 title: format!("{} is live", st.name),
-                body: site.name.clone(),
+                body: notify::live_body(st.enabled, confirmed, &site.name),
                 click: Some(st.url.clone()),
             },
             Kind::Stalled => Message {
