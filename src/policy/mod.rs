@@ -706,7 +706,9 @@ impl Policy {
         let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
         let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
         let Some(span) = self.live.span_start(id) else { return };
-        let continuing = streamer.options.effective_auto_suffix(site) || streamer.options.effective_split_minutes(site).is_some();
+        let opts = &streamer.options;
+        let continuing =
+            opts.effective_auto_suffix(site) || opts.effective_split_minutes(site).is_some() || opts.intro_split_minutes().is_some();
         let part = match self.live.part(id).cloned() {
             None => {
                 self.live.set_part(id, PartRecord { span, part: 1, file: None });
@@ -762,8 +764,12 @@ impl Policy {
         let mut plans = HashMap::new();
         for st in &self.settings.streamers {
             let Some(site) = self.settings.sites.iter().find(|s| s.id == st.site_id) else { continue };
-            let Some(minutes) = st.options.effective_split_minutes(site) else { continue };
             let Some(rec) = self.live.part(st.id) else { continue };
+            let minutes = match st.options.intro_split_minutes() {
+                Some(m) => (rec.part == 1).then_some(m),
+                None => st.options.effective_split_minutes(site),
+            };
+            let Some(minutes) = minutes else { continue };
             let timeout = segments::verify_timeout(Thresholds::from_site(site).interval);
             plans.insert(st.id, Plan { minutes, next_part: rec.part + 1, timeout });
         }
@@ -788,7 +794,7 @@ impl Policy {
                 self.log(format!("{}: recording part {part}", self.streamer_name(streamer)));
                 if self.recorder_pids.contains_key(&old) {
                     self.retiring.insert(old);
-                    self.engine.send(Command::StopRecorder { id: old });
+                    self.engine.send(Command::StopSegment { id: old });
                     if let Some(file) = first {
                         self.rename_on_exit.insert(old, (streamer, PathBuf::from(file)));
                     }
@@ -799,7 +805,7 @@ impl Policy {
             Step::Abort { streamer, part, stop } => {
                 if let Some(id) = stop {
                     self.retiring.insert(id);
-                    self.engine.send(Command::StopRecorder { id });
+                    self.engine.send(Command::StopSegment { id });
                 }
                 self.log(format!(
                     "{}: part {part} was not confirmed growing; keeping the current recording and retrying in 60s",

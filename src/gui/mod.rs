@@ -397,6 +397,7 @@ pub enum OptionField {
     Notify(Option<bool>),
     IntroDelayEnabled(bool),
     IntroDelayMinutes(u64),
+    IntroDelaySplit(bool),
     /// Inherit or turn off splitting.
     Split(Option<bool>),
     /// Turn splitting on with this length; `None` uses the site's.
@@ -605,6 +606,7 @@ impl App {
             OptionField::Notify(v) => options.notify = v,
             OptionField::IntroDelayEnabled(v) => options.intro_delay_enabled = v,
             OptionField::IntroDelayMinutes(v) => options.intro_delay_minutes = v,
+            OptionField::IntroDelaySplit(v) => options.intro_delay_split = v.then_some(true),
             OptionField::Split(v) => options.split = v,
             OptionField::SplitOn(v) => {
                 options.split = Some(true);

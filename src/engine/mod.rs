@@ -173,7 +173,7 @@ impl Engine {
             Command::Reload => self.reload(),
             Command::StartRecording { id } => self.start_recording(id, false),
             Command::StartSegment { id } => self.start_recording(id, true),
-            Command::StopRecorder { id } => self.stop_recorder(id),
+            Command::StopSegment { id } => self.stop_recorder(id),
             Command::StopRecording { id } => self.stop_streamer_recorders(id),
             Command::SetCheckerOverride { site_id, args } => {
                 if !self.settings.sites.iter().any(|s| s.id == site_id) {

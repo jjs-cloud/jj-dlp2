@@ -1218,6 +1218,9 @@ impl App {
             m => m.to_string(),
         });
         let delay_effective = match (st.options.intro_delay_enabled, st.options.intro_delay_minutes) {
+            (true, m) if m > 0 && st.options.intro_delay_split == Some(true) => {
+                format!("Effective: records now, splits the intro off after {m} min")
+            }
             (true, m) if m > 0 => format!("Effective: waits {m} min after going live"),
             _ => "Effective: Off".to_string(),
         };
@@ -1272,10 +1275,14 @@ impl App {
             .width(260),
         ]
         .spacing(4);
-        // TODO(split): add the option to split the intro into its own file here once splitting exists.
         let intro_delay = column![
             muted(&s, "Intro delay"),
             log("Wait before recording", st.options.intro_delay_enabled, OptionField::IntroDelayEnabled),
+            log(
+                "Split the intro into its own file instead of waiting",
+                st.options.intro_delay_split == Some(true),
+                OptionField::IntroDelaySplit
+            ),
             row![
                 text_input("Minutes", &minutes)
                     .on_input(move |v| Msg::IntroMinutesEdit(id, v))

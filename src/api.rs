@@ -243,6 +243,8 @@ pub struct StreamerOptions {
     pub intro_delay_enabled: bool,
     /// Minutes to wait when the intro delay is enabled; 0 means no delay.
     pub intro_delay_minutes: u64,
+    /// Record from the start and split the intro into its own part instead of waiting; `None` is off.
+    pub intro_delay_split: Option<bool>,
     /// Overrides the site's split switch; `None` inherits it.
     pub split: Option<bool>,
     /// Minutes per part when splitting is on; blank uses the site's.
@@ -259,6 +261,12 @@ impl StreamerOptions {
             Some(false) => None,
             Some(true) => self.split_minutes.filter(|m| *m > 0).or_else(|| site.inherited_split_minutes()),
         }
+    }
+
+    /// Minutes the intro is recorded as its own part, when the intro delay splits instead of waiting.
+    pub fn intro_split_minutes(&self) -> Option<u64> {
+        let on = self.intro_delay_enabled && self.intro_delay_split == Some(true);
+        (on && self.intro_delay_minutes > 0).then_some(self.intro_delay_minutes)
     }
 
     /// Whether a restarted recording of this streamer gets a `_partN` suffix.
@@ -293,8 +301,8 @@ pub enum Command {
     StartRecording { id: StreamerId },
     /// Starts an extra recorder for a streamer that is already recording, for a split.
     StartSegment { id: StreamerId },
-    /// Stops one recorder, leaving the streamer's other recorders running.
-    StopRecorder { id: RecorderId },
+    /// Stops one segment's recorder, leaving the streamer's other recorders running.
+    StopSegment { id: RecorderId },
     /// Stops a streamer's recorders; an autonomous engine starts them again at the next live check.
     StopRecording { id: StreamerId },
     /// Replaces a site's checker_args until cleared with `None`.
@@ -458,6 +466,20 @@ mod tests {
         assert_eq!(StreamerOptions::default().effective_split_minutes(&off), None);
         assert_eq!(StreamerOptions::default().effective_split_minutes(&blank), None);
         assert_eq!(on.effective_split_minutes(&off), None);
+    }
+
+    #[test]
+    fn intro_split_needs_the_delay_on_a_length_and_the_switch() {
+        let opts = |enabled, minutes, split| StreamerOptions {
+            intro_delay_enabled: enabled,
+            intro_delay_minutes: minutes,
+            intro_delay_split: split,
+            ..Default::default()
+        };
+        assert_eq!(opts(true, 5, Some(true)).intro_split_minutes(), Some(5));
+        assert_eq!(opts(false, 5, Some(true)).intro_split_minutes(), None);
+        assert_eq!(opts(true, 0, Some(true)).intro_split_minutes(), None);
+        assert_eq!(opts(true, 5, None).intro_split_minutes(), None);
     }
 
     #[test]

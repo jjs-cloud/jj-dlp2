@@ -21,7 +21,9 @@ pub fn decide(streamer: &Streamer, live_since: Option<u64>, now: u64) -> Decisio
     if !streamer.enabled {
         return Decision::NotRecording(NotRecordingReason::Disabled);
     }
-    // TODO(split): add the option to split the intro into its own file once splitting exists.
+    if streamer.options.intro_split_minutes().is_some() {
+        return Decision::Record;
+    }
     let delay_end = intro_delay_end(&streamer.options, live_since.unwrap_or(now));
     if delay_end.is_some_and(|end| now < end) {
         return Decision::NotRecording(NotRecordingReason::IntroDelay);
@@ -92,5 +94,17 @@ mod tests {
         assert_eq!(intro_delay_end(&StreamerOptions::default(), 100), None);
         let opts = StreamerOptions { intro_delay_enabled: true, intro_delay_minutes: 2, ..Default::default() };
         assert_eq!(intro_delay_end(&opts, 100), Some(220));
+    }
+
+    #[test]
+    fn intro_split_records_straight_away() {
+        let options = StreamerOptions {
+            intro_delay_enabled: true,
+            intro_delay_minutes: 5,
+            intro_delay_split: Some(true),
+            ..Default::default()
+        };
+        let st = Streamer { id: 1, site_id: 1, name: "n".into(), url: "u".into(), enabled: true, options };
+        assert_eq!(decide(&st, Some(0), 10), Decision::Record);
     }
 }
