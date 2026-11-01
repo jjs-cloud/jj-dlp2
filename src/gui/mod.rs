@@ -10,7 +10,7 @@ use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
 use crate::policy::{
     new_site, preset_for_name, NewSite, PolicyClient, PolicyCommand, PolicyEvent, Preset, RecordingFile, UpdateEvent,
-    DEFAULT_SITE_COLOR,
+    Warnings, DEFAULT_SITE_COLOR,
 };
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
@@ -104,6 +104,8 @@ pub struct SiteDraft {
     pub end_after: String,
     pub restart_clear: String,
     pub restart_threshold: String,
+    pub interrupt_patterns: String,
+    pub error_patterns: String,
     pub file_exists_grace: String,
     pub growth_grace: String,
     pub stall_window: String,
@@ -141,6 +143,8 @@ impl SiteDraft {
             end_after: opt_text(s.end_after_minutes),
             restart_clear: opt_text(s.restart_clear_minutes),
             restart_threshold: opt_text(s.restart_threshold),
+            interrupt_patterns: s.interrupt_patterns.clone(),
+            error_patterns: s.error_patterns.clone(),
             file_exists_grace: opt_text(s.file_exists_grace_secs),
             growth_grace: opt_text(s.growth_grace_secs),
             stall_window: opt_text(s.stall_window_secs),
@@ -180,6 +184,8 @@ impl SiteDraft {
             end_after: opt_text(n.end_after_minutes),
             restart_clear: opt_text(n.restart_clear_minutes),
             restart_threshold: opt_text(n.restart_threshold),
+            interrupt_patterns: n.interrupt_patterns,
+            error_patterns: n.error_patterns,
             file_exists_grace: opt_text(n.file_exists_grace_secs),
             growth_grace: opt_text(n.growth_grace_secs),
             stall_window: opt_text(n.stall_window_secs),
@@ -319,6 +325,8 @@ impl SiteDraft {
             file_check_interval_secs: self.file_check_interval_secs()?,
             restart_clear_minutes: self.restart_clear_minutes()?,
             restart_threshold: self.restart_threshold()?,
+            interrupt_patterns: self.interrupt_patterns.trim().to_string(),
+            error_patterns: self.error_patterns.trim().to_string(),
             color: self.site_color(),
             notify: self.notify,
             notify_desktop: self.notify_desktop,
@@ -359,6 +367,8 @@ pub enum DraftField {
     EndAfter(String),
     RestartClear(String),
     RestartThreshold(String),
+    InterruptPatterns(String),
+    ErrorPatterns(String),
     FileExistsGrace(String),
     GrowthGrace(String),
     StallWindow(String),
@@ -505,7 +515,7 @@ pub enum Msg {
     GlobalOutEdit(String),
     GlobalOutSave,
     Recheck,
-    ClearRestarts,
+    ClearWarnings,
     CopyText(String),
     ToggleProc(RecorderId),
     SetCompact(bool),
@@ -555,6 +565,7 @@ pub struct App {
     tab: Tab,
     statuses: HashMap<StreamerId, StreamerStatus>,
     restarts: HashMap<StreamerId, u32>,
+    warnings: HashMap<StreamerId, Warnings>,
     live_since: HashMap<StreamerId, u64>,
     last_live: HashMap<StreamerId, u64>,
     checks: HashMap<SiteId, CheckInfo>,
@@ -599,6 +610,7 @@ impl App {
             tab: Tab::Monitor,
             statuses: HashMap::new(),
             restarts: HashMap::new(),
+            warnings: HashMap::new(),
             live_since: HashMap::new(),
             last_live: HashMap::new(),
             checks: HashMap::new(),
@@ -813,6 +825,8 @@ impl App {
                         DraftField::EndAfter(v) => d.end_after = v,
                         DraftField::RestartClear(v) => d.restart_clear = v,
                         DraftField::RestartThreshold(v) => d.restart_threshold = v,
+                        DraftField::InterruptPatterns(v) => d.interrupt_patterns = v,
+                        DraftField::ErrorPatterns(v) => d.error_patterns = v,
                         DraftField::FileExistsGrace(v) => d.file_exists_grace = v,
                         DraftField::GrowthGrace(v) => d.growth_grace = v,
                         DraftField::StallWindow(v) => d.stall_window = v,
@@ -890,7 +904,7 @@ impl App {
             Msg::GlobalOutEdit(v) => self.global_out = v,
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
-            Msg::ClearRestarts => self.client.send(PolicyCommand::ClearRestarts),
+            Msg::ClearWarnings => self.client.send(PolicyCommand::ClearWarnings),
             Msg::CopyText(text) => return iced::clipboard::write(text),
             Msg::SetCompact(on) => {
                 self.compact = on;
@@ -995,6 +1009,7 @@ impl App {
             PolicyEvent::LastLive(map) => self.last_live = map,
             PolicyEvent::RecordingFiles(map) => self.recording_files = map,
             PolicyEvent::Restarts(map) => self.restarts = map,
+            PolicyEvent::Warnings(map) => self.warnings = map,
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
@@ -1019,6 +1034,7 @@ impl App {
                     self.recording_files.remove(&id);
                     self.expanded_procs.remove(&id);
                 }
+                Event::Output { .. } => {}
                 Event::Log(line) => self.push_log(line),
             },
         }

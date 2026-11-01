@@ -36,6 +36,8 @@ pub struct RecorderSpec {
     pub log_stderr: Option<PathBuf>,
     /// Channel for one-off notes found in the process output.
     pub internal: UnboundedSender<Internal>,
+    /// Send every output line to the engine as `Internal::Line`.
+    pub forward_output: bool,
 }
 
 /// State shared between the recorder tasks, the engine and the sampler thread.
@@ -113,11 +115,12 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     );
 
     let notes: Notes = Some((spec.internal.clone(), spec.streamer_id));
+    let forward = spec.forward_output;
     if let Some(out) = child.stdout.take() {
-        tokio::spawn(read_lines(out, spec.id, tracked.clone(), log_stdout.clone(), notes.clone()));
+        tokio::spawn(read_lines(out, spec.id, tracked.clone(), log_stdout.clone(), notes.clone(), forward));
     }
     if let Some(err) = child.stderr.take() {
-        tokio::spawn(read_lines(err, spec.id, tracked.clone(), log_stderr.clone(), notes));
+        tokio::spawn(read_lines(err, spec.id, tracked.clone(), log_stderr.clone(), notes, forward));
     }
 
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
@@ -184,6 +187,7 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
     tracked: SharedTracked,
     log: LogSink,
     notes: Notes,
+    forward: bool,
 ) {
     let mut buf = [0u8; 4096];
     let mut line = Vec::<u8>::new();
@@ -214,7 +218,7 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
                 None
             };
             if let Some(text) = finished {
-                inspect(&text, id, &tracked, &notes);
+                inspect(&text, id, &tracked, &notes, forward);
                 let path = log.lock().unwrap().clone();
                 if let Some(path) = path {
                     logfile::line(&path, &text);
@@ -227,8 +231,8 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-/// Stores ERROR lines for the exit report and forwards one-off notes to the engine.
-fn inspect(text: &str, id: RecorderId, tracked: &SharedTracked, notes: &Notes) {
+/// Stores ERROR lines for the exit report and forwards notes, and lines when `forward` is set, to the engine.
+fn inspect(text: &str, id: RecorderId, tracked: &SharedTracked, notes: &Notes, forward: bool) {
     if diagnose::is_error(text) {
         if let Some(t) = tracked.lock().unwrap().get_mut(&id) {
             if t.errors.len() >= MAX_ERRORS {
@@ -239,6 +243,9 @@ fn inspect(text: &str, id: RecorderId, tracked: &SharedTracked, notes: &Notes) {
     }
     if let (Some((tx, streamer_id)), Some(note)) = (notes, diagnose::note(text)) {
         let _ = tx.send(Internal::Note { streamer_id: *streamer_id, text: note });
+    }
+    if let (true, Some((tx, streamer_id))) = (forward, notes) {
+        let _ = tx.send(Internal::Line { streamer_id: *streamer_id, text: text.to_string() });
     }
 }
 
@@ -271,10 +278,28 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let input: &[u8] = b"one\r\ntwo\rthree\n\nfour";
         let tracked: SharedTracked = Arc::new(Mutex::new(HashMap::new()));
-        read_lines(input, 1, tracked, Arc::new(Mutex::new(Some(path.clone()))), None).await;
+        read_lines(input, 1, tracked, Arc::new(Mutex::new(Some(path.clone()))), None, false).await;
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().map(|l| l.split_once("  ").unwrap().1).collect();
         assert_eq!(lines, ["one", "three"]);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn forwards_newline_ended_lines_only_when_enabled() {
+        let input: &[u8] = b"one\ntwo\rthree\n";
+        let run = |forward| async move {
+            let tracked: SharedTracked = Arc::new(Mutex::new(HashMap::new()));
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            read_lines(input, 1, tracked, Arc::new(Mutex::new(None)), Some((tx, 7)), forward).await;
+            let mut lines = Vec::new();
+            while let Ok(Internal::Line { streamer_id, text }) = rx.try_recv() {
+                assert_eq!(streamer_id, 7);
+                lines.push(text);
+            }
+            lines
+        };
+        assert_eq!(run(true).await, ["one", "three"]);
+        assert!(run(false).await.is_empty());
     }
 }

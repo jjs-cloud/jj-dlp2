@@ -123,6 +123,10 @@ pub struct Site {
     pub restart_clear_minutes: Option<u64>,
     /// Restarts needed before the RESTARTED chip shows.
     pub restart_threshold: Option<u32>,
+    /// `|`-separated phrases that mark an ad interruption in recorder output; blank turns the INTERRUPT chip off.
+    pub interrupt_patterns: String,
+    /// `|`-separated phrases that mark an ffmpeg error in recorder output; blank turns the ERROR chip off.
+    pub error_patterns: String,
     /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
     pub color: Option<String>,
     /// Master switch for notifications about this site's streamers.
@@ -378,6 +382,8 @@ pub enum Event {
     Preflight(Vec<Notice>),
     ProcessUpdate(ProcessInfo),
     ProcessRemoved(RecorderId),
+    /// One line of a recorder's output; sent only for sites with interrupt or error patterns.
+    Output { id: StreamerId, line: String },
     Log(String),
 }
 
@@ -431,6 +437,8 @@ mod tests {
             file_check_interval_secs: None,
             restart_clear_minutes: None,
             restart_threshold: None,
+            interrupt_patterns: String::new(),
+            error_patterns: String::new(),
             color: None,
             notify: false,
             notify_desktop: false,

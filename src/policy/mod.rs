@@ -24,6 +24,7 @@ mod restarts;
 mod segments;
 pub mod uilog;
 pub mod update;
+mod warnings;
 use decision::Decision;
 use files::{FileTracker, Thresholds};
 pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
@@ -33,6 +34,8 @@ use notify::{Gate, Kind, LiveStatus, Message, Targets};
 use restarts::RestartTracker;
 use segments::{Plan, Splitter, Step};
 use update::UpdateConfig;
+pub use warnings::Warnings;
+use warnings::WarnTracker;
 
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 
@@ -56,6 +59,8 @@ pub struct NewSite {
     pub file_check_interval_secs: Option<u64>,
     pub restart_clear_minutes: Option<u64>,
     pub restart_threshold: Option<u32>,
+    pub interrupt_patterns: String,
+    pub error_patterns: String,
     pub color: Option<String>,
     pub notify: bool,
     pub notify_desktop: bool,
@@ -94,6 +99,8 @@ impl NewSite {
             file_check_interval_secs: self.file_check_interval_secs,
             restart_clear_minutes: self.restart_clear_minutes,
             restart_threshold: self.restart_threshold,
+            interrupt_patterns: self.interrupt_patterns,
+            error_patterns: self.error_patterns,
             color: self.color,
             notify: self.notify,
             notify_desktop: self.notify_desktop,
@@ -133,8 +140,8 @@ pub enum PolicyCommand {
     TestNotification { site_name: String, targets: Targets },
     /// Re-runs the engine's setup checks.
     Recheck,
-    /// Resets every streamer's restart count.
-    ClearRestarts,
+    /// Resets every streamer's restart, interrupt and error counts and dismisses stall warnings.
+    ClearWarnings,
     /// Looks for a new release now, even when automatic checks are off.
     CheckForUpdate,
     /// Downloads the available update, then stops the engine and restarts into it.
@@ -161,6 +168,8 @@ pub enum PolicyEvent {
     RecordingFiles(HashMap<RecorderId, RecordingFile>),
     /// Streamer id to its restart count; streamers with none are absent.
     Restarts(HashMap<StreamerId, u32>),
+    /// Streamer id to its interrupt and error counts; streamers with none are absent.
+    Warnings(HashMap<StreamerId, Warnings>),
 }
 
 /// Updater state changes reported to front ends.
@@ -252,6 +261,7 @@ struct Policy {
     upd_tx: UnboundedSender<UpdateMsg>,
     files: FileTracker,
     restarts: RestartTracker,
+    warnings: WarnTracker,
     last_files: HashMap<RecorderId, RecordingFile>,
     gate: Gate,
     file_tx: UnboundedSender<FileJob>,
@@ -293,6 +303,7 @@ impl Policy {
             upd_tx,
             files: FileTracker::default(),
             restarts: RestartTracker::default(),
+            warnings: WarnTracker::default(),
             last_files: HashMap::new(),
             gate: Gate::default(),
             file_tx,
@@ -351,6 +362,7 @@ impl Policy {
                             self.on_engine_event(e);
                         }
                         self.flush_live();
+                        self.flush_warnings();
                     }
                     None => break,
                 },
@@ -386,6 +398,10 @@ impl Policy {
 
     /// Feeds check results to the live tracker, then forwards the event.
     fn on_engine_event(&mut self, ev: Event) {
+        if let Event::Output { id, line } = &ev {
+            self.on_output(*id, line);
+            return;
+        }
         match &ev {
             Event::SiteChecked { id, ok, .. } => self.live.site_checked(*id, *ok),
             Event::StreamerStatus { id, status } => {
@@ -403,6 +419,7 @@ impl Policy {
                 }
                 if !status.live && !status.recording {
                     self.gate.take_held(*id);
+                    self.warnings.end_span(*id);
                 }
                 self.on_restart_status(*id, status.recording);
                 self.reconcile(*id);
@@ -563,6 +580,31 @@ impl Policy {
 
     fn emit_restarts(&self) {
         self.emit(PolicyEvent::Restarts(self.restarts.counts()));
+    }
+
+    /// Matches a recorder output line against its site's patterns and logs the first hit of each kind per live span.
+    fn on_output(&mut self, id: StreamerId, line: &str) {
+        let settings = &self.settings;
+        let site = settings.streamers.iter().find(|s| s.id == id).and_then(|st| settings.sites.iter().find(|x| x.id == st.site_id));
+        let Some(site) = site else { return };
+        let fresh = self.warnings.on_line(id, site, line);
+        if fresh.is_empty() {
+            return;
+        }
+        let name = self.settings.streamers.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
+        for kind in fresh {
+            self.log(format!("{name}: {}", kind.log_text()));
+        }
+    }
+
+    fn flush_warnings(&mut self) {
+        if self.warnings.take_dirty() {
+            self.emit_warnings();
+        }
+    }
+
+    fn emit_warnings(&self) {
+        self.emit(PolicyEvent::Warnings(self.warnings.counts()));
     }
 
     fn on_process_update(&mut self, p: &ProcessInfo) {
@@ -919,12 +961,14 @@ impl Policy {
         let settings = &self.settings;
         self.live.retain(|id| live::lookup(settings, id).is_some());
         self.restarts.retain(|id| live::lookup(settings, id).is_some());
+        self.warnings.retain(|id| live::lookup(settings, id).is_some(), |id| settings.sites.iter().any(|s| s.id == id));
         self.gate.retain(|id| live::lookup(settings, id).is_some());
         self.statuses.retain(|id, _| live::lookup(settings, *id).is_some());
         self.waiting.retain(|id| live::lookup(settings, *id).is_some());
         self.splitter.retain(|id| live::lookup(settings, id).is_some());
         self.flush_live();
         self.flush_restarts();
+        self.flush_warnings();
     }
 
     fn emit(&self, ev: PolicyEvent) {
@@ -1069,6 +1113,7 @@ impl Policy {
                 self.emit_live();
                 self.emit_last_live();
                 self.emit_restarts();
+                self.emit_warnings();
                 if let Some(a) = &self.available {
                     self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
                 }
@@ -1174,9 +1219,11 @@ impl Policy {
                 self.dispatch_notification(msg, targets, true);
             }
             PolicyCommand::Recheck => self.engine.send(Command::Recheck),
-            PolicyCommand::ClearRestarts => {
+            PolicyCommand::ClearWarnings => {
                 self.restarts.clear();
                 self.flush_restarts();
+                self.warnings.clear();
+                self.flush_warnings();
                 self.files.dismiss_stalls();
                 self.emit_files();
             }
@@ -1247,6 +1294,8 @@ mod tests {
             file_check_interval_secs: Some(30),
             restart_clear_minutes: Some(0),
             restart_threshold: Some(1),
+            interrupt_patterns: String::new(),
+            error_patterns: String::new(),
             color: None,
             notify: false,
             notify_desktop: true,
@@ -1334,6 +1383,8 @@ mod e2e {
                 file_check_interval_secs: Some(30),
                 restart_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
+                interrupt_patterns: String::new(),
+                error_patterns: String::new(),
                 color: None,
                 notify: false,
                 notify_desktop: true,

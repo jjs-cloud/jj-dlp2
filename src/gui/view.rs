@@ -5,7 +5,7 @@ use super::{
     App, DraftField, Msg, NEW_SITE_ID, SITE_SWATCHES, SettingsTab, SiteDraft, StreamerDraft, StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
-use crate::policy::{layout, Preset};
+use crate::policy::{layout, Preset, Warnings};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
@@ -170,6 +170,7 @@ fn compact_chips<'a>(
     status: StreamerStatus,
     stalled: bool,
     restarts: u32,
+    warns: Warnings,
 ) -> Row<'a, Msg> {
     let mut chips: Row<'a, Msg> = Row::new()
         .spacing(m.spacing / 2.0)
@@ -188,6 +189,12 @@ fn compact_chips<'a>(
     }
     if restarts > 0 {
         chips = chips.push(mini_chip(s, m, format!("RESTARTED {restarts}×"), s.warn));
+    }
+    if warns.interrupts > 0 {
+        chips = chips.push(mini_chip(s, m, format!("INTERRUPT {}×", warns.interrupts), s.warn));
+    }
+    if warns.errors > 0 {
+        chips = chips.push(mini_chip(s, m, format!("ERROR {}×", warns.errors), s.warn));
     }
     if st.options.log_stdout || st.options.log_stderr {
         chips = chips.push(mini_chip(s, m, "LOG", s.muted));
@@ -399,10 +406,10 @@ impl App {
                 ..Default::default()
             })
             .align_y(Alignment::Center);
-        if self.any_restart_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id)) {
+        if self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id)) {
             title = title.push(
                 button(btn_label(&s, "Clear warnings").size(12))
-                    .on_press(Msg::ClearRestarts)
+                    .on_press(Msg::ClearWarnings)
                     .padding([3.0, 10.0])
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
@@ -539,9 +546,17 @@ impl App {
         if count >= threshold { count } else { 0 }
     }
 
-    /// True when at least one RESTARTED chip is showing.
-    fn any_restart_chip(&self) -> bool {
-        self.settings.streamers.iter().any(|st| self.shown_restarts(st) > 0)
+    /// The streamer's INTERRUPT and ERROR counts.
+    fn warns(&self, id: StreamerId) -> Warnings {
+        self.warnings.get(&id).copied().unwrap_or_default()
+    }
+
+    /// True when at least one RESTARTED, INTERRUPT or ERROR chip is showing.
+    fn any_warning_chip(&self) -> bool {
+        self.settings.streamers.iter().any(|st| {
+            let w = self.warns(st.id);
+            self.shown_restarts(st) > 0 || w.interrupts > 0 || w.errors > 0
+        })
     }
 
     /// True when any active recording of the streamer is stalled.
@@ -549,11 +564,12 @@ impl App {
         self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
     }
 
-    /// Row tint: red while STALLED shows, else yellow while RESTARTED shows.
+    /// Row tint: red while STALLED shows, else yellow while RESTARTED, INTERRUPT or ERROR shows.
     fn row_tint(&self, s: Skin, st: &Streamer) -> Option<Color> {
+        let w = self.warns(st.id);
         if self.streamer_stalled(st.id) {
             Some(s.danger)
-        } else if self.shown_restarts(st) > 0 {
+        } else if self.shown_restarts(st) > 0 || w.interrupts > 0 || w.errors > 0 {
             Some(s.warn)
         } else {
             None
@@ -651,7 +667,7 @@ impl App {
             )
             .width(m.time_w)
             .clip(true),
-            compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st)),
+            compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id)),
             toggler(st.enabled)
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
                 .size(m.toggler),
@@ -1092,6 +1108,13 @@ impl App {
         let restarts = self.shown_restarts(st);
         if restarts > 0 {
             chips = chips.push(chip(s, format!("RESTARTED {restarts}×"), s.warn));
+        }
+        let warns = self.warns(id);
+        if warns.interrupts > 0 {
+            chips = chips.push(chip(s, format!("INTERRUPT {}×", warns.interrupts), s.warn));
+        }
+        if warns.errors > 0 {
+            chips = chips.push(chip(s, format!("ERROR {}×", warns.errors), s.warn));
         }
         if st.options.log_stdout || st.options.log_stderr {
             chips = chips.push(chip(s, "LOGGING", s.muted));
@@ -1698,6 +1721,24 @@ impl App {
         .spacing(8)
         .align_y(Alignment::End);
 
+        let patterns = row![
+            cell(
+                labeled(
+                    "Interrupt patterns (separate with |, blank = off)",
+                    field("", &d.interrupt_patterns, DraftField::InterruptPatterns)
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Error patterns (separate with |, blank = off)",
+                    field("", &d.error_patterns, DraftField::ErrorPatterns)
+                ),
+                Length::FillPortion(1)
+            ),
+        ]
+        .spacing(8);
+
         let split_input = text_input("", &d.split_minutes)
             .on_input(move |v| Msg::Draft(id, DraftField::SplitMinutes(v)))
             .padding(5)
@@ -1951,6 +1992,7 @@ impl App {
         }
         let form = form
             .push(timing)
+            .push(patterns)
             .push(splitting)
             .push(color_row)
             .push(file_checks)

@@ -1,6 +1,8 @@
 //! The engine: owns settings, per-site checker workers and recorder processes.
 
-// Effort should be made to avoid changes to the engine, in favor of changes to the policy layer. Any changes to the engine should first be approved by the owner.
+// Effort should be made to avoid changes to the engine, in favor of changes to the policy layer. 
+// Any changes to the engine should first be approved by the owner.
+// Consider "approval" to be an explicit "engine changes are approved" statement by the owner.
 
 mod checker;
 mod diagnose;
@@ -31,6 +33,8 @@ pub(crate) enum Internal {
     Log(String),
     /// An informational line from a recorder, logged once per live session.
     Note { streamer_id: StreamerId, text: String },
+    /// One line of a recorder's output, sent only when the site has interrupt or error patterns.
+    Line { streamer_id: StreamerId, text: String },
     Preflight { notices: Vec<Notice>, manual: bool },
 }
 
@@ -263,6 +267,7 @@ impl Engine {
                     self.log(format!("{}: {text}", name.unwrap_or_default()));
                 }
             }
+            Internal::Line { streamer_id, text } => self.emit(Event::Output { id: streamer_id, line: text }),
             Internal::Preflight { notices, manual } => self.on_preflight(notices, manual),
             Internal::RecorderGone(id) => {
                 let streamer = self.recorders.remove(&id).map(|h| h.streamer_id);
@@ -559,6 +564,7 @@ impl Engine {
             log_stdout: log_path(streamer.options.log_stdout, "stdout"),
             log_stderr: log_path(streamer.options.log_stderr, "stderr"),
             internal: self.internal_tx.clone(),
+            forward_output: !site.interrupt_patterns.trim().is_empty() || !site.error_patterns.trim().is_empty(),
         };
         match recorder::spawn_recorder(spec, &self.tracked) {
             Ok(handle) => {
@@ -625,6 +631,8 @@ mod e2e {
                 file_check_interval_secs: Some(30),
                 restart_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
+                interrupt_patterns: String::new(),
+                error_patterns: String::new(),
                 color: None,
                 notify: false,
                 notify_desktop: true,
@@ -786,6 +794,8 @@ mod e2e {
                 file_check_interval_secs: Some(30),
                 restart_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
+                interrupt_patterns: String::new(),
+                error_patterns: String::new(),
                 color: None,
                 notify: false,
                 notify_desktop: true,

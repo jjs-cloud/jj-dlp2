@@ -6,6 +6,13 @@ use crate::api::FolderLayout;
 /// Colour given to new blank sites.
 pub const DEFAULT_SITE_COLOR: &str = "#7AA2F7";
 
+/// ffmpeg error phrases every new site starts with.
+const DEFAULT_ERROR_PATTERNS: &str = "timestamp discontinuity|Packet corrupt";
+
+/// Ad-break phrases the Twitch preset starts with.
+const TWITCH_INTERRUPT_PATTERNS: &str =
+    "EXT-X-DISCONTINUITY|amazon|twitch-ad|/ad/|admanifest|/ads/|EXT-X-TWITCH-AD|twitch-stitched-ad";
+
 /// Starting point for a new site.
 #[derive(Debug, Clone, Copy)]
 pub enum Preset {
@@ -83,6 +90,8 @@ pub fn new_site(preset: Preset) -> NewSite {
         file_check_interval_secs: None,
         restart_clear_minutes: None,
         restart_threshold: None,
+        interrupt_patterns: if matches!(preset, Preset::Twitch) { TWITCH_INTERRUPT_PATTERNS.into() } else { String::new() },
+        error_patterns: DEFAULT_ERROR_PATTERNS.into(),
         color: Some(color.into()),
         notify: true,
         notify_desktop: true,
@@ -112,6 +121,13 @@ mod tests {
         assert_eq!(site.interval_or_default(), DEFAULT_INTERVAL_SECS);
         assert_eq!(site.checker_or_default(), DEFAULT_CHECKER_ARGS);
         assert_eq!(site.exe_or_default(), DEFAULT_EXE);
+    }
+
+    #[test]
+    fn warning_patterns_default_on_per_preset() {
+        assert!(new_site(Preset::Twitch).interrupt_patterns.contains("twitch-stitched-ad"));
+        assert!(new_site(Preset::Kick).interrupt_patterns.is_empty());
+        assert!(new_site(Preset::Blank).error_patterns.contains("Packet corrupt"));
     }
 
     #[test]
