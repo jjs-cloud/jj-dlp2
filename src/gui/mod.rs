@@ -388,23 +388,89 @@ pub enum DraftField {
     AutoSuffix(bool),
 }
 
-/// A single option changed in a streamer's settings panel.
-#[derive(Debug, Clone, Copy)]
-pub enum OptionField {
+/// A single field edited in a streamer's settings panel.
+#[derive(Debug, Clone)]
+pub enum StreamerField {
     LogStdout(bool),
     LogStderr(bool),
     FolderLayout(Option<FolderLayout>),
     Notify(Option<bool>),
-    IntroDelayEnabled(bool),
-    IntroDelayMinutes(u64),
-    IntroDelaySplit(bool),
-    /// Inherit or turn off splitting.
-    Split(Option<bool>),
-    /// Turn splitting on with this length; `None` uses the site's.
-    SplitOn(Option<u64>),
-    /// Change only the stored split length.
-    SplitMinutes(Option<u64>),
     AutoSuffix(Option<bool>),
+    Split(Option<bool>),
+    SplitMinutes(String),
+    IntroEnabled(bool),
+    IntroSplit(bool),
+    IntroMinutes(String),
+}
+
+/// Unsaved edits to one streamer's options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamerDraft {
+    pub log_stdout: bool,
+    pub log_stderr: bool,
+    pub folder_layout: Option<FolderLayout>,
+    pub notify: Option<bool>,
+    pub auto_suffix: Option<bool>,
+    pub split: Option<bool>,
+    pub split_minutes: String,
+    pub intro_enabled: bool,
+    pub intro_split: bool,
+    pub intro_minutes: String,
+}
+
+impl StreamerDraft {
+    pub fn from_options(o: &StreamerOptions) -> Self {
+        Self {
+            log_stdout: o.log_stdout,
+            log_stderr: o.log_stderr,
+            folder_layout: o.folder_layout,
+            notify: o.notify,
+            auto_suffix: o.auto_suffix,
+            split: o.split,
+            split_minutes: opt_text(o.split_minutes),
+            intro_enabled: o.intro_delay_enabled,
+            intro_split: o.intro_delay_split == Some(true),
+            intro_minutes: if o.intro_delay_minutes == 0 { String::new() } else { o.intro_delay_minutes.to_string() },
+        }
+    }
+
+    pub fn to_options(&self) -> StreamerOptions {
+        StreamerOptions {
+            log_stdout: self.log_stdout,
+            log_stderr: self.log_stderr,
+            folder_layout: self.folder_layout,
+            notify: self.notify,
+            auto_suffix: self.auto_suffix,
+            split: self.split,
+            split_minutes: self.split_minutes.trim().parse().ok().filter(|m| *m > 0),
+            intro_delay_enabled: self.intro_enabled,
+            intro_delay_minutes: self.intro_minutes.trim().parse().unwrap_or(0),
+            intro_delay_split: self.intro_split.then_some(true),
+        }
+    }
+
+    /// True while the intro delay is on without a length of at least 1 minute.
+    pub fn intro_invalid(&self) -> bool {
+        self.intro_enabled && !matches!(parse_opt::<u64>(&self.intro_minutes, 1), Some(Some(_)))
+    }
+
+    /// True while the split length is unusable: unreadable, or blank with splitting on and none inherited.
+    pub fn split_invalid(&self, inherited: bool) -> bool {
+        match parse_opt::<u64>(&self.split_minutes, 1) {
+            None => true,
+            Some(None) => self.split == Some(true) && !inherited,
+            Some(Some(_)) => false,
+        }
+    }
+
+    pub fn invalid(&self, inherited_split: bool) -> bool {
+        self.intro_invalid() || self.split_invalid(inherited_split)
+    }
+
+    /// True when saving would change `saved`.
+    pub fn differs_from(&self, saved: &StreamerOptions) -> bool {
+        self.to_options() != *saved
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -416,6 +482,7 @@ pub enum Msg {
     OpenAddSite,
     ThemeChosen(ThemeKind),
     OpenConfigDir,
+    OpenLogsDir,
     OpenOutputDir(SiteId),
     OpenRecording(RecorderId),
     NewStreamerName(SiteId, String),
@@ -424,12 +491,10 @@ pub enum Msg {
     RemoveStreamer(StreamerId),
     ToggleStreamer(StreamerId, bool),
     ToggleStreamerSettings(StreamerId),
-    StreamerOption(StreamerId, OptionField),
-    IntroMinutesEdit(StreamerId, String),
-    IntroMinutesSave(StreamerId),
-    SplitMode(StreamerId, Option<bool>),
-    SplitMinutesEdit(StreamerId, String),
-    SplitMinutesSave(StreamerId),
+    StreamerEdit(StreamerId, StreamerField),
+    SaveStreamer(StreamerId),
+    RevertStreamer(StreamerId),
+    DefaultsStreamer(StreamerId),
     AddSite(Preset),
     RemoveSite(SiteId),
     Draft(SiteId, DraftField),
@@ -501,12 +566,7 @@ pub struct App {
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
     open_streamer_settings: HashSet<StreamerId>,
-    /// Intro delay minutes being typed per streamer, until saved with Enter.
-    intro_minutes: HashMap<StreamerId, String>,
-    /// Split minutes being typed per streamer, until saved with Enter.
-    split_minutes: HashMap<StreamerId, String>,
-    /// Streamers set to split "On" that have no usable length yet, so nothing is saved.
-    split_pending: HashSet<StreamerId>,
+    streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
     global_out: String,
     phase: f32,
@@ -551,9 +611,7 @@ impl App {
             new_streamer: HashMap::new(),
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
-            intro_minutes: HashMap::new(),
-            split_minutes: HashMap::new(),
-            split_pending: HashSet::new(),
+            streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
             global_out: String::new(),
             phase: 0.0,
@@ -595,73 +653,39 @@ impl App {
         ])
     }
 
-    /// Sends a streamer's options with one field changed.
-    fn set_streamer_option(&self, id: StreamerId, field: OptionField) {
-        let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
-        let mut options = st.options.clone();
-        match field {
-            OptionField::LogStdout(v) => options.log_stdout = v,
-            OptionField::LogStderr(v) => options.log_stderr = v,
-            OptionField::FolderLayout(v) => options.folder_layout = v,
-            OptionField::Notify(v) => options.notify = v,
-            OptionField::IntroDelayEnabled(v) => options.intro_delay_enabled = v,
-            OptionField::IntroDelayMinutes(v) => options.intro_delay_minutes = v,
-            OptionField::IntroDelaySplit(v) => options.intro_delay_split = v.then_some(true),
-            OptionField::Split(v) => options.split = v,
-            OptionField::SplitOn(v) => {
-                options.split = Some(true);
-                options.split_minutes = v;
-            }
-            OptionField::SplitMinutes(v) => options.split_minutes = v,
-            OptionField::AutoSuffix(v) => options.auto_suffix = v,
-        }
-        self.client.send(PolicyCommand::SetStreamerOptions { id, options });
-    }
-
-    /// The split length a streamer's panel is showing: the typed text, else the saved value.
-    pub(crate) fn split_minutes_shown(&self, st: &Streamer) -> Option<u64> {
-        match self.split_minutes.get(&st.id) {
-            Some(text) => text.parse().ok().filter(|m| *m > 0),
-            None => st.options.split_minutes.filter(|m| *m > 0),
-        }
-    }
-
     /// The length a streamer inherits from its site, if splitting is on there.
     pub(crate) fn inherited_split(&self, st: &Streamer) -> Option<u64> {
         self.settings.sites.iter().find(|s| s.id == st.site_id).and_then(Site::inherited_split_minutes)
     }
 
-    /// Applies the split dropdown; "On" is held back until a length exists.
-    fn set_split_mode(&mut self, id: StreamerId, mode: Option<bool>) {
+    /// Applies one edit to a streamer's draft.
+    fn edit_streamer(&mut self, id: StreamerId, field: StreamerField) {
         let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
-        if mode != Some(true) {
-            self.split_pending.remove(&id);
-            self.set_streamer_option(id, OptionField::Split(mode));
-            return;
-        }
-        let minutes = self.split_minutes_shown(st);
-        if minutes.is_some() || self.inherited_split(st).is_some() {
-            self.split_pending.remove(&id);
-            self.split_minutes.remove(&id);
-            self.set_streamer_option(id, OptionField::SplitOn(minutes));
-        } else {
-            self.split_pending.insert(id);
+        let d = self.streamer_drafts.entry(id).or_insert_with(|| StreamerDraft::from_options(&st.options));
+        let digits = |v: &str| v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit());
+        match field {
+            StreamerField::LogStdout(v) => d.log_stdout = v,
+            StreamerField::LogStderr(v) => d.log_stderr = v,
+            StreamerField::FolderLayout(v) => d.folder_layout = v,
+            StreamerField::Notify(v) => d.notify = v,
+            StreamerField::AutoSuffix(v) => d.auto_suffix = v,
+            StreamerField::Split(v) => d.split = v,
+            StreamerField::SplitMinutes(v) if digits(&v) => d.split_minutes = v,
+            StreamerField::IntroEnabled(v) => d.intro_enabled = v,
+            StreamerField::IntroSplit(v) => d.intro_split = v,
+            StreamerField::IntroMinutes(v) if digits(&v) => d.intro_minutes = v,
+            StreamerField::SplitMinutes(_) | StreamerField::IntroMinutes(_) => {}
         }
     }
 
-    /// Saves the typed split length; with splitting on and no length anywhere nothing is saved.
-    fn save_split_minutes(&mut self, id: StreamerId) {
+    /// Sends a streamer's draft to the policy layer unless it is invalid.
+    fn save_streamer(&self, id: StreamerId) {
         let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
-        let Some(text) = self.split_minutes.get(&id).cloned() else { return };
-        let minutes = text.parse::<u64>().ok().filter(|m| *m > 0);
-        let on = self.split_pending.contains(&id) || st.options.split == Some(true);
-        if on && minutes.is_none() && self.inherited_split(st).is_none() {
+        let Some(d) = self.streamer_drafts.get(&id) else { return };
+        if d.invalid(self.inherited_split(st).is_some()) {
             return;
         }
-        self.split_minutes.remove(&id);
-        self.split_pending.remove(&id);
-        let field = if on { OptionField::SplitOn(minutes) } else { OptionField::SplitMinutes(minutes) };
-        self.set_streamer_option(id, field);
+        self.client.send(PolicyCommand::SetStreamerOptions { id, options: d.to_options() });
     }
 
     /// Scrolls the Sites list to the named site, if it exists.
@@ -710,6 +734,7 @@ impl App {
                 prefs::save_theme(k);
             }
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
+            Msg::OpenLogsDir => self.client.send(PolicyCommand::OpenLogsDir),
             Msg::OpenOutputDir(site_id) => self.client.send(PolicyCommand::OpenOutputDir(site_id)),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
             Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
@@ -731,24 +756,16 @@ impl App {
                     self.open_streamer_settings.insert(id);
                 }
             }
-            Msg::StreamerOption(id, field) => self.set_streamer_option(id, field),
-            Msg::IntroMinutesEdit(id, v) => {
-                if v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit()) {
-                    self.intro_minutes.insert(id, v);
+            Msg::StreamerEdit(id, field) => self.edit_streamer(id, field),
+            Msg::SaveStreamer(id) => self.save_streamer(id),
+            Msg::RevertStreamer(id) => {
+                if let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) {
+                    self.streamer_drafts.insert(id, StreamerDraft::from_options(&st.options));
                 }
             }
-            Msg::IntroMinutesSave(id) => {
-                if let Some(text) = self.intro_minutes.remove(&id) {
-                    self.set_streamer_option(id, OptionField::IntroDelayMinutes(text.parse().unwrap_or(0)));
-                }
+            Msg::DefaultsStreamer(id) => {
+                self.streamer_drafts.insert(id, StreamerDraft::from_options(&StreamerOptions::default()));
             }
-            Msg::SplitMode(id, mode) => self.set_split_mode(id, mode),
-            Msg::SplitMinutesEdit(id, v) => {
-                if v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit()) {
-                    self.split_minutes.insert(id, v);
-                }
-            }
-            Msg::SplitMinutesSave(id) => self.save_split_minutes(id),
             Msg::AddSite(preset) => {
                 if matches!(preset, Preset::Blank) {
                     self.drafts.entry(NEW_SITE_ID).or_insert_with(|| SiteDraft::from_defaults("", Preset::Blank));
@@ -1017,6 +1034,17 @@ impl App {
             };
             if !editing {
                 self.drafts.insert(site.id, SiteDraft::from_site(site));
+            }
+        }
+        self.streamer_drafts.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
+        for st in &s.streamers {
+            let old = self.settings.streamers.iter().find(|o| o.id == st.id);
+            let editing = match (self.streamer_drafts.get(&st.id), old) {
+                (Some(d), Some(old)) => d.differs_from(&old.options),
+                _ => false,
+            };
+            if !editing {
+                self.streamer_drafts.insert(st.id, StreamerDraft::from_options(&st.options));
             }
         }
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));

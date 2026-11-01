@@ -2,7 +2,7 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, NEW_SITE_ID, OptionField, SITE_SWATCHES, SettingsTab, SiteDraft, Tab, UpdateStage, prefs,
+    App, DraftField, Msg, NEW_SITE_ID, SITE_SWATCHES, SettingsTab, SiteDraft, StreamerDraft, StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
 use crate::policy::{layout, Preset};
@@ -1157,15 +1157,40 @@ impl App {
 
     fn streamer_settings_panel<'a>(&'a self, s: Skin, st: &'a Streamer) -> Element<'a, Msg> {
         let id = st.id;
-        let log = |label: &'static str, on: bool, f: fn(bool) -> OptionField| {
+        let d = self
+            .streamer_drafts
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| StreamerDraft::from_options(&st.options));
+        let labeled = |label: &'static str, input: Element<'a, Msg>| -> Element<'a, Msg> {
+            column![muted(&s, label), input].spacing(2).into()
+        };
+        let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
+        let toggle = |label: &'static str, on: bool, f: fn(bool) -> StreamerField| {
             toggler(on)
                 .label(label)
-                .on_toggle(move |v| Msg::StreamerOption(id, f(v)))
+                .on_toggle(move |v| Msg::StreamerEdit(id, f(v)))
                 .text_size(12)
         };
+        let inherit_choices = |inherited: bool| {
+            vec![
+                NotifyChoice { value: None, label: format!("Inherit ({})", on_off(inherited)) },
+                NotifyChoice { value: Some(true), label: "On".to_string() },
+                NotifyChoice { value: Some(false), label: "Off".to_string() },
+            ]
+        };
+        let inherit_pick = |inherited: bool, current: Option<bool>, f: fn(Option<bool>) -> StreamerField| {
+            let choices = inherit_choices(inherited);
+            let selected = choices.iter().find(|c| c.value == current).cloned();
+            pick_list(choices, selected, move |c: NotifyChoice| Msg::StreamerEdit(id, f(c.value)))
+                .padding(5)
+                .text_size(13)
+                .width(Length::Fill)
+        };
+
         let site = self.settings.sites.iter().find(|x| x.id == st.site_id);
         let site_layout = site.map(|x| x.folder_layout).unwrap_or_default();
-        let choices: Vec<LayoutChoice> = std::iter::once(LayoutChoice {
+        let layout_choices: Vec<LayoutChoice> = std::iter::once(LayoutChoice {
             value: None,
             label: format!("Inherit ({site_layout})"),
         })
@@ -1174,154 +1199,171 @@ impl App {
             label: l.to_string(),
         }))
         .collect();
-        let selected = choices.iter().find(|c| c.value == st.options.folder_layout).cloned();
-        let effective = st.options.folder_layout.unwrap_or(site_layout);
+        let layout_selected = layout_choices.iter().find(|c| c.value == d.folder_layout).cloned();
+        let effective_layout = d.folder_layout.unwrap_or(site_layout);
         let base = layout::base_dir(
             site.map_or("", |x| x.output_dir.as_str()),
             &self.settings.default_output_dir,
         );
-        let path = layout::preview(base, effective, site.map_or("", |x| x.name.as_str()), Some(&st.name));
-        let mut folders = column![
-            muted(&s, "Recording subfolders"),
-            pick_list(choices, selected, move |c: LayoutChoice| Msg::StreamerOption(
-                id,
-                OptionField::FolderLayout(c.value)
-            ))
-            .padding(8)
-            .width(260),
+        let path = layout::preview(base, effective_layout, site.map_or("", |x| x.name.as_str()), Some(&st.name));
+        let site_notify = site.is_some_and(|x| x.notify);
+        let site_suffix = site.is_some_and(|x| x.auto_suffix);
+
+        let top = row![
+            cell(
+                labeled(
+                    "Recording subfolders",
+                    pick_list(layout_choices, layout_selected, move |c: LayoutChoice| Msg::StreamerEdit(
+                        id,
+                        StreamerField::FolderLayout(c.value)
+                    ))
+                    .padding(5)
+                    .text_size(13)
+                    .width(Length::Fill)
+                    .into(),
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Notifications",
+                    inherit_pick(site_notify, d.notify, StreamerField::Notify).into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Name restarted recordings _partN",
+                    inherit_pick(site_suffix, d.auto_suffix, StreamerField::AutoSuffix).into()
+                ),
+                Length::FillPortion(1)
+            ),
+        ]
+        .spacing(8);
+        let mut paths = column![
             muted(&s, format!("Effective path: {path}")),
+            muted(&s, format!("Effective notifications: {}", on_off(d.notify.unwrap_or(site_notify)))),
         ]
-        .spacing(4);
-        if effective != FolderLayout::Flat && site.is_some_and(|x| layout::has_absolute_template(&x.recorder_args)) {
-            folders = folders.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
+        .spacing(2);
+        if effective_layout != FolderLayout::Flat && site.is_some_and(|x| layout::has_absolute_template(&x.recorder_args)) {
+            paths = paths.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
         }
-        let site_on = site.is_some_and(|x| x.notify);
-        let notify_choices = vec![
-            NotifyChoice { value: None, label: format!("Inherit ({})", on_off(site_on)) },
-            NotifyChoice { value: Some(true), label: "On".to_string() },
-            NotifyChoice { value: Some(false), label: "Off".to_string() },
-        ];
-        let notify_selected = notify_choices.iter().find(|c| c.value == st.options.notify).cloned();
-        let notifications = column![
-            muted(&s, "Notifications"),
-            pick_list(notify_choices, notify_selected, move |c: NotifyChoice| Msg::StreamerOption(
-                id,
-                OptionField::Notify(c.value)
-            ))
-            .padding(8)
-            .width(260),
-            muted(&s, format!("Effective: {}", on_off(st.options.notify.unwrap_or(site_on)))),
+
+        let inherited_split = self.inherited_split(st);
+        let split_invalid = d.split_invalid(inherited_split.is_some());
+        let split_hint = inherited_split.map(|m| m.to_string()).unwrap_or_default();
+        let splitting = row![
+            cell(
+                labeled(
+                    "Split recordings",
+                    inherit_pick(inherited_split.is_some(), d.split, StreamerField::Split).into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Split the recording after (minutes)",
+                    text_input(&split_hint, &d.split_minutes)
+                        .on_input(move |v| Msg::StreamerEdit(id, StreamerField::SplitMinutes(v)))
+                        .padding(5)
+                        .size(13)
+                        .style(skin::input_required(s, split_invalid))
+                        .into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(Space::new().into(), Length::FillPortion(1)),
         ]
-        .spacing(4);
-        let minutes = self.intro_minutes.get(&id).cloned().unwrap_or_else(|| match st.options.intro_delay_minutes {
-            0 => String::new(),
-            m => m.to_string(),
-        });
-        let delay_effective = match (st.options.intro_delay_enabled, st.options.intro_delay_minutes) {
-            (true, m) if m > 0 && st.options.intro_delay_split == Some(true) => {
-                format!("Effective: records now, splits the intro off after {m} min")
-            }
-            (true, m) if m > 0 => format!("Effective: waits {m} min after going live"),
+        .spacing(8);
+
+        let intro_effective = match (d.intro_enabled, d.intro_minutes.trim().parse::<u64>().unwrap_or(0)) {
+            (true, m) if m > 0 && d.intro_split => format!("Effective: records now, splits the intro off after {m} min"),
+            (true, m) if m > 0 => format!("Effective: recording starts {m} min after going live"),
             _ => "Effective: Off".to_string(),
         };
-        let inherited_split = self.inherited_split(st);
-        let split_mode = if self.split_pending.contains(&id) { Some(true) } else { st.options.split };
-        let split_choices = vec![
-            NotifyChoice { value: None, label: format!("Inherit ({})", on_off(inherited_split.is_some())) },
-            NotifyChoice { value: Some(true), label: "On".to_string() },
-            NotifyChoice { value: Some(false), label: "Off".to_string() },
-        ];
-        let split_selected = split_choices.iter().find(|c| c.value == split_mode).cloned();
-        let split_text = self
-            .split_minutes
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| st.options.split_minutes.map(|m| m.to_string()).unwrap_or_default());
-        let split_hint = inherited_split.map(|m| m.to_string()).unwrap_or_default();
-        let split_invalid = split_mode == Some(true) && self.split_minutes_shown(st).is_none() && inherited_split.is_none();
-        let splitting = column![
-            muted(&s, "Split recordings"),
-            pick_list(split_choices, split_selected, move |c: NotifyChoice| Msg::SplitMode(id, c.value))
-                .padding(8)
-                .width(260),
-            muted(&s, "Split the recording after (minutes)"),
-            row![
-                text_input(&split_hint, &split_text)
-                    .on_input(move |v| Msg::SplitMinutesEdit(id, v))
-                    .on_submit(Msg::SplitMinutesSave(id))
-                    .padding(8)
-                    .width(100)
-                    .style(skin::input_required(s, split_invalid)),
-                muted(&s, "press Enter to save"),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(4);
-        let site_suffix = site.is_some_and(|x| x.auto_suffix);
-        let suffix_choices = vec![
-            NotifyChoice { value: None, label: format!("Inherit ({})", on_off(site_suffix)) },
-            NotifyChoice { value: Some(true), label: "On".to_string() },
-            NotifyChoice { value: Some(false), label: "Off".to_string() },
-        ];
-        let suffix_selected = suffix_choices.iter().find(|c| c.value == st.options.auto_suffix).cloned();
-        let auto_suffix = column![
-            muted(&s, "Name restarted recordings _partN"),
-            pick_list(suffix_choices, suffix_selected, move |c: NotifyChoice| Msg::StreamerOption(
-                id,
-                OptionField::AutoSuffix(c.value)
-            ))
-            .padding(8)
-            .width(260),
-        ]
-        .spacing(4);
         let intro_delay = column![
-            muted(&s, "Intro delay"),
-            log("Wait before recording", st.options.intro_delay_enabled, OptionField::IntroDelayEnabled),
-            log(
-                "Split the intro into its own file instead of waiting",
-                st.options.intro_delay_split == Some(true),
-                OptionField::IntroDelaySplit
-            ),
             row![
-                text_input("Minutes", &minutes)
-                    .on_input(move |v| Msg::IntroMinutesEdit(id, v))
-                    .on_submit(Msg::IntroMinutesSave(id))
-                    .padding(8)
-                    .width(100)
-                    .style(skin::input(s)),
-                muted(&s, "minutes after going live (press Enter to save)"),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            muted(&s, delay_effective),
-        ]
-        .spacing(4);
-        column![
-            muted(
-                &s,
-                "Output is appended to the logs folder next to settings.json."
-            ),
-            row![
-                log(
-                    "Log recorder stdout",
-                    st.options.log_stdout,
-                    OptionField::LogStdout
-                ),
-                log(
-                    "Log recorder stderr",
-                    st.options.log_stderr,
-                    OptionField::LogStderr
+                toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
+                toggle(
+                    "Split the intro into its own file instead of waiting",
+                    d.intro_split,
+                    StreamerField::IntroSplit
                 ),
             ]
             .spacing(24),
-            folders,
-            notifications,
-            splitting,
-            auto_suffix,
-            intro_delay,
+            row![
+                cell(
+                    labeled(
+                        "Delay starting the recording by (minutes)",
+                        text_input("Ex: 10", &d.intro_minutes)
+                            .on_input(move |v| Msg::StreamerEdit(id, StreamerField::IntroMinutes(v)))
+                            .padding(5)
+                            .size(13)
+                            .style(skin::input_required(s, d.intro_invalid()))
+                            .into()
+                    ),
+                    Length::FillPortion(1)
+                ),
+                cell(
+                    container(muted(&s, intro_effective)).padding([5.0, 0.0]).into(),
+                    Length::FillPortion(2)
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::End),
         ]
-        .spacing(8)
+        .spacing(6);
+
+        let logs = row![
+            toggle("Log recorder stdout", d.log_stdout, StreamerField::LogStdout),
+            toggle("Log recorder stderr", d.log_stderr, StreamerField::LogStderr),
+            Space::new().width(Length::Fill),
+            button(t(&s, "Open logs folder").size(12))
+                .on_press(Msg::OpenLogsDir)
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        ]
+        .spacing(24)
+        .align_y(Alignment::Center);
+
+        let dirty = d.differs_from(&st.options);
+        let valid = !d.invalid(inherited_split.is_some());
+        let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)]
+            .spacing(10)
+            .align_y(Alignment::Center);
+        if dirty {
+            actions = actions.push(chip(s, "unsaved changes", s.warn));
+        }
+        actions = actions
+            .push(
+                button(btn_label(&s, "Save changes").size(13))
+                    .on_press_maybe((dirty && valid).then_some(Msg::SaveStreamer(id)))
+                    .padding([5.0, 12.0])
+                    .style(skin::btn(s, BtnKind::Primary)),
+            )
+            .push(
+                button(t(&s, "Revert").size(13))
+                    .on_press_maybe(dirty.then_some(Msg::RevertStreamer(id)))
+                    .padding([5.0, 12.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            )
+            .push(
+                button(t(&s, "Defaults").size(13))
+                    .on_press(Msg::DefaultsStreamer(id))
+                    .padding([5.0, 12.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            );
+
+        column![
+            muted(&s, "Output is appended to the logs folder next to settings.json."),
+            logs,
+            top,
+            paths,
+            splitting,
+            intro_delay,
+            actions,
+        ]
+        .spacing(6)
         .into()
     }
 

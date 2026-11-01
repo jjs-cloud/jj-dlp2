@@ -20,7 +20,8 @@ fn slug(s: &str) -> String {
     template::sanitize(s).to_lowercase().replace(' ', "-")
 }
 
-fn logs_dir() -> PathBuf {
+/// Folder holding all log files.
+pub fn logs_dir() -> PathBuf {
     settings::config_dir().join("logs")
 }
 

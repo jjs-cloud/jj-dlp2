@@ -124,6 +124,8 @@ pub enum PolicyCommand {
     SetStreamerOptions { id: StreamerId, options: StreamerOptions },
     SetGlobalOutputDir(String),
     OpenConfigDir,
+    /// Opens the folder holding the recorder and checker logs.
+    OpenLogsDir,
     OpenOutputDir(SiteId),
     /// Opens the file a recorder is writing, once its path is verified.
     OpenRecording(RecorderId),
@@ -1145,6 +1147,13 @@ impl Policy {
             }
             PolicyCommand::OpenConfigDir => {
                 let dir = settings::config_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                if let Err(e) = open::that_detached(&dir) {
+                    self.log(format!("could not open {}: {e}", dir.display()));
+                }
+            }
+            PolicyCommand::OpenLogsDir => {
+                let dir = logfile::logs_dir();
                 let _ = std::fs::create_dir_all(&dir);
                 if let Err(e) = open::that_detached(&dir) {
                     self.log(format!("could not open {}: {e}", dir.display()));
