@@ -127,6 +127,9 @@ pub struct SiteDraft {
     pub notify_stalled: bool,
     pub notify_restarted: bool,
     pub notify_on_launch: bool,
+    pub split_enabled: bool,
+    pub split_minutes: String,
+    pub auto_suffix: bool,
 }
 
 impl SiteDraft {
@@ -161,6 +164,9 @@ impl SiteDraft {
             notify_stalled: s.notify_stalled,
             notify_restarted: s.notify_restarted,
             notify_on_launch: s.notify_on_launch,
+            split_enabled: s.split_enabled,
+            split_minutes: opt_text(s.split_minutes),
+            auto_suffix: s.auto_suffix,
         }
     }
 
@@ -197,6 +203,9 @@ impl SiteDraft {
             notify_stalled: n.notify_stalled,
             notify_restarted: n.notify_restarted,
             notify_on_launch: n.notify_on_launch,
+            split_enabled: n.split_enabled,
+            split_minutes: opt_text(n.split_minutes),
+            auto_suffix: n.auto_suffix,
         }
     }
 
@@ -252,6 +261,20 @@ impl SiteDraft {
         parse_opt(&self.notify_timeout, 1)
     }
 
+    /// Minutes per part; blank is `Some(None)`, anything but a whole number of at least 1 is `None`.
+    pub fn split_minutes(&self) -> Option<Option<u64>> {
+        parse_opt(&self.split_minutes, 1)
+    }
+
+    /// True while the split length is unusable: unreadable, or blank with splitting on.
+    pub fn split_invalid(&self) -> bool {
+        match self.split_minutes() {
+            None => true,
+            Some(None) => self.split_enabled,
+            Some(Some(_)) => false,
+        }
+    }
+
     /// False while ntfy is on without a usable topic.
     pub fn ntfy_ok(&self) -> bool {
         !self.notify_ntfy || notify::topic_valid(&self.ntfy_topic)
@@ -270,7 +293,12 @@ impl SiteDraft {
 
     /// The site this draft describes, or `None` while the name or URL template is blank or a field is invalid.
     pub fn to_new_site(&self) -> Option<NewSite> {
-        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || !self.color_ok() || !self.ntfy_ok() {
+        if self.name.trim().is_empty()
+            || self.url_template.trim().is_empty()
+            || !self.color_ok()
+            || !self.ntfy_ok()
+            || self.split_invalid()
+        {
             return None;
         }
         Some(NewSite {
@@ -302,6 +330,9 @@ impl SiteDraft {
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
             notify_on_launch: self.notify_on_launch,
+            split_enabled: self.split_enabled,
+            split_minutes: self.split_minutes()?,
+            auto_suffix: self.auto_suffix,
         })
     }
 }
@@ -352,6 +383,9 @@ pub enum DraftField {
     NotifyStalled(bool),
     NotifyRestarted(bool),
     NotifyOnLaunch(bool),
+    SplitEnabled(bool),
+    SplitMinutes(String),
+    AutoSuffix(bool),
 }
 
 /// A single option changed in a streamer's settings panel.
@@ -363,6 +397,13 @@ pub enum OptionField {
     Notify(Option<bool>),
     IntroDelayEnabled(bool),
     IntroDelayMinutes(u64),
+    /// Inherit or turn off splitting.
+    Split(Option<bool>),
+    /// Turn splitting on with this length; `None` uses the site's.
+    SplitOn(Option<u64>),
+    /// Change only the stored split length.
+    SplitMinutes(Option<u64>),
+    AutoSuffix(Option<bool>),
 }
 
 #[derive(Debug, Clone)]
@@ -385,6 +426,9 @@ pub enum Msg {
     StreamerOption(StreamerId, OptionField),
     IntroMinutesEdit(StreamerId, String),
     IntroMinutesSave(StreamerId),
+    SplitMode(StreamerId, Option<bool>),
+    SplitMinutesEdit(StreamerId, String),
+    SplitMinutesSave(StreamerId),
     AddSite(Preset),
     RemoveSite(SiteId),
     Draft(SiteId, DraftField),
@@ -458,6 +502,10 @@ pub struct App {
     open_streamer_settings: HashSet<StreamerId>,
     /// Intro delay minutes being typed per streamer, until saved with Enter.
     intro_minutes: HashMap<StreamerId, String>,
+    /// Split minutes being typed per streamer, until saved with Enter.
+    split_minutes: HashMap<StreamerId, String>,
+    /// Streamers set to split "On" that have no usable length yet, so nothing is saved.
+    split_pending: HashSet<StreamerId>,
     settings_tab: SettingsTab,
     global_out: String,
     phase: f32,
@@ -503,6 +551,8 @@ impl App {
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
             intro_minutes: HashMap::new(),
+            split_minutes: HashMap::new(),
+            split_pending: HashSet::new(),
             settings_tab: SettingsTab::Sites,
             global_out: String::new(),
             phase: 0.0,
@@ -555,8 +605,61 @@ impl App {
             OptionField::Notify(v) => options.notify = v,
             OptionField::IntroDelayEnabled(v) => options.intro_delay_enabled = v,
             OptionField::IntroDelayMinutes(v) => options.intro_delay_minutes = v,
+            OptionField::Split(v) => options.split = v,
+            OptionField::SplitOn(v) => {
+                options.split = Some(true);
+                options.split_minutes = v;
+            }
+            OptionField::SplitMinutes(v) => options.split_minutes = v,
+            OptionField::AutoSuffix(v) => options.auto_suffix = v,
         }
         self.client.send(PolicyCommand::SetStreamerOptions { id, options });
+    }
+
+    /// The split length a streamer's panel is showing: the typed text, else the saved value.
+    pub(crate) fn split_minutes_shown(&self, st: &Streamer) -> Option<u64> {
+        match self.split_minutes.get(&st.id) {
+            Some(text) => text.parse().ok().filter(|m| *m > 0),
+            None => st.options.split_minutes.filter(|m| *m > 0),
+        }
+    }
+
+    /// The length a streamer inherits from its site, if splitting is on there.
+    pub(crate) fn inherited_split(&self, st: &Streamer) -> Option<u64> {
+        self.settings.sites.iter().find(|s| s.id == st.site_id).and_then(Site::inherited_split_minutes)
+    }
+
+    /// Applies the split dropdown; "On" is held back until a length exists.
+    fn set_split_mode(&mut self, id: StreamerId, mode: Option<bool>) {
+        let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        if mode != Some(true) {
+            self.split_pending.remove(&id);
+            self.set_streamer_option(id, OptionField::Split(mode));
+            return;
+        }
+        let minutes = self.split_minutes_shown(st);
+        if minutes.is_some() || self.inherited_split(st).is_some() {
+            self.split_pending.remove(&id);
+            self.split_minutes.remove(&id);
+            self.set_streamer_option(id, OptionField::SplitOn(minutes));
+        } else {
+            self.split_pending.insert(id);
+        }
+    }
+
+    /// Saves the typed split length; with splitting on and no length anywhere nothing is saved.
+    fn save_split_minutes(&mut self, id: StreamerId) {
+        let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        let Some(text) = self.split_minutes.get(&id).cloned() else { return };
+        let minutes = text.parse::<u64>().ok().filter(|m| *m > 0);
+        let on = self.split_pending.contains(&id) || st.options.split == Some(true);
+        if on && minutes.is_none() && self.inherited_split(st).is_none() {
+            return;
+        }
+        self.split_minutes.remove(&id);
+        self.split_pending.remove(&id);
+        let field = if on { OptionField::SplitOn(minutes) } else { OptionField::SplitMinutes(minutes) };
+        self.set_streamer_option(id, field);
     }
 
     /// Scrolls the Sites list to the named site, if it exists.
@@ -637,6 +740,13 @@ impl App {
                     self.set_streamer_option(id, OptionField::IntroDelayMinutes(text.parse().unwrap_or(0)));
                 }
             }
+            Msg::SplitMode(id, mode) => self.set_split_mode(id, mode),
+            Msg::SplitMinutesEdit(id, v) => {
+                if v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit()) {
+                    self.split_minutes.insert(id, v);
+                }
+            }
+            Msg::SplitMinutesSave(id) => self.save_split_minutes(id),
             Msg::AddSite(preset) => {
                 if matches!(preset, Preset::Blank) {
                     self.drafts.entry(NEW_SITE_ID).or_insert_with(|| SiteDraft::from_defaults("", Preset::Blank));
@@ -699,6 +809,9 @@ impl App {
                         DraftField::NotifyStalled(v) => d.notify_stalled = v,
                         DraftField::NotifyRestarted(v) => d.notify_restarted = v,
                         DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
+                        DraftField::SplitEnabled(v) => d.split_enabled = v,
+                        DraftField::SplitMinutes(v) => d.split_minutes = v,
+                        DraftField::AutoSuffix(v) => d.auto_suffix = v,
                     }
                 }
             }

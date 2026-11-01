@@ -14,6 +14,19 @@ struct LiveFile {
     last_live: HashMap<StreamerId, u64>,
     /// Unix seconds of the last Twitch GQL lookup attempt.
     gql_checked_at: Option<u64>,
+    /// Each streamer's current recording part within its live span.
+    parts: HashMap<StreamerId, PartRecord>,
+}
+
+/// Where a streamer is in its `_partN` numbering during one live span.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartRecord {
+    /// Start of the live span this record belongs to.
+    pub span: u64,
+    /// Number of the current part.
+    pub part: u32,
+    /// Path of part 1 while it still lacks its `_part1` suffix.
+    pub file: Option<String>,
 }
 
 #[derive(Default)]
@@ -21,6 +34,7 @@ pub struct LiveTracker {
     spans: HashMap<StreamerId, u64>,
     last_live: HashMap<StreamerId, u64>,
     gql_checked_at: Option<u64>,
+    parts: HashMap<StreamerId, PartRecord>,
     seen_check: HashMap<StreamerId, u64>,
     site_ok: HashMap<SiteId, bool>,
     dirty: bool,
@@ -38,13 +52,14 @@ pub fn lookup(settings: &Settings, id: StreamerId) -> Option<(SiteId, u64)> {
 impl LiveTracker {
     /// Loads live.json, dropping unknown streamers and spans already past their end-after window.
     pub fn load(settings: &Settings, now: u64) -> Self {
-        let LiveFile { mut spans, mut last_live, gql_checked_at } = read();
+        let LiveFile { mut spans, mut last_live, gql_checked_at, mut parts } = read();
         spans.retain(|id, _| {
             lookup(settings, *id)
                 .is_some_and(|(_, secs)| last_live.get(id).is_some_and(|l| now.saturating_sub(*l) < secs))
         });
         last_live.retain(|id, _| lookup(settings, *id).is_some());
-        Self { spans, last_live, gql_checked_at, ..Default::default() }
+        parts.retain(|id, p| spans.get(id) == Some(&p.span));
+        Self { spans, last_live, gql_checked_at, parts, ..Default::default() }
     }
 
     /// Keeps only the streamers the predicate accepts.
@@ -52,6 +67,7 @@ impl LiveTracker {
         let (spans, last_live) = (self.spans.len(), self.last_live.len());
         self.spans.retain(|id, _| keep(*id));
         self.last_live.retain(|id, _| keep(*id));
+        self.parts.retain(|id, _| keep(*id));
         if self.spans.len() != spans {
             self.dirty = true;
             self.span_changed = true;
@@ -89,6 +105,7 @@ impl LiveTracker {
             let last = self.last_live.get(&id).copied().unwrap_or(0);
             if checked.saturating_sub(last) >= end_after_secs {
                 self.spans.remove(&id);
+                self.parts.remove(&id);
                 self.dirty = true;
                 self.span_changed = true;
             }
@@ -138,6 +155,19 @@ impl LiveTracker {
         self.spans.get(&id).copied()
     }
 
+    /// The streamer's part record for its current live span.
+    pub fn part(&self, id: StreamerId) -> Option<&PartRecord> {
+        self.parts.get(&id).filter(|p| self.spans.get(&id) == Some(&p.span))
+    }
+
+    /// Stores the streamer's part record.
+    pub fn set_part(&mut self, id: StreamerId, record: PartRecord) {
+        if self.parts.get(&id) != Some(&record) {
+            self.parts.insert(id, record);
+            self.dirty = true;
+        }
+    }
+
     /// Streamer id to the time it was most recently seen live.
     pub fn last_live(&self) -> HashMap<StreamerId, u64> {
         self.last_live.clone()
@@ -167,6 +197,7 @@ impl LiveTracker {
             spans: self.spans.clone(),
             last_live: self.last_live.clone(),
             gql_checked_at: self.gql_checked_at,
+            parts: self.parts.clone(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
         std::fs::write(&tmp, json)?;
@@ -275,6 +306,25 @@ mod tests {
         t.set_gql_checked_at(42);
         assert_eq!(t.gql_checked_at(), Some(42));
         assert!(t.take_dirty());
+    }
+
+    #[test]
+    fn part_record_lives_and_dies_with_its_span() {
+        let mut t = LiveTracker::default();
+        t.status(1, 1, 100, true, END);
+        t.set_part(1, PartRecord { span: 100, part: 2, file: None });
+        assert_eq!(t.part(1).map(|p| p.part), Some(2));
+        t.status(1, 1, 160, false, END);
+        t.status(1, 1, 100 + END, false, END);
+        assert!(t.part(1).is_none());
+    }
+
+    #[test]
+    fn part_record_from_an_older_span_is_ignored() {
+        let mut t = LiveTracker::default();
+        t.status(1, 1, 500, true, END);
+        t.set_part(1, PartRecord { span: 100, part: 3, file: None });
+        assert!(t.part(1).is_none());
     }
 
     #[test]

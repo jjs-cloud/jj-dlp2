@@ -7,7 +7,7 @@ use crate::api::{
 use crate::engine::{logfile, EngineParts};
 use crate::settings;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
@@ -21,15 +21,17 @@ pub mod live;
 pub mod notify;
 mod outpath;
 mod restarts;
+mod segments;
 pub mod uilog;
 pub mod update;
 use decision::Decision;
 use files::{FileTracker, Thresholds};
 pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
-use live::LiveTracker;
+use live::{LiveTracker, PartRecord};
 use notify::{Gate, Kind, LiveStatus, Message, Targets};
 use restarts::RestartTracker;
+use segments::{Plan, Splitter, Step};
 use update::UpdateConfig;
 
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
@@ -65,6 +67,9 @@ pub struct NewSite {
     pub notify_stalled: bool,
     pub notify_restarted: bool,
     pub notify_on_launch: bool,
+    pub split_enabled: bool,
+    pub split_minutes: Option<u64>,
+    pub auto_suffix: bool,
 }
 
 impl NewSite {
@@ -100,6 +105,9 @@ impl NewSite {
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
             notify_on_launch: self.notify_on_launch,
+            split_enabled: self.split_enabled,
+            split_minutes: self.split_minutes,
+            auto_suffix: self.auto_suffix,
         }
     }
 }
@@ -252,6 +260,14 @@ struct Policy {
     statuses: HashMap<StreamerId, StreamerStatus>,
     /// Live streamers whose recording is held back by an intro delay.
     waiting: HashSet<StreamerId>,
+    /// Follows each streamer's recorders and the split in flight.
+    splitter: Splitter,
+    /// Recorders stopped on purpose by a split, so their exit is not a restart.
+    retiring: HashSet<RecorderId>,
+    /// Part-1 files to rename once the recorder writing them has exited.
+    rename_on_exit: HashMap<RecorderId, (StreamerId, PathBuf)>,
+    /// The part number in the recorder arguments last sent to the engine for each streamer.
+    override_part: HashMap<StreamerId, u32>,
 }
 
 impl Policy {
@@ -282,6 +298,10 @@ impl Policy {
             recorder_pids: HashMap::new(),
             statuses: HashMap::new(),
             waiting: HashSet::new(),
+            splitter: Splitter::default(),
+            retiring: HashSet::new(),
+            rename_on_exit: HashMap::new(),
+            override_part: HashMap::new(),
         }
     }
 
@@ -335,7 +355,10 @@ impl Policy {
                 _ = &mut engine_done => break,
                 _ = update_tick.tick() => self.check_now(),
                 _ = restart_tick.tick() => self.expire_restarts(),
-                _ = delay_tick.tick() => self.release_due_delays(),
+                _ = delay_tick.tick() => {
+                    self.release_due_delays();
+                    self.split_tick();
+                }
                 msg = update_msgs.recv() => {
                     if let Some(m) = msg {
                         self.on_update_msg(m);
@@ -385,8 +408,17 @@ impl Policy {
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
                 self.recorder_pids.remove(id);
+                self.retiring.remove(id);
+                if let Some((streamer_id, path)) = self.rename_on_exit.remove(id) {
+                    self.rename_part_one(streamer_id, &path);
+                }
+                if let Some(step) = self.splitter.on_gone(*id, Instant::now()) {
+                    self.run_step(step);
+                }
                 if let Some(streamer_id) = self.files.remove(*id) {
-                    outpath::remove_sidecar(streamer_id);
+                    if !self.recorder_pids.values().any(|(sid, _)| *sid == streamer_id) {
+                        outpath::remove_sidecar(streamer_id);
+                    }
                 }
                 self.emit_files();
             }
@@ -532,8 +564,11 @@ impl Policy {
     }
 
     fn on_process_update(&mut self, p: &ProcessInfo) {
-        if p.state == RecorderState::Stopping {
+        if p.state == RecorderState::Stopping && !self.retiring.contains(&p.id) {
             self.restarts.stopping(p.streamer_id);
+        }
+        if matches!(p.state, RecorderState::Starting | RecorderState::Running) {
+            self.splitter.on_running(p.streamer_id, p.id, Instant::now());
         }
         match (&p.state, &p.root) {
             (RecorderState::Exited(_), _) | (_, None) => {
@@ -560,7 +595,11 @@ impl Policy {
         }
         if let Some(streamer_id) = up.confirmed_for {
             self.on_growth_confirmed(streamer_id);
+            if let Some(step) = self.splitter.on_confirmed(streamer_id, id) {
+                self.run_step(step);
+            }
         }
+        self.note_part_one_file(id);
         for line in up.logs {
             self.log(line);
         }
@@ -604,10 +643,12 @@ impl Policy {
                     self.gate.clear_sent(id, Kind::Live);
                     self.notify_event(id, Kind::Live, 0);
                 }
+                self.prepare_part(id);
                 self.engine.send(Command::StartRecording { id });
             }
             Decision::NotRecording(reason) if status.recording && !reason.only_delays_start() => {
                 self.restarts.stopping(id);
+                self.splitter.cancel(id);
                 self.engine.send(Command::StopRecording { id });
             }
             _ => {}
@@ -630,16 +671,147 @@ impl Policy {
         }
     }
 
-    /// Gives the engine each streamer's recorder arguments, including its subfolders and the sidecar options.
-    fn sync_overrides(&self) {
+    /// The recorder arguments for a streamer's `part`, including its subfolders and the sidecar options.
+    fn override_args(&self, streamer: &Streamer, site: &Site, part: u32) -> Option<String> {
+        let layout = streamer.options.folder_layout.unwrap_or(site.folder_layout);
+        let dirs = layout::dirs(layout, &site.name, &streamer.name);
+        outpath::recorder_override(site.recorder_or_default(), &dirs, &outpath::sidecar_path(streamer.id), part)
+    }
+
+    /// Gives the engine each streamer's part 1 recorder arguments.
+    fn sync_overrides(&mut self) {
         outpath::ensure_sidecar_dir();
+        self.override_part.clear();
         for streamer in &self.settings.streamers {
             let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { continue };
-            let layout = streamer.options.folder_layout.unwrap_or(site.folder_layout);
-            let dirs = layout::dirs(layout, &site.name, &streamer.name);
-            let args = outpath::recorder_override(site.recorder_or_default(), &dirs, &outpath::sidecar_path(streamer.id));
+            let args = self.override_args(streamer, site, 1);
             self.engine.send(Command::SetRecorderOverride { streamer_id: streamer.id, args });
         }
+    }
+
+    /// Sends the streamer's recorder arguments for `part` unless the engine already has them.
+    fn send_part_override(&mut self, id: StreamerId, part: u32) {
+        if self.override_part.get(&id).copied().unwrap_or(1) == part {
+            return;
+        }
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
+        let args = self.override_args(streamer, site, part);
+        self.engine.send(Command::SetRecorderOverride { streamer_id: id, args });
+        self.override_part.insert(id, part);
+    }
+
+    /// Before a recorder starts: moves a restarted recording on to its next part and renames part 1 to match.
+    fn prepare_part(&mut self, id: StreamerId) {
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
+        let Some(span) = self.live.span_start(id) else { return };
+        let continuing = streamer.options.effective_auto_suffix(site) || streamer.options.effective_split_minutes(site).is_some();
+        let part = match self.live.part(id).cloned() {
+            None => {
+                self.live.set_part(id, PartRecord { span, part: 1, file: None });
+                1
+            }
+            Some(rec) if continuing => {
+                let next = rec.part + 1;
+                if let Some(file) = rec.file {
+                    self.rename_part_one(id, Path::new(&file));
+                }
+                self.live.set_part(id, PartRecord { span, part: next, file: None });
+                next
+            }
+            Some(rec) => rec.part,
+        };
+        self.send_part_override(id, part);
+        self.flush_live();
+    }
+
+    /// Stores the verified path of a streamer's part 1 file so it can be renamed when a second part appears.
+    fn note_part_one_file(&mut self, recorder: RecorderId) {
+        let Some(streamer_id) = self.recorder_pids.get(&recorder).map(|(sid, _)| *sid) else { return };
+        if self.splitter.current(streamer_id) != Some(recorder) {
+            return;
+        }
+        let Some(path) = self.files.trusted_path(recorder).map(|p| p.to_string_lossy().into_owned()) else { return };
+        let Some(rec) = self.live.part(streamer_id).cloned() else { return };
+        if rec.part == 1 && rec.file.as_ref() != Some(&path) {
+            self.live.set_part(streamer_id, PartRecord { file: Some(path), ..rec });
+            self.flush_live();
+        }
+    }
+
+    /// Renames a streamer's finished part 1 file to `_part1`.
+    fn rename_part_one(&self, streamer_id: StreamerId, path: &Path) {
+        let Some(target) = segments::suffix_path(path, 1) else { return };
+        if !path.is_file() {
+            return;
+        }
+        let name = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.name.clone()).unwrap_or_default();
+        if target.exists() {
+            self.log(format!("{name}: not renaming {}: {} already exists", path.display(), target.display()));
+            return;
+        }
+        match std::fs::rename(path, &target) {
+            Ok(()) => self.log(format!("{name}: renamed {} to {}", path.display(), target.display())),
+            Err(e) => self.log(format!("{name}: could not rename {}: {e}", path.display())),
+        }
+    }
+
+    /// Starts the next part of any recording whose part length has passed and gives up on splits that never confirmed.
+    fn split_tick(&mut self) {
+        let mut plans = HashMap::new();
+        for st in &self.settings.streamers {
+            let Some(site) = self.settings.sites.iter().find(|s| s.id == st.site_id) else { continue };
+            let Some(minutes) = st.options.effective_split_minutes(site) else { continue };
+            let Some(rec) = self.live.part(st.id) else { continue };
+            let timeout = segments::verify_timeout(Thresholds::from_site(site).interval);
+            plans.insert(st.id, Plan { minutes, next_part: rec.part + 1, timeout });
+        }
+        for step in self.splitter.due(Instant::now(), &plans) {
+            self.run_step(step);
+        }
+    }
+
+    /// Carries out one step of a split.
+    fn run_step(&mut self, step: Step) {
+        match step {
+            Step::Start { streamer, part } => {
+                self.send_part_override(streamer, part);
+                self.log(format!("{}: starting part {part}", self.streamer_name(streamer)));
+                self.engine.send(Command::StartSegment { id: streamer });
+            }
+            Step::Commit { streamer, old, part } => {
+                let Some(span) = self.live.span_start(streamer) else { return };
+                let first = self.live.part(streamer).and_then(|r| r.file.clone().filter(|_| r.part == 1));
+                self.live.set_part(streamer, PartRecord { span, part, file: None });
+                self.flush_live();
+                self.log(format!("{}: recording part {part}", self.streamer_name(streamer)));
+                if self.recorder_pids.contains_key(&old) {
+                    self.retiring.insert(old);
+                    self.engine.send(Command::StopRecorder { id: old });
+                    if let Some(file) = first {
+                        self.rename_on_exit.insert(old, (streamer, PathBuf::from(file)));
+                    }
+                } else if let Some(file) = first {
+                    self.rename_part_one(streamer, Path::new(&file));
+                }
+            }
+            Step::Abort { streamer, part, stop } => {
+                if let Some(id) = stop {
+                    self.retiring.insert(id);
+                    self.engine.send(Command::StopRecorder { id });
+                }
+                self.log(format!(
+                    "{}: part {part} was not confirmed growing; keeping the current recording and retrying in 60s",
+                    self.streamer_name(streamer)
+                ));
+            }
+        }
+    }
+
+    /// A streamer's name, or blank when it is unknown.
+    fn streamer_name(&self, id: StreamerId) -> String {
+        self.settings.streamers.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default()
     }
 
     fn emit_files(&mut self) {
@@ -741,6 +913,7 @@ impl Policy {
         self.gate.retain(|id| live::lookup(settings, id).is_some());
         self.statuses.retain(|id, _| live::lookup(settings, *id).is_some());
         self.waiting.retain(|id| live::lookup(settings, *id).is_some());
+        self.splitter.retain(|id| live::lookup(settings, id).is_some());
         self.flush_live();
         self.flush_restarts();
     }
@@ -1069,6 +1242,9 @@ mod tests {
             notify_stalled: true,
             notify_restarted: true,
             notify_on_launch: false,
+            split_enabled: false,
+            split_minutes: None,
+            auto_suffix: true,
         }
     }
 
@@ -1153,6 +1329,9 @@ mod e2e {
                 notify_stalled: true,
                 notify_restarted: true,
                 notify_on_launch: false,
+                split_enabled: false,
+                split_minutes: None,
+                auto_suffix: true,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };
@@ -1215,6 +1394,34 @@ mod e2e {
         one_streamer(&mut p, StreamerOptions::default(), true);
         live_status(&mut p, false, now_secs());
         assert!(matches!(sent(&mut rx).as_slice(), [Command::StartRecording { id: 2 }]));
+    }
+
+    #[test]
+    fn restarted_recording_moves_to_the_next_part() {
+        let _sb = Sandbox::new("policy-restart-part");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), true);
+        let now = now_secs();
+        live_status(&mut p, false, now);
+        assert!(matches!(sent(&mut rx).as_slice(), [Command::StartRecording { id: 2 }]));
+        live_status(&mut p, false, now + 1);
+        let cmds = sent(&mut rx);
+        assert!(
+            matches!(cmds.as_slice(), [Command::SetRecorderOverride { streamer_id: 2, args: Some(a) }, Command::StartRecording { id: 2 }] if a.contains("_part2")),
+            "{cmds:?}"
+        );
+    }
+
+    #[test]
+    fn restart_keeps_the_name_when_auto_suffix_and_split_are_off() {
+        let _sb = Sandbox::new("policy-restart-plain");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions { auto_suffix: Some(false), ..Default::default() }, true);
+        let now = now_secs();
+        live_status(&mut p, false, now);
+        live_status(&mut p, false, now + 1);
+        let cmds = sent(&mut rx);
+        assert!(matches!(cmds.as_slice(), [Command::StartRecording { id: 2 }, Command::StartRecording { id: 2 }]), "{cmds:?}");
     }
 
     #[test]

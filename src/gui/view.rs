@@ -1221,6 +1221,57 @@ impl App {
             (true, m) if m > 0 => format!("Effective: waits {m} min after going live"),
             _ => "Effective: Off".to_string(),
         };
+        let inherited_split = self.inherited_split(st);
+        let split_mode = if self.split_pending.contains(&id) { Some(true) } else { st.options.split };
+        let split_choices = vec![
+            NotifyChoice { value: None, label: format!("Inherit ({})", on_off(inherited_split.is_some())) },
+            NotifyChoice { value: Some(true), label: "On".to_string() },
+            NotifyChoice { value: Some(false), label: "Off".to_string() },
+        ];
+        let split_selected = split_choices.iter().find(|c| c.value == split_mode).cloned();
+        let split_text = self
+            .split_minutes
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| st.options.split_minutes.map(|m| m.to_string()).unwrap_or_default());
+        let split_hint = inherited_split.map(|m| m.to_string()).unwrap_or_default();
+        let split_invalid = split_mode == Some(true) && self.split_minutes_shown(st).is_none() && inherited_split.is_none();
+        let splitting = column![
+            muted(&s, "Split recordings"),
+            pick_list(split_choices, split_selected, move |c: NotifyChoice| Msg::SplitMode(id, c.value))
+                .padding(8)
+                .width(260),
+            muted(&s, "Split the recording after (minutes)"),
+            row![
+                text_input(&split_hint, &split_text)
+                    .on_input(move |v| Msg::SplitMinutesEdit(id, v))
+                    .on_submit(Msg::SplitMinutesSave(id))
+                    .padding(8)
+                    .width(100)
+                    .style(skin::input_required(s, split_invalid)),
+                muted(&s, "press Enter to save"),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(4);
+        let site_suffix = site.is_some_and(|x| x.auto_suffix);
+        let suffix_choices = vec![
+            NotifyChoice { value: None, label: format!("Inherit ({})", on_off(site_suffix)) },
+            NotifyChoice { value: Some(true), label: "On".to_string() },
+            NotifyChoice { value: Some(false), label: "Off".to_string() },
+        ];
+        let suffix_selected = suffix_choices.iter().find(|c| c.value == st.options.auto_suffix).cloned();
+        let auto_suffix = column![
+            muted(&s, "Name restarted recordings _partN"),
+            pick_list(suffix_choices, suffix_selected, move |c: NotifyChoice| Msg::StreamerOption(
+                id,
+                OptionField::AutoSuffix(c.value)
+            ))
+            .padding(8)
+            .width(260),
+        ]
+        .spacing(4);
         // TODO(split): add the option to split the intro into its own file here once splitting exists.
         let intro_delay = column![
             muted(&s, "Intro delay"),
@@ -1259,6 +1310,8 @@ impl App {
             .spacing(24),
             folders,
             notifications,
+            splitting,
+            auto_suffix,
             intro_delay,
         ]
         .spacing(8)
@@ -1603,6 +1656,33 @@ impl App {
         .spacing(8)
         .align_y(Alignment::End);
 
+        let split_input = text_input("", &d.split_minutes)
+            .on_input(move |v| Msg::Draft(id, DraftField::SplitMinutes(v)))
+            .padding(5)
+            .size(13)
+            .style(skin::input_required(s, d.split_invalid()));
+        let splitting = row![
+            cell(
+                toggler(d.split_enabled)
+                    .label("Split recordings")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::SplitEnabled(v)))
+                    .text_size(12)
+                    .into(),
+                Length::FillPortion(1)
+            ),
+            cell(labeled("Split the recording after (minutes)", split_input.into()), Length::FillPortion(1)),
+            cell(
+                toggler(d.auto_suffix)
+                    .label("Name restarted recordings _partN")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::AutoSuffix(v)))
+                    .text_size(12)
+                    .into(),
+                Length::FillPortion(1)
+            ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::End);
+
         let file_checks = column![
             row![
                 cell(
@@ -1827,6 +1907,7 @@ impl App {
         }
         let form = form
             .push(timing)
+            .push(splitting)
             .push(color_row)
             .push(file_checks)
             .push(notifications)

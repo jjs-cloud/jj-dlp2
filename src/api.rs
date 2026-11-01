@@ -145,6 +145,12 @@ pub struct Site {
     pub notify_restarted: bool,
     /// Also notify when a streamer is already live at their first check after launch.
     pub notify_on_launch: bool,
+    /// Split each recording into parts of `split_minutes`.
+    pub split_enabled: bool,
+    /// Minutes per part while splitting is on; blank until set.
+    pub split_minutes: Option<u64>,
+    /// Name a recording that restarts mid-stream `_partN` and rename the earlier file to match.
+    pub auto_suffix: bool,
 }
 
 /// `text` trimmed, or `fallback` when it is blank.
@@ -205,6 +211,11 @@ impl Site {
     pub fn notify_timeout_or_default(&self) -> u64 {
         self.notify_timeout_secs.unwrap_or(DEFAULT_NOTIFY_TIMEOUT_SECS)
     }
+
+    /// Part length streamers inherit; `None` when splitting is off or no length is set.
+    pub fn inherited_split_minutes(&self) -> Option<u64> {
+        if self.split_enabled { self.split_minutes.filter(|m| *m > 0) } else { None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -232,6 +243,28 @@ pub struct StreamerOptions {
     pub intro_delay_enabled: bool,
     /// Minutes to wait when the intro delay is enabled; 0 means no delay.
     pub intro_delay_minutes: u64,
+    /// Overrides the site's split switch; `None` inherits it.
+    pub split: Option<bool>,
+    /// Minutes per part when splitting is on; blank uses the site's.
+    pub split_minutes: Option<u64>,
+    /// Overrides the site's auto-suffix switch; `None` inherits it.
+    pub auto_suffix: Option<bool>,
+}
+
+impl StreamerOptions {
+    /// Minutes per part for this streamer; `None` means its recordings are not split.
+    pub fn effective_split_minutes(&self, site: &Site) -> Option<u64> {
+        match self.split {
+            None => site.inherited_split_minutes(),
+            Some(false) => None,
+            Some(true) => self.split_minutes.filter(|m| *m > 0).or_else(|| site.inherited_split_minutes()),
+        }
+    }
+
+    /// Whether a restarted recording of this streamer gets a `_partN` suffix.
+    pub fn effective_auto_suffix(&self, site: &Site) -> bool {
+        self.auto_suffix.unwrap_or(site.auto_suffix)
+    }
 }
 
 /// In-memory view of the config files (settings.json, sites.json, streamers.json, state.json).
@@ -258,6 +291,10 @@ pub enum Command {
     Reload,
     /// Starts recording a live streamer that has no recorder running.
     StartRecording { id: StreamerId },
+    /// Starts an extra recorder for a streamer that is already recording, for a split.
+    StartSegment { id: StreamerId },
+    /// Stops one recorder, leaving the streamer's other recorders running.
+    StopRecorder { id: RecorderId },
     /// Stops a streamer's recorders; an autonomous engine starts them again at the next live check.
     StopRecording { id: StreamerId },
     /// Replaces a site's checker_args until cleared with `None`.
@@ -365,6 +402,71 @@ pub fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn site_with(split_enabled: bool, split_minutes: Option<u64>) -> Site {
+        Site {
+            id: 1,
+            name: "s".into(),
+            exe_path: String::new(),
+            interval_secs: None,
+            checker_args: String::new(),
+            recorder_args: String::new(),
+            url_template: String::new(),
+            output_dir: String::new(),
+            folder_layout: FolderLayout::default(),
+            log_checker_stdout: false,
+            log_checker_stderr: false,
+            end_after_minutes: None,
+            file_exists_grace_secs: None,
+            growth_grace_secs: None,
+            stall_window_secs: None,
+            file_check_interval_secs: None,
+            restart_clear_minutes: None,
+            restart_threshold: None,
+            color: None,
+            notify: false,
+            notify_desktop: false,
+            notify_ntfy: false,
+            ntfy_topic: String::new(),
+            notify_cooldown_minutes: None,
+            notify_timeout_secs: None,
+            notify_confirmed: false,
+            notify_stalled: false,
+            notify_restarted: false,
+            notify_on_launch: false,
+            split_enabled,
+            split_minutes,
+            auto_suffix: true,
+        }
+    }
+
+    #[test]
+    fn streamer_split_inherits_overrides_or_turns_off() {
+        let site = site_with(true, Some(60));
+        let opts = |split, minutes| StreamerOptions { split, split_minutes: minutes, ..Default::default() };
+        assert_eq!(opts(None, Some(10)).effective_split_minutes(&site), Some(60));
+        assert_eq!(opts(Some(false), Some(10)).effective_split_minutes(&site), None);
+        assert_eq!(opts(Some(true), Some(10)).effective_split_minutes(&site), Some(10));
+        assert_eq!(opts(Some(true), None).effective_split_minutes(&site), Some(60));
+    }
+
+    #[test]
+    fn split_needs_a_length_from_somewhere() {
+        let off = site_with(false, Some(60));
+        let blank = site_with(true, None);
+        let on = StreamerOptions { split: Some(true), ..Default::default() };
+        assert_eq!(StreamerOptions::default().effective_split_minutes(&off), None);
+        assert_eq!(StreamerOptions::default().effective_split_minutes(&blank), None);
+        assert_eq!(on.effective_split_minutes(&off), None);
+    }
+
+    #[test]
+    fn auto_suffix_follows_site_unless_overridden() {
+        let site = site_with(false, None);
+        assert!(StreamerOptions::default().effective_auto_suffix(&site));
+        let off = StreamerOptions { auto_suffix: Some(false), ..Default::default() };
+        assert!(!off.effective_auto_suffix(&site));
+    }
 
     #[test]
     fn output_kind_is_detected_from_flags() {

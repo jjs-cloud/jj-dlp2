@@ -171,7 +171,9 @@ impl Engine {
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::Reload => self.reload(),
-            Command::StartRecording { id } => self.start_recording(id),
+            Command::StartRecording { id } => self.start_recording(id, false),
+            Command::StartSegment { id } => self.start_recording(id, true),
+            Command::StopRecorder { id } => self.stop_recorder(id),
             Command::StopRecording { id } => self.stop_streamer_recorders(id),
             Command::SetCheckerOverride { site_id, args } => {
                 if !self.settings.sites.iter().any(|s| s.id == site_id) {
@@ -515,14 +517,15 @@ impl Engine {
             return;
         }
         if self.settings.streamers.iter().any(|s| s.id == streamer_id && s.enabled) {
-            self.start_recording(streamer_id);
+            self.start_recording(streamer_id, false);
         } else {
             self.stop_streamer_recorders(streamer_id);
         }
     }
 
-    fn start_recording(&mut self, streamer_id: StreamerId) {
-        if self.shutting_down || self.recording(streamer_id) {
+    /// Starts a recorder; `extra` allows one alongside the streamer's running recorders.
+    fn start_recording(&mut self, streamer_id: StreamerId, extra: bool) {
+        if self.shutting_down || (!extra && self.recording(streamer_id)) {
             return;
         }
         let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == streamer_id).cloned() else { return };
@@ -633,6 +636,9 @@ mod e2e {
                 notify_stalled: true,
                 notify_restarted: true,
                 notify_on_launch: false,
+                split_enabled: false,
+                split_minutes: None,
+                auto_suffix: true,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -791,6 +797,9 @@ mod e2e {
                 notify_stalled: true,
                 notify_restarted: true,
                 notify_on_launch: false,
+                split_enabled: false,
+                split_minutes: None,
+                auto_suffix: true,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };
