@@ -669,7 +669,12 @@ impl App {
             StreamerField::FolderLayout(v) => d.folder_layout = v,
             StreamerField::Notify(v) => d.notify = v,
             StreamerField::AutoSuffix(v) => d.auto_suffix = v,
-            StreamerField::Split(v) => d.split = v,
+            StreamerField::Split(v) => {
+                d.split = v;
+                if v != Some(true) {
+                    d.split_minutes.clear();
+                }
+            }
             StreamerField::SplitMinutes(v) if digits(&v) => {
                 d.split = if v.is_empty() { None } else { Some(true) };
                 d.split_minutes = v;

@@ -1712,13 +1712,6 @@ impl App {
             )
             .width(Length::Shrink),
             cell(labeled("Split the recording after (minutes)", split_input.into()), Length::Fixed(260.0)),
-            container(
-                toggler(d.auto_suffix)
-                    .label("Name restarted recordings _partN")
-                    .on_toggle(move |v| Msg::Draft(id, DraftField::AutoSuffix(v)))
-                    .text_size(12)
-            )
-            .width(Length::Shrink),
         ]
         .spacing(24)
         .align_y(Alignment::End);
@@ -1888,6 +1881,7 @@ impl App {
                 log("Notify when stalled", d.notify_stalled, DraftField::NotifyStalled),
                 log("Notify on restarts", d.notify_restarted, DraftField::NotifyRestarted),
                 log("Notify when already live at launch", d.notify_on_launch, DraftField::NotifyOnLaunch),
+                log("Name restarted recordings _partN", d.auto_suffix, DraftField::AutoSuffix),
             ]
             .spacing(24),
         ]
