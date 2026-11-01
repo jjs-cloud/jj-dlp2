@@ -1240,9 +1240,16 @@ impl App {
         }
 
         let inherited_split = self.inherited_split(st);
-        let split_invalid = d.split_invalid(inherited_split.is_some());
-        let split_hint = inherited_split.map(|m| m.to_string()).unwrap_or_default();
+        let split_invalid = d.split_invalid();
+        let split_hint = if d.split.is_none() { inherited_split.map(|m| m.to_string()).unwrap_or_default() } else { String::new() };
         let splitting = row![
+            cell(
+                labeled(
+                    "Split recordings",
+                    inherit_pick(inherited_split.is_some(), d.split, StreamerField::Split).into()
+                ),
+                Length::FillPortion(1)
+            ),
             cell(
                 labeled(
                     "Split the recording after (minutes)",
@@ -1255,13 +1262,11 @@ impl App {
                 ),
                 Length::FillPortion(1)
             ),
-            cell(
-                labeled(
-                    "Split recordings",
-                    inherit_pick(inherited_split.is_some(), d.split, StreamerField::Split).into()
-                ),
-                Length::FillPortion(1)
-            ),
+            cell(Space::new().into(), Length::FillPortion(1)),
+        ]
+        .spacing(8);
+
+        let suffix_row = row![
             cell(
                 labeled(
                     "Name restarted recordings _partN",
@@ -1269,17 +1274,19 @@ impl App {
                 ),
                 Length::FillPortion(1)
             ),
+            cell(Space::new().into(), Length::FillPortion(2)),
         ]
         .spacing(8);
 
         let intro_delay = column![
             row![
                 toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
-                toggle(
-                    "Split the intro into its own file instead of waiting",
-                    d.intro_split,
-                    StreamerField::IntroSplit
-                ),
+                toggler(d.intro_split && d.intro_enabled)
+                    .label("Split the intro into its own file instead of waiting")
+                    .on_toggle_maybe(
+                        d.intro_enabled.then(|| move |v: bool| Msg::StreamerEdit(id, StreamerField::IntroSplit(v)))
+                    )
+                    .text_size(12),
             ]
             .spacing(24),
             row![
@@ -1313,7 +1320,7 @@ impl App {
         .align_y(Alignment::Center);
 
         let dirty = d.differs_from(&st.options);
-        let valid = !d.invalid(inherited_split.is_some());
+        let valid = !d.invalid();
         let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)]
             .spacing(10)
             .align_y(Alignment::Center);
@@ -1346,6 +1353,7 @@ impl App {
             paths,
             splitting,
             intro_delay,
+            suffix_row,
             actions,
         ]
         .spacing(6)
@@ -1696,25 +1704,23 @@ impl App {
             .size(13)
             .style(skin::input_required(s, d.split_invalid()));
         let splitting = row![
-            cell(
+            container(
                 toggler(d.split_enabled)
                     .label("Split recordings")
                     .on_toggle(move |v| Msg::Draft(id, DraftField::SplitEnabled(v)))
                     .text_size(12)
-                    .into(),
-                Length::FillPortion(1)
-            ),
-            cell(labeled("Split the recording after (minutes)", split_input.into()), Length::FillPortion(1)),
-            cell(
+            )
+            .width(Length::Shrink),
+            cell(labeled("Split the recording after (minutes)", split_input.into()), Length::Fixed(260.0)),
+            container(
                 toggler(d.auto_suffix)
                     .label("Name restarted recordings _partN")
                     .on_toggle(move |v| Msg::Draft(id, DraftField::AutoSuffix(v)))
                     .text_size(12)
-                    .into(),
-                Length::FillPortion(1)
-            ),
+            )
+            .width(Length::Shrink),
         ]
-        .spacing(8)
+        .spacing(24)
         .align_y(Alignment::End);
 
         let file_checks = column![
@@ -1862,14 +1868,14 @@ impl App {
             row![
                 cell(
                     labeled(
-                        "Cooldown (minutes)",
+                        "Notification Cooldown (minutes)",
                         field(&DEFAULT_NOTIFY_COOLDOWN_MINUTES.to_string(), &d.notify_cooldown, DraftField::NotifyCooldown)
                     ),
                     Length::FillPortion(1)
                 ),
                 cell(
                     labeled(
-                        "Timeout (seconds)",
+                        "Notification Timeout (seconds)",
                         field(&DEFAULT_NOTIFY_TIMEOUT_SECS.to_string(), &d.notify_timeout, DraftField::NotifyTimeout)
                     ),
                     Length::FillPortion(1)
@@ -1880,7 +1886,7 @@ impl App {
             row![
                 log("Wait for confirmed growth", d.notify_confirmed, DraftField::NotifyConfirmed),
                 log("Notify when stalled", d.notify_stalled, DraftField::NotifyStalled),
-                log("Notify when restarted", d.notify_restarted, DraftField::NotifyRestarted),
+                log("Notify on restarts", d.notify_restarted, DraftField::NotifyRestarted),
                 log("Notify when already live at launch", d.notify_on_launch, DraftField::NotifyOnLaunch),
             ]
             .spacing(24),

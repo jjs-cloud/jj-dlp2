@@ -454,17 +454,17 @@ impl StreamerDraft {
         self.intro_enabled && !matches!(parse_opt::<u64>(&self.intro_minutes, 1), Some(Some(_)))
     }
 
-    /// True while the split length is unusable: unreadable, or blank with splitting on and none inherited.
-    pub fn split_invalid(&self, inherited: bool) -> bool {
+    /// True while the split length is unusable: unreadable, or blank with splitting on.
+    pub fn split_invalid(&self) -> bool {
         match parse_opt::<u64>(&self.split_minutes, 1) {
             None => true,
-            Some(None) => self.split == Some(true) && !inherited,
+            Some(None) => self.split == Some(true),
             Some(Some(_)) => false,
         }
     }
 
-    pub fn invalid(&self, inherited_split: bool) -> bool {
-        self.intro_invalid() || self.split_invalid(inherited_split)
+    pub fn invalid(&self) -> bool {
+        self.intro_invalid() || self.split_invalid()
     }
 
     /// True when saving would change `saved`.
@@ -670,19 +670,26 @@ impl App {
             StreamerField::Notify(v) => d.notify = v,
             StreamerField::AutoSuffix(v) => d.auto_suffix = v,
             StreamerField::Split(v) => d.split = v,
-            StreamerField::SplitMinutes(v) if digits(&v) => d.split_minutes = v,
+            StreamerField::SplitMinutes(v) if digits(&v) => {
+                d.split = if v.is_empty() { None } else { Some(true) };
+                d.split_minutes = v;
+            }
             StreamerField::IntroEnabled(v) => d.intro_enabled = v,
             StreamerField::IntroSplit(v) => d.intro_split = v,
-            StreamerField::IntroMinutes(v) if digits(&v) => d.intro_minutes = v,
+            StreamerField::IntroMinutes(v) if digits(&v) => {
+                if !v.is_empty() {
+                    d.intro_enabled = true;
+                }
+                d.intro_minutes = v;
+            }
             StreamerField::SplitMinutes(_) | StreamerField::IntroMinutes(_) => {}
         }
     }
 
     /// Sends a streamer's draft to the policy layer unless it is invalid.
     fn save_streamer(&self, id: StreamerId) {
-        let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
         let Some(d) = self.streamer_drafts.get(&id) else { return };
-        if d.invalid(self.inherited_split(st).is_some()) {
+        if d.invalid() {
             return;
         }
         self.client.send(PolicyCommand::SetStreamerOptions { id, options: d.to_options() });
@@ -828,8 +835,18 @@ impl App {
                         DraftField::NotifyStalled(v) => d.notify_stalled = v,
                         DraftField::NotifyRestarted(v) => d.notify_restarted = v,
                         DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
-                        DraftField::SplitEnabled(v) => d.split_enabled = v,
-                        DraftField::SplitMinutes(v) => d.split_minutes = v,
+                        DraftField::SplitEnabled(v) => {
+                            d.split_enabled = v;
+                            if !v {
+                                d.split_minutes.clear();
+                            }
+                        }
+                        DraftField::SplitMinutes(v) => {
+                            if !v.trim().is_empty() {
+                                d.split_enabled = true;
+                            }
+                            d.split_minutes = v;
+                        }
                         DraftField::AutoSuffix(v) => d.auto_suffix = v,
                     }
                 }
