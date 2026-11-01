@@ -1212,7 +1212,7 @@ impl App {
         let top = row![
             cell(
                 labeled(
-                    "Recording subfolders",
+                    "Subfolders",
                     pick_list(layout_choices, layout_selected, move |c: LayoutChoice| Msg::StreamerEdit(
                         id,
                         StreamerField::FolderLayout(c.value)
@@ -1231,20 +1231,10 @@ impl App {
                 ),
                 Length::FillPortion(1)
             ),
-            cell(
-                labeled(
-                    "Name restarted recordings _partN",
-                    inherit_pick(site_suffix, d.auto_suffix, StreamerField::AutoSuffix).into()
-                ),
-                Length::FillPortion(1)
-            ),
+            cell(Space::new().into(), Length::FillPortion(1)),
         ]
         .spacing(8);
-        let mut paths = column![
-            muted(&s, format!("Effective path: {path}")),
-            muted(&s, format!("Effective notifications: {}", on_off(d.notify.unwrap_or(site_notify)))),
-        ]
-        .spacing(2);
+        let mut paths = column![muted(&s, format!("Effective path: {path}"))].spacing(2);
         if effective_layout != FolderLayout::Flat && site.is_some_and(|x| layout::has_absolute_template(&x.recorder_args)) {
             paths = paths.push(warn_text(&s, ABSOLUTE_TEMPLATE_WARNING));
         }
@@ -1253,13 +1243,6 @@ impl App {
         let split_invalid = d.split_invalid(inherited_split.is_some());
         let split_hint = inherited_split.map(|m| m.to_string()).unwrap_or_default();
         let splitting = row![
-            cell(
-                labeled(
-                    "Split recordings",
-                    inherit_pick(inherited_split.is_some(), d.split, StreamerField::Split).into()
-                ),
-                Length::FillPortion(1)
-            ),
             cell(
                 labeled(
                     "Split the recording after (minutes)",
@@ -1272,15 +1255,23 @@ impl App {
                 ),
                 Length::FillPortion(1)
             ),
-            cell(Space::new().into(), Length::FillPortion(1)),
+            cell(
+                labeled(
+                    "Split recordings",
+                    inherit_pick(inherited_split.is_some(), d.split, StreamerField::Split).into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(
+                labeled(
+                    "Name restarted recordings _partN",
+                    inherit_pick(site_suffix, d.auto_suffix, StreamerField::AutoSuffix).into()
+                ),
+                Length::FillPortion(1)
+            ),
         ]
         .spacing(8);
 
-        let intro_effective = match (d.intro_enabled, d.intro_minutes.trim().parse::<u64>().unwrap_or(0)) {
-            (true, m) if m > 0 && d.intro_split => format!("Effective: records now, splits the intro off after {m} min"),
-            (true, m) if m > 0 => format!("Effective: recording starts {m} min after going live"),
-            _ => "Effective: Off".to_string(),
-        };
         let intro_delay = column![
             row![
                 toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
@@ -1295,7 +1286,7 @@ impl App {
                 cell(
                     labeled(
                         "Delay starting the recording by (minutes)",
-                        text_input("Ex: 10", &d.intro_minutes)
+                        text_input("", &d.intro_minutes)
                             .on_input(move |v| Msg::StreamerEdit(id, StreamerField::IntroMinutes(v)))
                             .padding(5)
                             .size(13)
@@ -1304,20 +1295,15 @@ impl App {
                     ),
                     Length::FillPortion(1)
                 ),
-                cell(
-                    container(muted(&s, intro_effective)).padding([5.0, 0.0]).into(),
-                    Length::FillPortion(2)
-                ),
+                cell(Space::new().into(), Length::FillPortion(2)),
             ]
-            .spacing(8)
-            .align_y(Alignment::End),
+            .spacing(8),
         ]
         .spacing(6);
 
         let logs = row![
             toggle("Log recorder stdout", d.log_stdout, StreamerField::LogStdout),
             toggle("Log recorder stderr", d.log_stderr, StreamerField::LogStderr),
-            Space::new().width(Length::Fill),
             button(t(&s, "Open logs folder").size(12))
                 .on_press(Msg::OpenLogsDir)
                 .padding([5.0, 10.0])
@@ -1355,7 +1341,6 @@ impl App {
             );
 
         column![
-            muted(&s, "Output is appended to the logs folder next to settings.json."),
             logs,
             top,
             paths,
@@ -1657,7 +1642,7 @@ impl App {
             ),
             cell(
                 labeled(
-                    "Recording subfolders",
+                    "Subfolders",
                     pick_list(FolderLayout::ALL, Some(d.folder_layout), move |l| Msg::Draft(
                         id,
                         DraftField::FolderLayout(l)
@@ -1855,11 +1840,17 @@ impl App {
             .size(13)
             .style(skin::input_required(s, !d.ntfy_ok()));
         let can_test = d.ntfy_ok() && !d.test_targets().is_empty();
+        let sub_toggle = |label: &'static str, on: bool, f: fn(bool) -> DraftField| {
+            toggler(on && d.notify)
+                .label(label)
+                .on_toggle_maybe(d.notify.then(|| move |v: bool| Msg::Draft(id, f(v))))
+                .text_size(12)
+        };
         let notifications = column![
             row![
                 log("Notifications", d.notify, DraftField::Notify),
-                log("Desktop", d.notify_desktop, DraftField::NotifyDesktop),
-                log("ntfy", d.notify_ntfy, DraftField::NotifyNtfy),
+                sub_toggle("Desktop", d.notify_desktop, DraftField::NotifyDesktop),
+                sub_toggle("Mobile (ntfy)", d.notify_ntfy, DraftField::NotifyNtfy),
                 Space::new().width(Length::Fill),
                 button(t(&s, "Send test").size(12))
                     .on_press_maybe(can_test.then_some(Msg::TestNotify(id)))
@@ -1898,6 +1889,10 @@ impl App {
         let mut actions: Row<'a, Msg> = row![
             log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
             log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
+            button(t(&s, "Open logs folder").size(12))
+                .on_press(Msg::OpenLogsDir)
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
             Space::new().width(Length::Fill),
         ]
         .spacing(10)

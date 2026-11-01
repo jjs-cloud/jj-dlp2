@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 /// How long a failed split waits before it is tried again.
 const RETRY_AFTER: Duration = Duration::from_secs(60);
+/// Failed splits allowed per live span: the first try plus one retry.
+const MAX_FAILURES: u32 = 2;
 /// Time a new part gets to start, on top of two file-check intervals, before the split is given up.
 const VERIFY_BASE: Duration = Duration::from_secs(30);
 
@@ -31,6 +33,7 @@ pub fn verify_timeout(check_interval: Duration) -> Duration {
 /// What the split timer needs to know about one streamer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Plan {
+    pub span: u64,
     pub minutes: u64,
     pub next_part: u32,
     pub timeout: Duration,
@@ -60,6 +63,8 @@ struct Track {
     current: Option<(RecorderId, Instant)>,
     pending: Option<Pending>,
     retry_at: Option<Instant>,
+    span: Option<u64>,
+    failures: u32,
 }
 
 /// Follows each streamer's recorders and the split in flight.
@@ -97,6 +102,7 @@ impl Splitter {
             if t.pending.as_ref().is_some_and(|p| p.new == Some(id)) {
                 let p = t.pending.take()?;
                 t.retry_at = Some(now + RETRY_AFTER);
+                t.failures += 1;
                 return Some(Step::Abort { streamer: *streamer, part: p.part, stop: None });
             }
             if t.current.is_some_and(|(c, _)| c == id) {
@@ -125,13 +131,19 @@ impl Splitter {
                 if now.duration_since(p.started) >= p.timeout {
                     let p = t.pending.take().expect("pending checked above");
                     t.retry_at = Some(now + RETRY_AFTER);
+                    t.failures += 1;
                     steps.push(Step::Abort { streamer: *streamer, part: p.part, stop: p.new });
                 }
                 continue;
             }
             let (Some((old, since)), Some(plan)) = (t.current, plans.get(streamer)) else { continue };
+            if t.span != Some(plan.span) {
+                t.span = Some(plan.span);
+                t.failures = 0;
+                t.retry_at = None;
+            }
             let ripe = now.duration_since(since) >= Duration::from_secs(plan.minutes.saturating_mul(60));
-            if ripe && t.retry_at.is_none_or(|at| now >= at) {
+            if ripe && t.failures < MAX_FAILURES && t.retry_at.is_none_or(|at| now >= at) {
                 t.retry_at = None;
                 t.pending = Some(Pending { old, new: None, part: plan.next_part, started: now, timeout: plan.timeout });
                 steps.push(Step::Start { streamer: *streamer, part: plan.next_part });
@@ -162,7 +174,7 @@ mod tests {
     }
 
     fn plan(minutes: u64, next_part: u32) -> HashMap<StreamerId, Plan> {
-        HashMap::from([(1, Plan { minutes, next_part, timeout: TIMEOUT })])
+        HashMap::from([(1, Plan { span: 1, minutes, next_part, timeout: TIMEOUT })])
     }
 
     #[test]
@@ -240,6 +252,17 @@ mod tests {
         assert!(s.due(at(t0, 60 + 90 + 59), &plan(1, 2)).is_empty());
         assert_eq!(s.due(at(t0, 60 + 90 + 60), &plan(1, 2)), [Step::Start { streamer: 1, part: 2 }]);
         assert_eq!(s.current(1), Some(10));
+    }
+
+    #[test]
+    fn a_split_is_retried_once_then_given_up_for_the_span() {
+        let (mut s, t0) = (Splitter::default(), Instant::now());
+        s.on_running(1, 10, t0);
+        s.due(at(t0, 60), &plan(1, 2));
+        s.due(at(t0, 150), &plan(1, 2));
+        assert_eq!(s.due(at(t0, 210), &plan(1, 2)), [Step::Start { streamer: 1, part: 2 }]);
+        s.due(at(t0, 300), &plan(1, 2));
+        assert!(s.due(at(t0, 10_000), &plan(1, 2)).is_empty());
     }
 
     #[test]

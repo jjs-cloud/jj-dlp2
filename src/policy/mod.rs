@@ -772,8 +772,9 @@ impl Policy {
                 None => st.options.effective_split_minutes(site),
             };
             let Some(minutes) = minutes else { continue };
+            let Some(span) = self.live.span_start(st.id) else { continue };
             let timeout = segments::verify_timeout(Thresholds::from_site(site).interval);
-            plans.insert(st.id, Plan { minutes, next_part: rec.part + 1, timeout });
+            plans.insert(st.id, Plan { span, minutes, next_part: rec.part + 1, timeout });
         }
         for step in self.splitter.due(Instant::now(), &plans) {
             self.run_step(step);
@@ -810,7 +811,7 @@ impl Policy {
                     self.engine.send(Command::StopSegment { id });
                 }
                 self.log(format!(
-                    "{}: part {part} was not confirmed growing; keeping the current recording and retrying in 60s",
+                    "{}: part {part} was not confirmed growing; keeping the current recording",
                     self.streamer_name(streamer)
                 ));
             }
