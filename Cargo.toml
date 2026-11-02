@@ -6,8 +6,10 @@ rust-version = "1.89"
 repository = "https://github.com/jjs-cloud/jj-dlp2"
 
 [dependencies]
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
 directories = "6.0.0"
 iced = { version = "0.14.0", features = ["tokio", "advanced"] }
+iced_aw = { version = "0.14.1", default-features = false, features = ["date_picker", "time_picker"] }
 open = "5.4.5"
 semver = "1.0"
 self-replace = "1.5"

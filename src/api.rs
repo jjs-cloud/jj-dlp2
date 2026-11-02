@@ -1,5 +1,6 @@
 //! Engine API: commands in, events out.
 
+use chrono::{NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -232,6 +233,8 @@ pub struct Streamer {
     pub url: String,
     pub enabled: bool,
     pub options: StreamerOptions,
+    /// When the schedule last switched this streamer on or off; owned by the policy layer.
+    pub schedule_runs: ScheduleRuns,
 }
 
 /// Per-streamer options edited from the streamer's settings panel.
@@ -257,6 +260,49 @@ pub struct StreamerOptions {
     pub split_minutes: Option<u64>,
     /// Overrides the site's auto-suffix switch; `None` inherits it.
     pub auto_suffix: Option<bool>,
+    /// Automatic enabling and disabling of the streamer.
+    pub schedule: Schedule,
+}
+
+/// Whether a schedule runs once or repeats weekly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScheduleMode {
+    #[default]
+    OneOff,
+    Recurring,
+}
+
+impl ScheduleMode {
+    pub const ALL: [ScheduleMode; 2] = [ScheduleMode::OneOff, ScheduleMode::Recurring];
+}
+
+impl std::fmt::Display for ScheduleMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScheduleMode::OneOff => write!(f, "One-off"),
+            ScheduleMode::Recurring => write!(f, "Recurring"),
+        }
+    }
+}
+
+/// Times, in local time, between which a streamer is switched on and off.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Schedule {
+    pub enabled: bool,
+    pub mode: ScheduleMode,
+    pub one_off_start: Option<NaiveDateTime>,
+    pub one_off_end: Option<NaiveDateTime>,
+    /// Weekdays a recurring schedule runs on, Monday first.
+    pub days: [bool; 7],
+    pub start_time: Option<NaiveTime>,
+    pub end_time: Option<NaiveTime>,
+}
+
+/// The last time a schedule switched a streamer on and off.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleRuns {
+    pub last_enable: Option<NaiveDateTime>,
+    pub last_disable: Option<NaiveDateTime>,
 }
 
 impl StreamerOptions {

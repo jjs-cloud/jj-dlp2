@@ -41,7 +41,7 @@ mod tests {
             intro_delay_minutes: delay.unwrap_or(0),
             ..Default::default()
         };
-        Streamer { id: 1, site_id: 1, name: "n".into(), url: "u".into(), enabled, options }
+        Streamer { id: 1, site_id: 1, name: "n".into(), url: "u".into(), enabled, options, schedule_runs: Default::default() }
     }
 
     #[test]
@@ -104,7 +104,7 @@ mod tests {
             intro_delay_split: Some(true),
             ..Default::default()
         };
-        let st = Streamer { id: 1, site_id: 1, name: "n".into(), url: "u".into(), enabled: true, options };
+        let st = Streamer { id: 1, site_id: 1, name: "n".into(), url: "u".into(), enabled: true, options, schedule_runs: Default::default() };
         assert_eq!(decide(&st, Some(0), 10), Decision::Record);
     }
 }

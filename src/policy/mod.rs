@@ -21,6 +21,7 @@ pub mod live;
 pub mod notify;
 mod outpath;
 mod restarts;
+mod schedule;
 mod segments;
 pub mod uilog;
 pub mod update;
@@ -38,6 +39,7 @@ pub use warnings::Warnings;
 use warnings::WarnTracker;
 
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
+const SCHEDULE_CHECK_EVERY: Duration = Duration::from_secs(10);
 
 /// Fields supplied when creating a site; the policy layer assigns the id.
 #[derive(Debug, Clone, PartialEq)]
@@ -336,6 +338,8 @@ impl Policy {
         restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut delay_tick = tokio::time::interval(Duration::from_secs(1));
         delay_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut schedule_tick = tokio::time::interval(SCHEDULE_CHECK_EVERY);
+        schedule_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
         self.log(format!("--- session started (v{}) ---", update::CURRENT));
         for line in crate::resets::take_log() {
@@ -348,6 +352,7 @@ impl Policy {
         self.start_backfill();
         outpath::clear_sidecars();
         self.sync_overrides();
+        self.run_schedules();
         loop {
             tokio::select! {
                 cmd = cmds.recv(), if cmds_open => match cmd {
@@ -371,6 +376,7 @@ impl Policy {
                 _ = &mut engine_done => break,
                 _ = update_tick.tick() => self.check_now(),
                 _ = restart_tick.tick() => self.expire_restarts(),
+                _ = schedule_tick.tick() => self.run_schedules(),
                 _ = delay_tick.tick() => {
                     self.release_due_delays();
                     self.split_tick();
@@ -1097,6 +1103,52 @@ impl Policy {
         }
     }
 
+    /// Switches a streamer on or off in memory, releasing its recording state when switched off; false if it is unknown.
+    fn apply_enabled(&mut self, id: StreamerId, enabled: bool) -> bool {
+        let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) else {
+            return false;
+        };
+        s.enabled = enabled;
+        if !enabled {
+            self.restarts.stopping(id);
+            self.gate.take_held(id);
+        }
+        true
+    }
+
+    /// Applies every schedule start or end that has come due.
+    fn run_schedules(&mut self) {
+        let now = chrono::Local::now().naive_local();
+        let mut changed = Vec::new();
+        for i in 0..self.settings.streamers.len() {
+            let st = &mut self.settings.streamers[i];
+            let Some(due) = schedule::due(&st.options.schedule, &st.schedule_runs, now) else {
+                continue;
+            };
+            if due.stamp_enable {
+                st.schedule_runs.last_enable = Some(now);
+            }
+            if due.stamp_disable {
+                st.schedule_runs.last_disable = Some(now);
+            }
+            let (id, was, name) = (st.id, st.enabled, st.name.clone());
+            let want = due.edge == schedule::Edge::Enable;
+            if was != want {
+                self.apply_enabled(id, want);
+                self.log(format!("Schedule: {} {name}", if want { "enabled" } else { "disabled" }));
+            }
+            changed.push(id);
+        }
+        if changed.is_empty() {
+            return;
+        }
+        self.save();
+        self.emit_settings();
+        for id in changed {
+            self.reconcile(id);
+        }
+    }
+
     /// Saves the config files, tells the engine to reload them, pushes a snapshot and re-applies recording decisions.
     fn commit(&mut self) {
         if self.save() {
@@ -1162,6 +1214,7 @@ impl Policy {
                     url,
                     enabled: true,
                     options: StreamerOptions::default(),
+                    schedule_runs: Default::default(),
                 });
                 self.commit();
             }
@@ -1171,12 +1224,7 @@ impl Policy {
                 self.prune_live();
             }
             PolicyCommand::SetStreamerEnabled { id, enabled } => {
-                if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
-                    s.enabled = enabled;
-                    if !enabled {
-                        self.restarts.stopping(id);
-                        self.gate.take_held(id);
-                    }
+                if self.apply_enabled(id, enabled) {
                     self.save();
                     self.emit_settings();
                     self.reconcile(id);
@@ -1187,6 +1235,7 @@ impl Policy {
                     let old = std::mem::replace(&mut s.options, options.clone());
                     self.mark_log_toggles(id, &old, &options);
                     self.commit();
+                    self.run_schedules();
                 }
             }
             PolicyCommand::SetGlobalOutputDir(dir) => {
@@ -1441,7 +1490,7 @@ mod e2e {
 
     fn one_streamer(p: &mut Policy, options: StreamerOptions, enabled: bool) {
         let site = new_site(Preset::Blank).into_site(1);
-        let streamer = Streamer { id: 2, site_id: 1, name: "n".into(), url: "u".into(), enabled, options };
+        let streamer = Streamer { id: 2, site_id: 1, name: "n".into(), url: "u".into(), enabled, options, schedule_runs: Default::default() };
         p.settings = Settings { next_id: 10, default_output_dir: "out".into(), sites: vec![site], streamers: vec![streamer] };
     }
 
@@ -1456,6 +1505,27 @@ mod e2e {
 
     fn delay(minutes: u64) -> StreamerOptions {
         StreamerOptions { intro_delay_enabled: true, intro_delay_minutes: minutes, ..Default::default() }
+    }
+
+    #[test]
+    fn schedule_past_its_end_disables_the_streamer_once() {
+        let _sb = Sandbox::new("policy-schedule");
+        let (mut p, _rx) = bare_policy();
+        let now = chrono::Local::now().naive_local();
+        let schedule = crate::api::Schedule {
+            enabled: true,
+            one_off_start: Some(now - chrono::Duration::hours(2)),
+            one_off_end: Some(now - chrono::Duration::hours(1)),
+            ..Default::default()
+        };
+        one_streamer(&mut p, StreamerOptions { schedule, ..Default::default() }, true);
+        p.run_schedules();
+        assert!(!p.settings.streamers[0].enabled);
+        assert!(p.settings.streamers[0].schedule_runs.last_disable.is_some());
+
+        p.settings.streamers[0].enabled = true;
+        p.run_schedules();
+        assert!(p.settings.streamers[0].enabled);
     }
 
     #[test]

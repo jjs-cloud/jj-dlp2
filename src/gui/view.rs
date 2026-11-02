@@ -2,9 +2,11 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, NEW_SITE_ID, SITE_SWATCHES, SettingsTab, SiteDraft, StreamerDraft, StreamerField, Tab, UpdateStage, prefs,
+    App, DraftField, Msg, NEW_SITE_ID, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
+    StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
+use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use crate::policy::{layout, Preset, Warnings};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
@@ -12,6 +14,16 @@ use iced::widget::{
     text_input, toggler, tooltip,
 };
 use iced::{Alignment, Color, Element, Length};
+use iced_aw::date_picker::Date;
+use iced_aw::time_picker::{Period, Time};
+use iced_aw::{DatePicker, TimePicker};
+
+const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// `t` with its seconds dropped.
+fn to_minute(t: NaiveTime) -> NaiveTime {
+    NaiveTime::from_hms_opt(t.hour(), t.minute(), 0).unwrap_or(t)
+}
 
 fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.text)
@@ -183,6 +195,9 @@ fn compact_chips<'a>(
     }
     if !st.enabled {
         chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
+    }
+    if st.options.schedule.enabled {
+        chips = chips.push(mini_chip(s, m, "SCH", s.muted));
     }
     if status.live {
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
@@ -1105,6 +1120,9 @@ impl App {
         if !st.enabled {
             chips = chips.push(chip(s, "PAUSED", s.warn));
         }
+        if st.options.schedule.enabled {
+            chips = chips.push(chip(s, "SCHEDULED", s.muted));
+        }
         let restarts = self.shown_restarts(st);
         if restarts > 0 {
             chips = chips.push(chip(s, format!("RESTARTED {restarts}×"), s.warn));
@@ -1331,6 +1349,8 @@ impl App {
         ]
         .spacing(6);
 
+        let schedule = self.schedule_block(s, id, &d);
+
         let logs = row![
             toggle("Log recorder stdout", d.log_stdout, StreamerField::LogStdout),
             toggle("Log recorder stderr", d.log_stderr, StreamerField::LogStderr),
@@ -1376,11 +1396,144 @@ impl App {
             paths,
             splitting,
             intro_delay,
+            schedule,
             suffix_row,
             actions,
         ]
         .spacing(6)
         .into()
+    }
+
+    /// The Schedule block of a streamer's settings panel.
+    fn schedule_block<'a>(&self, s: Skin, id: StreamerId, d: &StreamerDraft) -> Element<'a, Msg> {
+        let sc = &d.schedule;
+        let issue = d.schedule_issue();
+        let incomplete = issue == Some(ScheduleIssue::Incomplete);
+        let is_open = |t: PickerTarget| self.schedule_picker == Some((id, t));
+        let field_btn = |label: String, target: PickerTarget, bad: bool| {
+            button(btn_label(&s, label).size(13))
+                .on_press(Msg::OpenSchedulePicker(id, target))
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, if bad { BtnKind::Danger } else { BtnKind::Ghost }))
+        };
+        let date_field = |target: PickerTarget,
+                          cur: Option<NaiveDateTime>,
+                          make: fn(NaiveDate) -> StreamerField,
+                          bad: bool|
+         -> Element<'a, Msg> {
+            let label = cur.map_or_else(|| "Pick date".to_string(), |c| c.format("%Y-%m-%d").to_string());
+            let shown = cur.map_or_else(|| Local::now().date_naive(), |c| c.date());
+            DatePicker::new(
+                is_open(target),
+                Date::from(shown),
+                field_btn(label, target, bad),
+                Msg::CloseSchedulePicker,
+                move |picked: Date| Msg::SchedulePicked(id, make(NaiveDate::from(picked))),
+            )
+            .into()
+        };
+        let time_field = |target: PickerTarget,
+                          cur: Option<NaiveTime>,
+                          make: fn(NaiveTime) -> StreamerField,
+                          bad: bool|
+         -> Element<'a, Msg> {
+            let label = cur.map_or_else(|| "Pick time".to_string(), |c| c.format("%H:%M").to_string());
+            let shown = cur.unwrap_or_else(|| Local::now().time());
+            let initial = Time::Hm { hour: shown.hour(), minute: shown.minute(), period: Period::H24 };
+            TimePicker::new(
+                is_open(target),
+                initial,
+                field_btn(label, target, bad),
+                Msg::CloseSchedulePicker,
+                move |picked: Time| Msg::SchedulePicked(id, make(to_minute(NaiveTime::from(picked)))),
+            )
+            .use_24h()
+            .into()
+        };
+        let label = |text: &'static str| container(muted(&s, text)).width(44);
+
+        let header = row![
+            toggler(sc.enabled)
+                .label("Schedule")
+                .on_toggle(move |v| Msg::StreamerEdit(id, StreamerField::ScheduleEnabled(v)))
+                .text_size(12),
+            pick_list(ScheduleMode::ALL, Some(sc.mode), move |m: ScheduleMode| {
+                Msg::StreamerEdit(id, StreamerField::ScheduleMode(m))
+            })
+            .padding(5)
+            .text_size(13),
+        ]
+        .spacing(24)
+        .align_y(Alignment::Center);
+
+        let body: Element<'a, Msg> = match sc.mode {
+            ScheduleMode::OneOff => {
+                let start_bad = incomplete && sc.one_off_start.is_none();
+                let end_bad = (incomplete && sc.one_off_end.is_none()) || issue == Some(ScheduleIssue::EndNotAfterStart);
+                column![
+                    row![
+                        label("Start"),
+                        date_field(PickerTarget::OneOffStartDate, sc.one_off_start, StreamerField::OneOffStartDate, start_bad),
+                        time_field(
+                            PickerTarget::OneOffStartTime,
+                            sc.one_off_start.map(|c| c.time()),
+                            StreamerField::OneOffStartTime,
+                            start_bad
+                        ),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    row![
+                        label("End"),
+                        date_field(PickerTarget::OneOffEndDate, sc.one_off_end, StreamerField::OneOffEndDate, end_bad),
+                        time_field(
+                            PickerTarget::OneOffEndTime,
+                            sc.one_off_end.map(|c| c.time()),
+                            StreamerField::OneOffEndTime,
+                            end_bad
+                        ),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                ]
+                .spacing(6)
+                .into()
+            }
+            ScheduleMode::Recurring => {
+                let same = issue == Some(ScheduleIssue::SameTime);
+                let start_bad = (incomplete && sc.start_time.is_none()) || same;
+                let end_bad = (incomplete && sc.end_time.is_none()) || same;
+                let mut days: Row<'a, Msg> = Row::new().spacing(4).align_y(Alignment::Center);
+                for (i, name) in DAY_NAMES.into_iter().enumerate() {
+                    let on = sc.days[i];
+                    days = days.push(
+                        button(btn_label(&s, name).size(12))
+                            .on_press(Msg::StreamerEdit(id, StreamerField::ScheduleDay(i, !on)))
+                            .padding([4.0, 8.0])
+                            .style(skin::btn(s, if on { BtnKind::TabActive } else { BtnKind::Ghost })),
+                    );
+                }
+                column![
+                    days,
+                    row![
+                        label("From"),
+                        time_field(PickerTarget::RecurringStart, sc.start_time, StreamerField::RecurringStart, start_bad),
+                        label("To"),
+                        time_field(PickerTarget::RecurringEnd, sc.end_time, StreamerField::RecurringEnd, end_bad),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                ]
+                .spacing(6)
+                .into()
+            }
+        };
+
+        let mut block: Column<'a, Msg> = column![header, body].spacing(6);
+        if let Some(issue) = issue {
+            block = block.push(iced::widget::text(issue.text()).font(s.font).size(12).color(s.danger));
+        }
+        block.into()
     }
 
     fn settings_tab(&self, s: Skin) -> Element<'_, Msg> {

@@ -5,6 +5,7 @@ mod skin;
 mod view;
 
 use crate::api::*;
+use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
 use crate::policy::notify::{self, Targets};
 use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
@@ -416,6 +417,46 @@ pub enum StreamerField {
     IntroEnabled(bool),
     IntroSplit(bool),
     IntroMinutes(String),
+    ScheduleEnabled(bool),
+    ScheduleMode(ScheduleMode),
+    ScheduleDay(usize, bool),
+    OneOffStartDate(NaiveDate),
+    OneOffStartTime(NaiveTime),
+    OneOffEndDate(NaiveDate),
+    OneOffEndTime(NaiveTime),
+    RecurringStart(NaiveTime),
+    RecurringEnd(NaiveTime),
+}
+
+/// A date or time picker in a streamer's schedule that can be open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerTarget {
+    OneOffStartDate,
+    OneOffStartTime,
+    OneOffEndDate,
+    OneOffEndTime,
+    RecurringStart,
+    RecurringEnd,
+}
+
+/// Why an enabled schedule cannot be saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleIssue {
+    Incomplete,
+    EndNotAfterStart,
+    NoDays,
+    SameTime,
+}
+
+impl ScheduleIssue {
+    pub fn text(self) -> &'static str {
+        match self {
+            ScheduleIssue::Incomplete => "Pick a start and an end",
+            ScheduleIssue::EndNotAfterStart => "End must be after start",
+            ScheduleIssue::NoDays => "Select at least one day",
+            ScheduleIssue::SameTime => "Start and end must differ",
+        }
+    }
 }
 
 /// Unsaved edits to one streamer's options.
@@ -431,6 +472,17 @@ pub struct StreamerDraft {
     pub intro_enabled: bool,
     pub intro_split: bool,
     pub intro_minutes: String,
+    pub schedule: Schedule,
+}
+
+/// `current` with its date replaced, keeping its time of day (midnight when unset).
+fn with_date(current: Option<NaiveDateTime>, date: NaiveDate) -> NaiveDateTime {
+    date.and_time(current.map_or(NaiveTime::MIN, |c| c.time()))
+}
+
+/// `current` with its time of day replaced, keeping its date (today when unset).
+fn with_time(current: Option<NaiveDateTime>, time: NaiveTime) -> NaiveDateTime {
+    current.map_or_else(|| Local::now().date_naive(), |c| c.date()).and_time(time)
 }
 
 impl StreamerDraft {
@@ -446,6 +498,7 @@ impl StreamerDraft {
             intro_enabled: o.intro_delay_enabled,
             intro_split: o.intro_delay_split == Some(true),
             intro_minutes: if o.intro_delay_minutes == 0 { String::new() } else { o.intro_delay_minutes.to_string() },
+            schedule: o.schedule.clone(),
         }
     }
 
@@ -461,6 +514,30 @@ impl StreamerDraft {
             intro_delay_enabled: self.intro_enabled,
             intro_delay_minutes: self.intro_minutes.trim().parse().unwrap_or(0),
             intro_delay_split: self.intro_split.then_some(true),
+            schedule: self.schedule.clone(),
+        }
+    }
+
+    /// The first problem that stops an enabled schedule from being saved.
+    pub fn schedule_issue(&self) -> Option<ScheduleIssue> {
+        let s = &self.schedule;
+        if !s.enabled {
+            return None;
+        }
+        match s.mode {
+            ScheduleMode::OneOff => match (s.one_off_start, s.one_off_end) {
+                (Some(a), Some(b)) => (b <= a).then_some(ScheduleIssue::EndNotAfterStart),
+                _ => Some(ScheduleIssue::Incomplete),
+            },
+            ScheduleMode::Recurring => {
+                if !s.days.contains(&true) {
+                    return Some(ScheduleIssue::NoDays);
+                }
+                match (s.start_time, s.end_time) {
+                    (Some(a), Some(b)) => (a == b).then_some(ScheduleIssue::SameTime),
+                    _ => Some(ScheduleIssue::Incomplete),
+                }
+            }
         }
     }
 
@@ -479,7 +556,7 @@ impl StreamerDraft {
     }
 
     pub fn invalid(&self) -> bool {
-        self.intro_invalid() || self.split_invalid()
+        self.intro_invalid() || self.split_invalid() || self.schedule_issue().is_some()
     }
 
     /// True when saving would change `saved`.
@@ -507,6 +584,9 @@ pub enum Msg {
     ToggleStreamer(StreamerId, bool),
     ToggleStreamerSettings(StreamerId),
     StreamerEdit(StreamerId, StreamerField),
+    OpenSchedulePicker(StreamerId, PickerTarget),
+    CloseSchedulePicker,
+    SchedulePicked(StreamerId, StreamerField),
     SaveStreamer(StreamerId),
     RevertStreamer(StreamerId),
     DefaultsStreamer(StreamerId),
@@ -582,6 +662,7 @@ pub struct App {
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
     open_streamer_settings: HashSet<StreamerId>,
+    schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
     global_out: String,
@@ -628,6 +709,7 @@ impl App {
             new_streamer: HashMap::new(),
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
+            schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
             global_out: String::new(),
@@ -705,6 +787,19 @@ impl App {
                 d.intro_minutes = v;
             }
             StreamerField::SplitMinutes(_) | StreamerField::IntroMinutes(_) => {}
+            StreamerField::ScheduleEnabled(v) => d.schedule.enabled = v,
+            StreamerField::ScheduleMode(v) => d.schedule.mode = v,
+            StreamerField::ScheduleDay(i, v) => {
+                if let Some(day) = d.schedule.days.get_mut(i) {
+                    *day = v;
+                }
+            }
+            StreamerField::OneOffStartDate(v) => d.schedule.one_off_start = Some(with_date(d.schedule.one_off_start, v)),
+            StreamerField::OneOffStartTime(v) => d.schedule.one_off_start = Some(with_time(d.schedule.one_off_start, v)),
+            StreamerField::OneOffEndDate(v) => d.schedule.one_off_end = Some(with_date(d.schedule.one_off_end, v)),
+            StreamerField::OneOffEndTime(v) => d.schedule.one_off_end = Some(with_time(d.schedule.one_off_end, v)),
+            StreamerField::RecurringStart(v) => d.schedule.start_time = Some(v),
+            StreamerField::RecurringEnd(v) => d.schedule.end_time = Some(v),
         }
     }
 
@@ -781,11 +876,18 @@ impl App {
             Msg::RemoveStreamer(id) => self.client.send(PolicyCommand::RemoveStreamer(id)),
             Msg::ToggleStreamer(id, enabled) => self.client.send(PolicyCommand::SetStreamerEnabled { id, enabled }),
             Msg::ToggleStreamerSettings(id) => {
+                self.schedule_picker = None;
                 if !self.open_streamer_settings.remove(&id) {
                     self.open_streamer_settings.insert(id);
                 }
             }
             Msg::StreamerEdit(id, field) => self.edit_streamer(id, field),
+            Msg::OpenSchedulePicker(id, target) => self.schedule_picker = Some((id, target)),
+            Msg::CloseSchedulePicker => self.schedule_picker = None,
+            Msg::SchedulePicked(id, field) => {
+                self.schedule_picker = None;
+                self.edit_streamer(id, field);
+            }
             Msg::SaveStreamer(id) => self.save_streamer(id),
             Msg::RevertStreamer(id) => {
                 if let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) {

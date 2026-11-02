@@ -656,6 +656,7 @@ mod e2e {
                 url: "https://x.test/live1".into(),
                 enabled,
                 options: StreamerOptions { log_stdout: true, log_stderr: true, ..Default::default() },
+                schedule_runs: Default::default(),
             }],
         };
         settings::save(&settings).unwrap();
@@ -772,6 +773,7 @@ mod e2e {
             url: format!("https://x.test/{name}"),
             enabled: true,
             options: StreamerOptions::default(),
+            schedule_runs: Default::default(),
         };
         let settings = Settings {
             next_id: 10,
