@@ -11,6 +11,7 @@ directories = "6.0.0"
 iced = { version = "0.14.0", features = ["tokio", "advanced"] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["date_picker", "time_picker"] }
 open = "5.4.5"
+rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }
 semver = "1.0"
 self-replace = "1.5"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -19,6 +20,7 @@ sha2 = "0.10"
 sysinfo = "0.38.4"
 time = { version = "0.3", features = ["parsing"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "sync", "time", "macros", "io-util", "signal"] }
+trash = "5.2"
 ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(unix)'.dependencies]

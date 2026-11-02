@@ -25,16 +25,16 @@ fn to_minute(t: NaiveTime) -> NaiveTime {
     NaiveTime::from_hms_opt(t.hour(), t.minute(), 0).unwrap_or(t)
 }
 
-fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
+pub(super) fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.text)
 }
 
 /// Button label that inherits the button style's text colour.
-fn btn_label<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
+pub(super) fn btn_label<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font)
 }
 
-fn muted<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
+pub(super) fn muted<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.muted).size(12)
 }
 
@@ -250,6 +250,7 @@ impl App {
         let body: Element<'_, Msg> = match self.tab {
             Tab::Monitor => self.monitor(s),
             Tab::Processes => self.processes(s),
+            Tab::Files => self.files_view(s),
             Tab::Settings => self.settings_tab(s),
             Tab::Log => self.log_view(s),
         };
@@ -398,6 +399,7 @@ impl App {
         row![
             tab("Monitor", Tab::Monitor),
             tab("Processes", Tab::Processes),
+            tab("Files", Tab::Files),
             tab("Settings", Tab::Settings),
             tab("Log", Tab::Log)
         ]
@@ -405,7 +407,7 @@ impl App {
         .into()
     }
 
-    fn section_title<'a>(&self, s: Skin, label: &'a str) -> Element<'a, Msg> {
+    pub(super) fn section_title<'a>(&self, s: Skin, label: &'a str) -> Element<'a, Msg> {
         iced::widget::text(label)
             .font(s.font)
             .size(13)
@@ -2199,7 +2201,7 @@ const CHECKER_FLAG_WARNING: &str = "Add --dump-json or --simulate: otherwise no 
 /// Shown when an absolute `--output` path stops the subfolder setting from applying.
 const ABSOLUTE_TEMPLATE_WARNING: &str = "The recorder arguments use an absolute --output path, so subfolders are not applied.";
 
-fn warn_text<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
+pub(super) fn warn_text<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).size(12).color(s.warn)
 }
 
@@ -2239,7 +2241,7 @@ fn has_no_part(args: &str) -> bool {
 }
 
 /// Wraps content in the standard settings card.
-fn card_box<'a>(s: Skin, content: impl Into<Element<'a, Msg>>) -> Element<'a, Msg> {
+pub(super) fn card_box<'a>(s: Skin, content: impl Into<Element<'a, Msg>>) -> Element<'a, Msg> {
     container(content)
         .padding(14)
         .width(Length::Fill)

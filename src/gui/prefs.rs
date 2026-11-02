@@ -35,6 +35,24 @@ struct Prefs {
     remember_size: bool,
     win_w: f32,
     win_h: f32,
+    files: FilesPrefs,
+}
+
+/// Preferences of the Files tab.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilesPrefs {
+    pub sort: String,
+    pub asc: bool,
+    pub group: bool,
+    pub delete_empty: bool,
+    pub move_dir: String,
+}
+
+impl Default for FilesPrefs {
+    fn default() -> Self {
+        FilesPrefs { sort: "name".to_string(), asc: true, group: false, delete_empty: false, move_dir: String::new() }
+    }
 }
 
 impl Default for Prefs {
@@ -45,6 +63,7 @@ impl Default for Prefs {
             remember_size: false,
             win_w: WIN_DEFAULT_W,
             win_h: WIN_DEFAULT_H,
+            files: FilesPrefs::default(),
         }
     }
 }
@@ -116,6 +135,18 @@ pub fn load_theme() -> ThemeKind {
 pub fn save_theme(kind: ThemeKind) {
     let mut prefs = read();
     prefs.theme = kind.name().to_string();
+    write(&prefs);
+}
+
+/// Reads the saved Files tab preferences.
+pub fn load_files() -> FilesPrefs {
+    read().files
+}
+
+/// Saves the Files tab preferences.
+pub fn save_files(files: &FilesPrefs) {
+    let mut prefs = read();
+    prefs.files = files.clone();
     write(&prefs);
 }
 

@@ -1,5 +1,7 @@
 //! The iced GUI. It only talks to the policy layer through `crate::policy`.
 
+mod files;
+mod files_view;
 pub mod prefs;
 mod skin;
 mod view;
@@ -70,6 +72,7 @@ fn app_icon() -> Option<window::Icon> {
 pub enum Tab {
     Monitor,
     Processes,
+    Files,
     Settings,
     Log,
 }
@@ -570,6 +573,7 @@ pub enum Msg {
     Policy(PolicyEvent),
     Tick(#[allow(dead_code)] Instant),
     SetTab(Tab),
+    Files(files::FilesMsg),
     SetSettingsTab(SettingsTab),
     OpenAddSite,
     ThemeChosen(ThemeKind),
@@ -682,6 +686,7 @@ pub struct App {
     update_stage: UpdateStage,
     update_error: Option<String>,
     update_cfg: UpdateConfig,
+    files: files::FilesState,
 }
 
 impl App {
@@ -729,6 +734,7 @@ impl App {
             update_stage: UpdateStage::Idle,
             update_error: None,
             update_cfg: UpdateConfig::default(),
+            files: files::FilesState::new(),
         };
         if let Some(e) = crate::policy::update::take_last_error() {
             app.push_log(e);
@@ -749,6 +755,7 @@ impl App {
             Subscription::run(engine_stream),
             iced::time::every(Duration::from_millis(100)).map(Msg::Tick),
             window::resize_events().map(on_resize),
+            if self.tab == Tab::Files { iced::keyboard::listen().map(files::key_msg) } else { Subscription::none() },
         ])
     }
 
@@ -846,8 +853,17 @@ impl App {
                         return task;
                     }
                 }
+                if self.tab == Tab::Files {
+                    return self.files_tick();
+                }
             }
-            Msg::SetTab(t) => self.tab = t,
+            Msg::SetTab(t) => {
+                self.tab = t;
+                if t == Tab::Files {
+                    self.files.on_enter();
+                }
+            }
+            Msg::Files(m) => return self.files_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
             Msg::OpenAddSite => {
                 self.tab = Tab::Settings;

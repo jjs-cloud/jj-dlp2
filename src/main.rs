@@ -2,6 +2,7 @@
 
 mod api;
 mod engine;
+mod filemgr;
 mod gui;
 mod instance;
 mod policy;
