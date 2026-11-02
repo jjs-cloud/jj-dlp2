@@ -4,11 +4,11 @@ use super::files::{FilesMsg, Panel, PanelKind, ROW_H, scroll_id, trim_id};
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, muted, t, warn_text};
 use super::{App, Msg};
-use crate::filemgr::rows::{Row as FRow, Sort, SortKey};
+use crate::filemgr::rows::{Row as FRow, Sel, Sort, SortKey};
 use crate::filemgr::{file_name, fmt_mtime, human_rate, human_size};
 use iced::border::Radius;
 use iced::widget::text::Wrapping;
-use iced::widget::{Column, Space, button, column, container, mouse_area, row, scrollable, text_input, toggler};
+use iced::widget::{Column, Row, Space, button, column, container, mouse_area, row, scrollable, text_input, toggler};
 use iced::{Alignment, Background, Border, Element, Length, Theme};
 use std::time::Instant;
 
@@ -17,6 +17,7 @@ const W_MODIFIED: f32 = 160.0;
 const W_SIZE: f32 = 90.0;
 const W_RATE: f32 = 100.0;
 const INDENT: f32 = 18.0;
+const STATUS_H: f32 = 32.0;
 
 fn act<'a>(s: Skin, label: &'static str, m: Option<FilesMsg>, kind: BtnKind) -> Element<'a, Msg> {
     button(btn_label(&s, label).size(13))
@@ -24,14 +25,6 @@ fn act<'a>(s: Skin, label: &'static str, m: Option<FilesMsg>, kind: BtnKind) -> 
         .padding([6.0, 12.0])
         .style(skin::btn(s, kind))
         .into()
-}
-
-fn panel_kind(p: &Panel) -> PanelKind {
-    match p {
-        Panel::Fixup { .. } => PanelKind::Fixup,
-        Panel::Trim { .. } => PanelKind::Trim,
-        Panel::Move { .. } => PanelKind::Move,
-    }
 }
 
 fn flag<'a>(label: &'static str, on: bool, make: fn(bool) -> FilesMsg) -> Element<'a, Msg> {
@@ -103,7 +96,7 @@ impl App {
     pub(super) fn files_view(&self, s: Skin) -> Element<'_, Msg> {
         let f = &self.files;
         let has_file = f.file_selected();
-        let open = f.panel.as_ref().map(panel_kind);
+        let open = f.panel.as_ref().map(Panel::kind);
         let kind_for = |k: PanelKind| if open == Some(k) { BtnKind::Primary } else { BtnKind::Ghost };
         let panel_btn = |label: &'static str, k: PanelKind| {
             act(s, label, has_file.then_some(FilesMsg::OpenPanel(k)), kind_for(k))
@@ -118,9 +111,9 @@ impl App {
         .spacing(16)
         .align_y(Alignment::Center);
 
-        let all_label = if f.any_collapsed() { "Expand all" } else { "Collapse all" };
         let actions = row![
-            act(s, all_label, f.has_subfolders().then_some(FilesMsg::ToggleAll), BtnKind::Ghost),
+            act(s, "Expand all", f.any_collapsed().then_some(FilesMsg::ExpandAll), BtnKind::Ghost),
+            act(s, "Collapse all", f.any_expanded().then_some(FilesMsg::CollapseAll), BtnKind::Ghost),
             Space::new().width(Length::Fill),
             act(s, "Open", has_file.then_some(FilesMsg::OpenSelected), BtnKind::Ghost),
             act(s, "Show in folder", f.sel.is_some().then_some(FilesMsg::RevealSelected), BtnKind::Ghost),
@@ -136,26 +129,21 @@ impl App {
         if let Some(p) = &f.panel {
             top = top.push(self.files_panel(s, p));
         }
+
+        let mut status = Row::new().spacing(10).align_y(Alignment::Center);
+        status = status.push(container(muted(&s, f.status_text(self.now).unwrap_or(""))).width(Length::Fill).clip(true));
         for j in &f.jobs {
             let finishing = j.token.finishing();
-            top = top.push(
-                row![
-                    t(&s, format!("{}: {}", j.kind.label(), file_name(&j.target))).size(13),
-                    Space::new().width(Length::Fill),
-                    act(s, if finishing { "Finishing…" } else { "Cancel" }, (!finishing).then_some(FilesMsg::CancelJob(j.id)), BtnKind::Danger),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            );
+            let name = t(&s, format!("{}: {}", j.kind.label(), file_name(&j.target))).size(13).wrapping(Wrapping::None);
+            status = status.push(container(name).max_width(220.0).clip(true));
+            status = status.push(act(s, if finishing { "Finishing…" } else { "Cancel" }, (!finishing).then_some(FilesMsg::CancelJob(j.id)), BtnKind::Danger));
         }
-        if let Some(msg) = f.status_text(self.now) {
-            top = top.push(muted(&s, msg));
-        }
+        let status = container(status).center_y(STATUS_H).width(Length::Fill);
 
         let head = row![
             Space::new().width(INDENT + 4.0),
             head_cell(s, f.sort, "Name", SortKey::Name, Length::Fill),
-            container(muted(&s, "Status")).width(W_STATUS).padding([0.0, 6.0]),
+            head_cell(s, f.sort, "Status", SortKey::Status, Length::Fixed(W_STATUS)),
             head_cell(s, f.sort, "Modified", SortKey::Modified, Length::Fixed(W_MODIFIED)),
             head_cell(s, f.sort, "Size", SortKey::Size, Length::Fixed(W_SIZE)),
             head_cell(s, f.sort, "Rate", SortKey::Rate, Length::Fixed(W_RATE)),
@@ -197,6 +185,7 @@ impl App {
             title,
             actions,
             top,
+            status,
             head,
             scrollable(list).id(scroll_id()).on_scroll(|v| Msg::Files(FilesMsg::Scrolled(v))).height(Length::Fill),
             footer,
@@ -212,12 +201,9 @@ impl App {
         };
         let selected = f.sel.as_ref() == Some(&sel);
         let line: Element<'a, Msg> = match r {
-            FRow::Folder { path, name, count, collapsed, depth } => row![
+            FRow::Folder { name, count, collapsed, depth, .. } => row![
                 Space::new().width(*depth as f32 * INDENT),
-                button(t(&s, if *collapsed { "▶" } else { "▼" }).size(12).color(s.accent2))
-                    .on_press(Msg::Files(FilesMsg::ToggleFolder(path.clone())))
-                    .padding([0.0, 4.0])
-                    .style(button::text),
+                container(t(&s, if *collapsed { "►" } else { "▼" }).size(12).color(s.accent2)).width(16.0),
                 container(t(&s, name.as_str()).size(13).color(s.accent2).wrapping(Wrapping::None)).width(Length::Fill).clip(true),
                 muted(&s, format!("{count} files")),
             ]
@@ -254,10 +240,11 @@ impl App {
             FRow::Empty => return Space::new().into(),
         };
         let boxed = container(line).center_y(ROW_H).padding([0.0, 6.0]).width(Length::Fill).style(row_style(s, selected, i % 2 == 1));
-        mouse_area(boxed)
-            .on_press(Msg::Files(FilesMsg::Select(sel.clone())))
-            .on_double_click(Msg::Files(FilesMsg::Activate(sel)))
-            .into()
+        let area = mouse_area(boxed).on_press(Msg::Files(FilesMsg::Select(sel.clone())));
+        if matches!(sel, Sel::File(_)) {
+            return area.on_double_click(Msg::Files(FilesMsg::Activate(sel))).into();
+        }
+        area.into()
     }
 
     fn files_panel<'a>(&'a self, s: Skin, p: &'a Panel) -> Element<'a, Msg> {

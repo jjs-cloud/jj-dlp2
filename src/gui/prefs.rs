@@ -51,7 +51,7 @@ pub struct FilesPrefs {
 
 impl Default for FilesPrefs {
     fn default() -> Self {
-        FilesPrefs { sort: "name".to_string(), asc: true, group: false, delete_empty: false, move_dir: String::new() }
+        FilesPrefs { sort: "name".to_string(), asc: true, group: false, delete_empty: true, move_dir: String::new() }
     }
 }
 

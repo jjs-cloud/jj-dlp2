@@ -79,6 +79,16 @@ pub enum PanelKind {
     Move,
 }
 
+impl Panel {
+    pub fn kind(&self) -> PanelKind {
+        match self {
+            Panel::Fixup { .. } => PanelKind::Fixup,
+            Panel::Trim { .. } => PanelKind::Trim,
+            Panel::Move { .. } => PanelKind::Move,
+        }
+    }
+}
+
 /// The file a move is currently writing at its destination.
 pub struct Moving {
     pub name: String,
@@ -151,7 +161,7 @@ impl FilesState {
     }
 
     fn rebuild(&mut self) {
-        let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.collapsed);
+        let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.collapsed, Instant::now());
         self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows);
         self.rows = rows;
     }
@@ -175,14 +185,14 @@ impl FilesState {
         matches!(self.sel, Some(Sel::File(_)))
     }
 
-    /// True when there is any folder that can be collapsed.
-    pub fn has_subfolders(&self) -> bool {
-        self.group && !rows::subfolders(&self.records, &self.roots).is_empty()
-    }
-
     /// True when some subfolder is currently collapsed.
     pub fn any_collapsed(&self) -> bool {
-        rows::subfolders(&self.records, &self.roots).iter().any(|d| self.collapsed.contains(d))
+        self.group && rows::subfolders(&self.records, &self.roots).iter().any(|d| self.collapsed.contains(d))
+    }
+
+    /// True when some subfolder is currently expanded.
+    pub fn any_expanded(&self) -> bool {
+        self.group && rows::subfolders(&self.records, &self.roots).iter().any(|d| !self.collapsed.contains(d))
     }
 }
 
@@ -193,11 +203,11 @@ pub enum FilesMsg {
     Scrolled(Viewport),
     Select(Sel),
     Activate(Sel),
-    ToggleFolder(PathBuf),
     HeaderSort(SortKey),
     ToggleGroup(bool),
     ToggleDeleteEmpty(bool),
-    ToggleAll,
+    ExpandAll,
+    CollapseAll,
     OpenSelected,
     RevealSelected,
     DeleteSelected,
@@ -452,9 +462,13 @@ impl App {
                 self.files.scroll_y = v.absolute_offset().y;
                 self.files.view_h = v.bounds().height;
             }
-            FilesMsg::Select(s) => self.files.sel = Some(s),
+            FilesMsg::Select(s) => {
+                if let Sel::Folder(p) = &s {
+                    self.files_toggle(p.clone());
+                }
+                self.files.sel = Some(s);
+            }
             FilesMsg::Activate(s) => self.files_activate(s),
-            FilesMsg::ToggleFolder(p) => self.files_toggle(p),
             FilesMsg::HeaderSort(k) => {
                 self.files.sort = self.files.sort.click(k);
                 self.files.save_prefs();
@@ -469,15 +483,15 @@ impl App {
                 self.files.delete_empty = on;
                 self.files.save_prefs();
             }
-            FilesMsg::ToggleAll => {
+            FilesMsg::ExpandAll => {
+                self.files.collapsed.clear();
+                self.files.say("Expanded all folders");
+                self.files.rebuild();
+            }
+            FilesMsg::CollapseAll => {
                 let subs = rows::subfolders(&self.files.records, &self.files.roots);
-                if self.files.any_collapsed() {
-                    self.files.collapsed.retain(|d| !subs.contains(d));
-                    self.files.say("Expanded all folders");
-                } else {
-                    self.files.collapsed.extend(subs);
-                    self.files.say("Collapsed all folders");
-                }
+                self.files.collapsed.extend(subs);
+                self.files.say("Collapsed all folders");
                 self.files.rebuild();
             }
             FilesMsg::OpenSelected => {
@@ -488,7 +502,9 @@ impl App {
             FilesMsg::RevealSelected => self.files_reveal_selected(),
             FilesMsg::DeleteSelected => self.files_delete(false),
             FilesMsg::OpenPanel(kind) => {
-                if let Some(Sel::File(target)) = self.files.sel.clone() {
+                if self.files.panel.as_ref().map(Panel::kind) == Some(kind) {
+                    self.files.panel = None;
+                } else if let Some(Sel::File(target)) = self.files.sel.clone() {
                     self.files.panel = Some(match kind {
                         PanelKind::Fixup => Panel::Fixup { target, delete_original: true, convert_mp4: true },
                         PanelKind::Trim => Panel::Trim {

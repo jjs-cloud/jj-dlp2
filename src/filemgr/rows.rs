@@ -5,10 +5,12 @@ use super::{file_name, natural_cmp};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Name,
+    Status,
     Modified,
     Size,
     Rate,
@@ -18,6 +20,7 @@ impl SortKey {
     pub fn name(self) -> &'static str {
         match self {
             SortKey::Name => "name",
+            SortKey::Status => "status",
             SortKey::Modified => "modified",
             SortKey::Size => "size",
             SortKey::Rate => "rate",
@@ -26,6 +29,7 @@ impl SortKey {
 
     pub fn from_name(s: &str) -> SortKey {
         match s {
+            "status" => SortKey::Status,
             "modified" => SortKey::Modified,
             "size" => SortKey::Size,
             "rate" => SortKey::Rate,
@@ -79,10 +83,19 @@ impl Row {
 
 type Recs = HashMap<PathBuf, FileRec>;
 
+/// What ordering files needs: the records, the sort and the current time for WRITING status.
+#[derive(Clone, Copy)]
+struct Cx<'a> {
+    recs: &'a Recs,
+    sort: Sort,
+    now: Instant,
+}
+
 /// Ascending order of two files for `key`; ties fall back to the natural name order.
-fn base_cmp(key: SortKey, ap: &Path, a: &FileRec, bp: &Path, b: &FileRec) -> Ordering {
+fn base_cmp(key: SortKey, now: Instant, ap: &Path, a: &FileRec, bp: &Path, b: &FileRec) -> Ordering {
     let primary = match key {
         SortKey::Name => Ordering::Equal,
+        SortKey::Status => a.writing(now).cmp(&b.writing(now)),
         SortKey::Modified => (a.mtime / 60).cmp(&(b.mtime / 60)),
         SortKey::Size => a.size.cmp(&b.size),
         SortKey::Rate => a.rate.partial_cmp(&b.rate).unwrap_or(Ordering::Equal),
@@ -90,24 +103,22 @@ fn base_cmp(key: SortKey, ap: &Path, a: &FileRec, bp: &Path, b: &FileRec) -> Ord
     primary.then_with(|| natural_cmp(&file_name(ap), &file_name(bp)))
 }
 
-fn cmp_paths(sort: Sort, recs: &Recs, a: &PathBuf, b: &PathBuf) -> Ordering {
-    match (recs.get(a), recs.get(b)) {
+fn cmp_paths(cx: Cx, a: &PathBuf, b: &PathBuf) -> Ordering {
+    match (cx.recs.get(a), cx.recs.get(b)) {
         (Some(x), Some(y)) => {
-            let o = base_cmp(sort.key, a, x, b, y);
-            if sort.asc { o } else { o.reverse() }
+            let o = base_cmp(cx.sort.key, cx.now, a, x, b, y);
+            if cx.sort.asc { o } else { o.reverse() }
         }
         _ => Ordering::Equal,
     }
 }
 
 /// Orders groups by their first file under the sort; groups without files go last.
-fn order_groups(sort: Sort, recs: &Recs, groups: Vec<(PathBuf, Vec<PathBuf>)>) -> Vec<(PathBuf, Vec<PathBuf>)> {
-    let mut keyed: Vec<(Option<PathBuf>, (PathBuf, Vec<PathBuf>))> = groups
-        .into_iter()
-        .map(|g| (g.1.iter().min_by(|a, b| cmp_paths(sort, recs, a, b)).cloned(), g))
-        .collect();
+fn order_groups(cx: Cx, groups: Vec<(PathBuf, Vec<PathBuf>)>) -> Vec<(PathBuf, Vec<PathBuf>)> {
+    let mut keyed: Vec<(Option<PathBuf>, (PathBuf, Vec<PathBuf>))> =
+        groups.into_iter().map(|g| (g.1.iter().min_by(|a, b| cmp_paths(cx, a, b)).cloned(), g)).collect();
     keyed.sort_by(|a, b| match (&a.0, &b.0) {
-        (Some(x), Some(y)) => cmp_paths(sort, recs, x, y),
+        (Some(x), Some(y)) => cmp_paths(cx, x, y),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
@@ -115,9 +126,9 @@ fn order_groups(sort: Sort, recs: &Recs, groups: Vec<(PathBuf, Vec<PathBuf>)>) -
     keyed.into_iter().map(|(_, g)| g).collect()
 }
 
-fn emit_folder(dir: &Path, depth: usize, files: &[PathBuf], recs: &Recs, sort: Sort, collapsed: &HashSet<PathBuf>, rows: &mut Vec<Row>) {
+fn emit_folder(dir: &Path, depth: usize, files: &[PathBuf], cx: Cx, collapsed: &HashSet<PathBuf>, rows: &mut Vec<Row>) {
     let mut direct: Vec<&PathBuf> = files.iter().filter(|p| p.parent() == Some(dir)).collect();
-    direct.sort_by(|a, b| cmp_paths(sort, recs, a, b));
+    direct.sort_by(|a, b| cmp_paths(cx, a, b));
     for p in direct {
         rows.push(Row::File { path: p.clone(), prefix: String::new(), name: file_name(p).into_owned(), depth });
     }
@@ -139,17 +150,18 @@ fn emit_folder(dir: &Path, depth: usize, files: &[PathBuf], recs: &Recs, sort: S
             (c, inside)
         })
         .collect();
-    for (child, inside) in order_groups(sort, recs, groups) {
+    for (child, inside) in order_groups(cx, groups) {
         let is_collapsed = collapsed.contains(&child);
         rows.push(Row::Folder { path: child.clone(), name: file_name(&child).into_owned(), count: inside.len(), collapsed: is_collapsed, depth });
         if !is_collapsed {
-            emit_folder(&child, depth + 1, &inside, recs, sort, collapsed, rows);
+            emit_folder(&child, depth + 1, &inside, cx, collapsed, rows);
         }
     }
 }
 
 /// Builds the visible rows. With several output folders each gets a collapsible header row.
-pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapsed: &HashSet<PathBuf>) -> Vec<Row> {
+pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapsed: &HashSet<PathBuf>, now: Instant) -> Vec<Row> {
+    let cx = Cx { recs, sort, now };
     let multi = roots.len() > 1;
     let base = usize::from(multi);
     let groups: Vec<(PathBuf, Vec<PathBuf>)> = roots
@@ -157,7 +169,7 @@ pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapse
         .map(|r| (r.dir.clone(), recs.iter().filter(|(_, rec)| rec.root == r.dir).map(|(p, _)| p.clone()).collect()))
         .collect();
     let mut rows = Vec::new();
-    for (dir, files) in order_groups(sort, recs, groups) {
+    for (dir, files) in order_groups(cx, groups) {
         let label = roots.iter().find(|r| r.dir == dir).map(|r| r.label.as_str()).unwrap_or("");
         let root_collapsed = multi && collapsed.contains(&dir);
         if multi {
@@ -170,10 +182,10 @@ pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapse
         if files.is_empty() {
             rows.push(Row::Empty);
         } else if group {
-            emit_folder(&dir, base, &files, recs, sort, collapsed, &mut rows);
+            emit_folder(&dir, base, &files, cx, collapsed, &mut rows);
         } else {
             let mut flat: Vec<&PathBuf> = files.iter().collect();
-            flat.sort_by(|a, b| cmp_paths(sort, recs, a, b));
+            flat.sort_by(|a, b| cmp_paths(cx, a, b));
             for p in flat {
                 let (prefix, name) = flat_names(p, &dir);
                 rows.push(Row::File { path: p.clone(), prefix, name, depth: base });
@@ -259,11 +271,15 @@ pub fn row_index(rows: &[Row], sel: &Sel) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
+    use std::time::Duration;
 
     fn rec(root: &str, size: u64, mtime: u64) -> FileRec {
         let now = Instant::now();
         FileRec { size, mtime, rate: 0.0, last_change: now, last_poll: now, root: PathBuf::from(root) }
+    }
+
+    fn build(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapsed: &HashSet<PathBuf>) -> Vec<Row> {
+        build_rows(roots, recs, sort, group, collapsed, Instant::now())
     }
 
     fn roots(dirs: &[&str]) -> Vec<Root> {
@@ -291,21 +307,21 @@ mod tests {
     #[test]
     fn flat_sorts_by_name_and_size() {
         let rs = roots(&["/r"]);
-        let rows = build_rows(&rs, &sample(), Sort::default(), false, &HashSet::new());
+        let rows = build(&rs, &sample(), Sort::default(), false, &HashSet::new());
         assert_eq!(names(&rows), ["a2.ts", "a10.ts", "s/x.ts"].map(String::from));
         let by_size = Sort { key: SortKey::Size, asc: false };
-        let rows = build_rows(&rs, &sample(), by_size, false, &HashSet::new());
+        let rows = build(&rs, &sample(), by_size, false, &HashSet::new());
         assert_eq!(names(&rows), ["a2.ts", "s/x.ts", "a10.ts"].map(String::from));
     }
 
     #[test]
     fn grouping_and_collapse() {
         let rs = roots(&["/r"]);
-        let rows = build_rows(&rs, &sample(), Sort::default(), true, &HashSet::new());
+        let rows = build(&rs, &sample(), Sort::default(), true, &HashSet::new());
         assert_eq!(names(&rows), ["a2.ts", "a10.ts", "[s]", "x.ts"].map(String::from));
         let mut collapsed = HashSet::new();
         collapsed.insert(PathBuf::from("/r/s"));
-        let rows = build_rows(&rs, &sample(), Sort::default(), true, &collapsed);
+        let rows = build(&rs, &sample(), Sort::default(), true, &collapsed);
         assert_eq!(names(&rows), ["a2.ts", "a10.ts", "[s]"].map(String::from));
         assert_eq!(subfolders(&sample(), &rs), HashSet::from([PathBuf::from("/r/s")]));
     }
@@ -313,7 +329,7 @@ mod tests {
     #[test]
     fn several_roots_get_headers_and_empty_markers() {
         let rs = roots(&["/r", "/e"]);
-        let rows = build_rows(&rs, &sample(), Sort::default(), false, &HashSet::new());
+        let rows = build(&rs, &sample(), Sort::default(), false, &HashSet::new());
         let n = names(&rows);
         assert_eq!(n.len(), 6);
         assert!(n[0].starts_with("[/r"));
@@ -321,20 +337,20 @@ mod tests {
         assert_eq!(n[5], "-");
         let mut collapsed = HashSet::new();
         collapsed.insert(PathBuf::from("/r"));
-        let rows = build_rows(&rs, &sample(), Sort::default(), false, &collapsed);
+        let rows = build(&rs, &sample(), Sort::default(), false, &collapsed);
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
     fn selection_survives_and_moves_to_neighbour() {
         let rs = roots(&["/r"]);
-        let old = build_rows(&rs, &sample(), Sort::default(), false, &HashSet::new());
+        let old = build(&rs, &sample(), Sort::default(), false, &HashSet::new());
         let cur = Sel::File(PathBuf::from("/r/a10.ts"));
         let same = keep_selection(&old, Some(&cur), &old);
         assert_eq!(same, Some(cur.clone()));
         let mut recs = sample();
         recs.remove(Path::new("/r/a10.ts"));
-        let new = build_rows(&rs, &recs, Sort::default(), false, &HashSet::new());
+        let new = build(&rs, &recs, Sort::default(), false, &HashSet::new());
         assert_eq!(keep_selection(&old, Some(&cur), &new), Some(Sel::File(PathBuf::from("/r/s/x.ts"))));
         assert_eq!(keep_selection(&old, None, &new), Some(Sel::File(PathBuf::from("/r/a2.ts"))));
         assert_eq!(keep_selection(&old, Some(&cur), &[]), None);
@@ -343,12 +359,27 @@ mod tests {
     #[test]
     fn stepping_clamps() {
         let rs = roots(&["/r"]);
-        let rows = build_rows(&rs, &sample(), Sort::default(), false, &HashSet::new());
+        let rows = build(&rs, &sample(), Sort::default(), false, &HashSet::new());
         let first = edge(&rows, false).unwrap();
         assert_eq!(first, Sel::File(PathBuf::from("/r/a2.ts")));
         assert_eq!(step(&rows, Some(&first), -1), Some(first.clone()));
         assert_eq!(step(&rows, Some(&first), 50), edge(&rows, true));
         assert_eq!(row_index(&rows, &first), Some(0));
+    }
+
+    #[test]
+    fn status_sort_puts_writing_files_apart() {
+        let now = Instant::now();
+        let mut m = HashMap::new();
+        let mut idle = rec("/r", 1, 0);
+        idle.last_change = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
+        m.insert(PathBuf::from("/r/a.ts"), idle);
+        m.insert(PathBuf::from("/r/b.ts"), rec("/r", 1, 0));
+        let rs = roots(&["/r"]);
+        let asc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: true }, false, &HashSet::new(), now);
+        assert_eq!(names(&asc), ["a.ts", "b.ts"].map(String::from));
+        let desc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: false }, false, &HashSet::new(), now);
+        assert_eq!(names(&desc), ["b.ts", "a.ts"].map(String::from));
     }
 
     #[test]
