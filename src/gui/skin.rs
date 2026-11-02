@@ -355,6 +355,16 @@ pub fn input(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Styl
 /// Input style that shows a red border while `invalid` is true.
 pub fn input_required(s: Skin, invalid: bool) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
+        if matches!(status, text_input::Status::Disabled) {
+            return text_input::Style {
+                background: Background::Color(with_alpha(s.muted, 0.12)),
+                border: Border { color: with_alpha(s.border, 0.5), width: 1.0, radius: Radius::from(s.radius * 0.6) },
+                icon: s.muted,
+                placeholder: with_alpha(s.muted, 0.5),
+                value: with_alpha(s.muted, 0.5),
+                selection: with_alpha(s.muted, 0.2),
+            };
+        }
         let focused = matches!(status, text_input::Status::Focused { .. });
         let hovered = matches!(status, text_input::Status::Hovered | text_input::Status::Focused { is_hovered: true });
         text_input::Style {

@@ -123,6 +123,8 @@ pub struct Site {
     pub restart_clear_minutes: Option<u64>,
     /// Restarts needed before the RESTARTED chip shows.
     pub restart_threshold: Option<u32>,
+    /// Forward recorder output to the policy layer; off saves the resources that forwarding uses.
+    pub forward_output: bool,
     /// `|`-separated phrases that mark an ad interruption in recorder output; blank turns the INTERRUPT chip off.
     pub interrupt_patterns: String,
     /// `|`-separated phrases that mark an ffmpeg error in recorder output; blank turns the ERROR chip off.
@@ -382,7 +384,7 @@ pub enum Event {
     Preflight(Vec<Notice>),
     ProcessUpdate(ProcessInfo),
     ProcessRemoved(RecorderId),
-    /// One line of a recorder's output; sent only for sites with interrupt or error patterns.
+    /// One line of a recorder's output; sent only for sites with output forwarding on.
     Output { id: StreamerId, line: String },
     Log(String),
 }
@@ -437,6 +439,7 @@ mod tests {
             file_check_interval_secs: None,
             restart_clear_minutes: None,
             restart_threshold: None,
+            forward_output: false,
             interrupt_patterns: String::new(),
             error_patterns: String::new(),
             color: None,

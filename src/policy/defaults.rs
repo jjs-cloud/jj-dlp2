@@ -90,6 +90,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         file_check_interval_secs: None,
         restart_clear_minutes: None,
         restart_threshold: None,
+        forward_output: true,
         interrupt_patterns: if matches!(preset, Preset::Twitch) { TWITCH_INTERRUPT_PATTERNS.into() } else { String::new() },
         error_patterns: DEFAULT_ERROR_PATTERNS.into(),
         color: Some(color.into()),
@@ -128,6 +129,13 @@ mod tests {
         assert!(new_site(Preset::Twitch).interrupt_patterns.contains("twitch-stitched-ad"));
         assert!(new_site(Preset::Kick).interrupt_patterns.is_empty());
         assert!(new_site(Preset::Blank).error_patterns.contains("Packet corrupt"));
+    }
+
+    #[test]
+    fn output_forwarding_defaults_on() {
+        for preset in [Preset::Twitch, Preset::Kick, Preset::Blank] {
+            assert!(new_site(preset).forward_output);
+        }
     }
 
     #[test]

@@ -1721,23 +1721,33 @@ impl App {
         .spacing(8)
         .align_y(Alignment::End);
 
+        // Greyed, blank and non-editable while output forwarding is off; the stored text is kept.
+        let pattern_field = |value: &'a str, f: fn(String) -> DraftField| -> Element<'a, Msg> {
+            if d.forward_output {
+                field("", value, f)
+            } else {
+                text_input("", "").padding(5).size(13).style(skin::input(s)).into()
+            }
+        };
         let patterns = row![
+            container(
+                toggler(d.forward_output)
+                    .label("Enable command output")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::ForwardOutput(v)))
+                    .text_size(12)
+            )
+            .width(Length::Shrink),
             cell(
-                labeled(
-                    "Interrupt patterns (separate with |, blank = off)",
-                    field("", &d.interrupt_patterns, DraftField::InterruptPatterns)
-                ),
+                labeled("Interrupt patterns (separate with |)", pattern_field(&d.interrupt_patterns, DraftField::InterruptPatterns)),
                 Length::FillPortion(1)
             ),
             cell(
-                labeled(
-                    "Error patterns (separate with |, blank = off)",
-                    field("", &d.error_patterns, DraftField::ErrorPatterns)
-                ),
+                labeled("Error patterns (separate with |)", pattern_field(&d.error_patterns, DraftField::ErrorPatterns)),
                 Length::FillPortion(1)
             ),
         ]
-        .spacing(8);
+        .spacing(24)
+        .align_y(Alignment::End);
 
         let split_input = text_input("", &d.split_minutes)
             .on_input(move |v| Msg::Draft(id, DraftField::SplitMinutes(v)))

@@ -33,7 +33,7 @@ pub(crate) enum Internal {
     Log(String),
     /// An informational line from a recorder, logged once per live session.
     Note { streamer_id: StreamerId, text: String },
-    /// One line of a recorder's output, sent only when the site has interrupt or error patterns.
+    /// One line of a recorder's output, sent only when the site has output forwarding on.
     Line { streamer_id: StreamerId, text: String },
     Preflight { notices: Vec<Notice>, manual: bool },
 }
@@ -564,7 +564,7 @@ impl Engine {
             log_stdout: log_path(streamer.options.log_stdout, "stdout"),
             log_stderr: log_path(streamer.options.log_stderr, "stderr"),
             internal: self.internal_tx.clone(),
-            forward_output: !site.interrupt_patterns.trim().is_empty() || !site.error_patterns.trim().is_empty(),
+            forward_output: site.forward_output,
         };
         match recorder::spawn_recorder(spec, &self.tracked) {
             Ok(handle) => {
@@ -631,6 +631,7 @@ mod e2e {
                 file_check_interval_secs: Some(30),
                 restart_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
+                forward_output: false,
                 interrupt_patterns: String::new(),
                 error_patterns: String::new(),
                 color: None,
@@ -794,6 +795,7 @@ mod e2e {
                 file_check_interval_secs: Some(30),
                 restart_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
+                forward_output: false,
                 interrupt_patterns: String::new(),
                 error_patterns: String::new(),
                 color: None,
