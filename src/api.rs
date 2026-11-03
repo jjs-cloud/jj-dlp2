@@ -37,9 +37,9 @@ pub const DEFAULT_CHECKER_ARGS: &str = "--dump-json {urls}";
 pub const DEFAULT_RECORDER_ARGS: &str = r#"--fixup never --no-part --output "%(title)s.%(ext)s" {url}"#;
 /// yt-dlp path used when a site's own is blank: the bundled binary on Windows/Linux, else PATH.
 pub const DEFAULT_EXE: &str = if cfg!(windows) {
-    r"bin\yt-dlp\yt-dlp.exe"
+    r"bin\yt-dlp\windows\yt-dlp.exe"
 } else if cfg!(target_os = "linux") {
-    "bin/yt-dlp_linux/yt-dlp_linux"
+    "bin/yt-dlp/linux/yt-dlp_linux"
 } else {
     "yt-dlp"
 };
