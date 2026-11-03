@@ -39,7 +39,7 @@ pub fn new_site(preset: Preset) -> NewSite {
             "Twitch",
             "https://twitch.tv/{username}",
             "--cookies-from-browser firefox --dump-json {urls}",
-            r#"--cookies-from-browser firefox --fixup never --no-part --output "%(title)s [%(id)s].%(ext)s" {url}"#,
+            r#"--verbose --cookies-from-browser firefox --fixup never --no-part --output "%(title)s [%(id)s].%(ext)s" {url}"#,
             "#9146FF",
         ),
         Preset::Tiktok => (

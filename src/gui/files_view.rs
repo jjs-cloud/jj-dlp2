@@ -150,7 +150,7 @@ impl App {
         top = top.push(container(status).center_y(STATUS_H).width(Length::Fill));
 
         let head = row![
-            head_cell(s, f.sort, "Name", SortKey::Name, Length::Fill, INDENT + 10.0),
+            head_cell(s, f.sort, "Name", SortKey::Name, Length::Fill, 6.0),
             head_cell(s, f.sort, "Status", SortKey::Status, Length::Fixed(W_STATUS), 6.0),
             head_cell(s, f.sort, "Modified", SortKey::Modified, Length::Fixed(W_MODIFIED), 6.0),
             head_cell(s, f.sort, "Size", SortKey::Size, Length::Fixed(W_SIZE), 6.0),
