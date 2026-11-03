@@ -2,7 +2,7 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, MonitorTab, Msg, NEW_SITE_ID, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
+    App, DraftField, MonitorTab, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
     StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
@@ -1024,22 +1024,59 @@ impl App {
                 "Root process exited; confirming every child process is gone.",
             ));
         }
+        let output = self.output.get(&p.id).filter(|l| !l.text.is_empty());
+        if let Some(log) = output {
+            body = body.push(self.output_panel(s, p.id, log));
+        }
         if !p.last_line.is_empty() {
-            body = body.push(
-                container(
-                    iced::widget::text(p.last_line.as_str())
-                        .font(s.font)
-                        .size(12)
-                        .color(s.text),
-                )
-                .padding([6.0, 10.0])
-                .width(Length::Fill)
-                .style(skin::inset(s)),
-            );
+            let line = iced::widget::text(p.last_line.as_str()).font(s.font).size(12).color(s.text);
+            let inner: Element<'a, Msg> = if output.is_some() {
+                column![muted(&s, "Last line"), line].spacing(4).into()
+            } else {
+                line.into()
+            };
+            body = body.push(container(inner).padding([6.0, 10.0]).width(Length::Fill).style(skin::inset(s)));
         }
         body = body.push(muted(&s, p.cmdline.as_str()));
         container(body)
             .padding([8.0, 14.0])
+            .width(Length::Fill)
+            .style(skin::inset(s))
+            .into()
+    }
+
+    /// The scrollable command output of a recording, with wrap and copy controls.
+    fn output_panel<'a>(&'a self, s: Skin, id: RecorderId, log: &'a OutputLog) -> Element<'a, Msg> {
+        let wrap = self.wrap_output;
+        let lines = iced::widget::text(log.text.as_str()).font(s.font).size(12).color(s.text).wrapping(if wrap {
+            Wrapping::WordOrGlyph
+        } else {
+            Wrapping::None
+        });
+        let pad = iced::Padding { right: 12.0, bottom: if wrap { 0.0 } else { 12.0 }, ..iced::Padding::ZERO };
+        let scroll = scrollable(container(lines).padding(pad)).width(Length::Fill).anchor_bottom();
+        let scroll = if wrap {
+            scroll
+        } else {
+            scroll.direction(scrollable::Direction::Both {
+                vertical: scrollable::Scrollbar::default(),
+                horizontal: scrollable::Scrollbar::default(),
+            })
+            .anchor_bottom()
+        };
+        let header = row![
+            muted(&s, "Output"),
+            Space::new().width(Length::Fill),
+            toggler(wrap).label("Wrap").on_toggle(Msg::SetWrapOutput).text_size(12),
+            button(btn_label(&s, "Copy").size(12))
+                .on_press(Msg::CopyOutput(id))
+                .padding([3.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
+        container(column![header, container(scroll).max_height(300.0)].spacing(6))
+            .padding([6.0, 10.0])
             .width(Length::Fill)
             .style(skin::inset(s))
             .into()

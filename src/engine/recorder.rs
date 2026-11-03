@@ -245,7 +245,7 @@ fn inspect(text: &str, id: RecorderId, tracked: &SharedTracked, notes: &Notes, f
         let _ = tx.send(Internal::Note { streamer_id: *streamer_id, text: note });
     }
     if let (true, Some((tx, streamer_id))) = (forward, notes) {
-        let _ = tx.send(Internal::Line { streamer_id: *streamer_id, text: text.to_string() });
+        let _ = tx.send(Internal::Line { streamer_id: *streamer_id, recorder: id, text: text.to_string() });
     }
 }
 
@@ -293,7 +293,7 @@ mod tests {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             read_lines(input, 1, tracked, Arc::new(Mutex::new(None)), Some((tx, 7)), forward).await;
             let mut lines = Vec::new();
-            while let Ok(Internal::Line { streamer_id, text }) = rx.try_recv() {
+            while let Ok(Internal::Line { streamer_id, text, .. }) = rx.try_recv() {
                 assert_eq!(streamer_id, 7);
                 lines.push(text);
             }

@@ -173,6 +173,8 @@ pub enum PolicyEvent {
     Restarts(HashMap<StreamerId, u32>),
     /// Streamer id to its interrupt and error counts; streamers with none are absent.
     Warnings(HashMap<StreamerId, Warnings>),
+    /// New output lines per recording, oldest first; batched, and sent only for sites with output on.
+    Output(HashMap<RecorderId, Vec<String>>),
 }
 
 /// Updater state changes reported to front ends.
@@ -265,6 +267,8 @@ struct Policy {
     files: FileTracker,
     restarts: RestartTracker,
     warnings: WarnTracker,
+    /// Output lines waiting to be sent to front ends, per recording.
+    pending_output: HashMap<RecorderId, Vec<String>>,
     last_files: HashMap<RecorderId, RecordingFile>,
     gate: Gate,
     file_tx: UnboundedSender<FileJob>,
@@ -283,6 +287,17 @@ struct Policy {
     rename_on_exit: HashMap<RecorderId, (StreamerId, PathBuf)>,
     /// The part number in the recorder arguments last sent to the engine for each streamer.
     override_part: HashMap<StreamerId, u32>,
+}
+
+/// Longest output line, in characters, passed on to front ends.
+const MAX_OUTPUT_LINE_CHARS: usize = 2000;
+
+/// The line cut to `MAX_OUTPUT_LINE_CHARS` characters.
+fn clip_line(line: &str) -> String {
+    match line.char_indices().nth(MAX_OUTPUT_LINE_CHARS) {
+        Some((end, _)) => line[..end].to_string(),
+        None => line.to_string(),
+    }
 }
 
 impl Policy {
@@ -307,6 +322,7 @@ impl Policy {
             files: FileTracker::default(),
             restarts: RestartTracker::default(),
             warnings: WarnTracker::default(),
+            pending_output: HashMap::new(),
             last_files: HashMap::new(),
             gate: Gate::default(),
             file_tx,
@@ -369,6 +385,7 @@ impl Policy {
                         }
                         self.flush_live();
                         self.flush_warnings();
+                        self.flush_output();
                     }
                     None => break,
                 },
@@ -405,9 +422,13 @@ impl Policy {
 
     /// Feeds check results to the live tracker, then forwards the event.
     fn on_engine_event(&mut self, ev: Event) {
-        if let Event::Output { id, line } = &ev {
+        if let Event::Output { id, recorder, line } = &ev {
             self.on_output(*id, line);
+            self.pending_output.entry(*recorder).or_default().push(clip_line(line));
             return;
+        }
+        if matches!(ev, Event::ProcessRemoved(_)) {
+            self.flush_output();
         }
         match &ev {
             Event::SiteChecked { id, ok, .. } => self.live.site_checked(*id, *ok),
@@ -601,6 +622,13 @@ impl Policy {
         let name = self.settings.streamers.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
         for kind in fresh {
             self.log(format!("{name}: {}", kind.log_text()));
+        }
+    }
+
+    /// Sends the batched output lines to front ends.
+    fn flush_output(&mut self) {
+        if !self.pending_output.is_empty() {
+            self.emit(PolicyEvent::Output(std::mem::take(&mut self.pending_output)));
         }
     }
 
@@ -1320,6 +1348,13 @@ fn derive_name(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_line_cuts_on_a_char_boundary() {
+        let long = "é".repeat(MAX_OUTPUT_LINE_CHARS + 5);
+        assert_eq!(clip_line(&long).chars().count(), MAX_OUTPUT_LINE_CHARS);
+        assert_eq!(clip_line("short"), "short");
+    }
 
     fn site(id: SiteId, output_dir: &str) -> Site {
         Site {

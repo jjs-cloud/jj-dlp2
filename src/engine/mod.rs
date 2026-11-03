@@ -34,7 +34,7 @@ pub(crate) enum Internal {
     /// An informational line from a recorder, logged once per live session.
     Note { streamer_id: StreamerId, text: String },
     /// One line of a recorder's output, sent only when the site has output forwarding on.
-    Line { streamer_id: StreamerId, text: String },
+    Line { streamer_id: StreamerId, recorder: RecorderId, text: String },
     Preflight { notices: Vec<Notice>, manual: bool },
 }
 
@@ -267,7 +267,7 @@ impl Engine {
                     self.log(format!("{}: {text}", name.unwrap_or_default()));
                 }
             }
-            Internal::Line { streamer_id, text } => self.emit(Event::Output { id: streamer_id, line: text }),
+            Internal::Line { streamer_id, recorder, text } => self.emit(Event::Output { id: streamer_id, recorder, line: text }),
             Internal::Preflight { notices, manual } => self.on_preflight(notices, manual),
             Internal::RecorderGone(id) => {
                 let streamer = self.recorders.remove(&id).map(|h| h.streamer_id);

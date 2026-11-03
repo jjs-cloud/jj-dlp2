@@ -431,7 +431,7 @@ pub enum Event {
     ProcessUpdate(ProcessInfo),
     ProcessRemoved(RecorderId),
     /// One line of a recorder's output; sent only for sites with output forwarding on.
-    Output { id: StreamerId, line: String },
+    Output { id: StreamerId, recorder: RecorderId, line: String },
     Log(String),
 }
 

@@ -616,6 +616,8 @@ pub enum Msg {
     ClearWarnings,
     CopyText(String),
     ToggleProc(RecorderId),
+    SetWrapOutput(bool),
+    CopyOutput(RecorderId),
     SetCompact(bool),
     SetRowMin(f32),
     SetRowMax(f32),
@@ -636,6 +638,32 @@ pub enum Msg {
     CheckUpdateNow,
     SetUpdateChecks(bool),
     SetIncludeRc(bool),
+}
+
+/// Most output lines kept per recording.
+const OUTPUT_MAX_LINES: usize = 500;
+
+/// A recording's newest output lines, newline-separated.
+#[derive(Debug, Default)]
+pub struct OutputLog {
+    pub text: String,
+    lines: usize,
+}
+
+impl OutputLog {
+    /// Appends a line, dropping the oldest once over `OUTPUT_MAX_LINES`.
+    fn push(&mut self, line: &str) {
+        if self.lines > 0 {
+            self.text.push('\n');
+        }
+        self.text.push_str(line);
+        self.lines += 1;
+        if self.lines > OUTPUT_MAX_LINES {
+            let cut = self.text.find('\n').map_or(self.text.len(), |i| i + 1);
+            self.text.drain(..cut);
+            self.lines -= 1;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -685,6 +713,8 @@ pub struct App {
     phase: f32,
     now: u64,
     expanded_procs: HashSet<RecorderId>,
+    output: HashMap<RecorderId, OutputLog>,
+    wrap_output: bool,
     compact: bool,
     row_min: f32,
     row_max: f32,
@@ -736,6 +766,8 @@ impl App {
             phase: 0.0,
             now: now_secs(),
             expanded_procs: HashSet::new(),
+            output: HashMap::new(),
+            wrap_output: prefs::load_wrap_output(),
             compact: prefs::load_compact(),
             row_min,
             row_max,
@@ -1122,6 +1154,15 @@ impl App {
                 self.win_h = size.height;
                 *LAST_SIZE.lock().unwrap() = Some((size.width, size.height));
             }
+            Msg::SetWrapOutput(on) => {
+                self.wrap_output = on;
+                prefs::save_wrap_output(on);
+            }
+            Msg::CopyOutput(id) => {
+                if let Some(log) = self.output.get(&id) {
+                    return iced::clipboard::write(log.text.clone());
+                }
+            }
             Msg::ToggleProc(id) => {
                 if !self.expanded_procs.remove(&id) {
                     self.expanded_procs.insert(id);
@@ -1167,6 +1208,14 @@ impl App {
             PolicyEvent::RecordingFiles(map) => self.recording_files = map,
             PolicyEvent::Restarts(map) => self.restarts = map,
             PolicyEvent::Warnings(map) => self.warnings = map,
+            PolicyEvent::Output(batch) => {
+                for (id, lines) in batch {
+                    let log = self.output.entry(id).or_default();
+                    for line in &lines {
+                        log.push(line);
+                    }
+                }
+            }
             PolicyEvent::Engine(ev) => match ev {
                 Event::StreamerStatus { id, status } => {
                     self.statuses.insert(id, status);
@@ -1190,6 +1239,7 @@ impl App {
                     self.processes.remove(&id);
                     self.recording_files.remove(&id);
                     self.expanded_procs.remove(&id);
+                    self.output.remove(&id);
                 }
                 Event::Output { .. } => {}
                 Event::Log(line) => self.push_log(line),
@@ -1269,4 +1319,21 @@ fn engine_stream() -> impl Stream<Item = Msg> {
         }
         std::future::pending::<()>().await;
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_log_keeps_newest_lines() {
+        let mut log = OutputLog::default();
+        for i in 0..OUTPUT_MAX_LINES + 3 {
+            log.push(&format!("line {i}"));
+        }
+        let lines: Vec<&str> = log.text.lines().collect();
+        assert_eq!(lines.len(), OUTPUT_MAX_LINES);
+        assert_eq!(lines[0], "line 3");
+        assert_eq!(lines[OUTPUT_MAX_LINES - 1], format!("line {}", OUTPUT_MAX_LINES + 2));
+    }
 }

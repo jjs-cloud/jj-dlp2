@@ -35,6 +35,7 @@ struct Prefs {
     remember_size: bool,
     win_w: f32,
     win_h: f32,
+    wrap_output: bool,
     files: FilesPrefs,
 }
 
@@ -63,6 +64,7 @@ impl Default for Prefs {
             remember_size: false,
             win_w: WIN_DEFAULT_W,
             win_h: WIN_DEFAULT_H,
+            wrap_output: true,
             files: FilesPrefs::default(),
         }
     }
@@ -210,6 +212,18 @@ pub fn load_log_lines() -> f32 {
 pub fn save_log_lines(lines: f32) {
     let mut prefs = read();
     prefs.log_lines = lines;
+    write(&prefs);
+}
+
+/// Reads whether command output lines wrap in the Processes tab.
+pub fn load_wrap_output() -> bool {
+    read().wrap_output
+}
+
+/// Saves whether command output lines wrap in the Processes tab.
+pub fn save_wrap_output(on: bool) {
+    let mut prefs = read();
+    prefs.wrap_output = on;
     write(&prefs);
 }
 
