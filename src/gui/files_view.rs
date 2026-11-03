@@ -17,7 +17,16 @@ const W_MODIFIED: f32 = 160.0;
 const W_SIZE: f32 = 90.0;
 const W_RATE: f32 = 100.0;
 const INDENT: f32 = 18.0;
-const STATUS_H: f32 = 32.0;
+const STATUS_H: f32 = 20.0;
+
+/// Compact button that fits the one-line status row.
+fn small_act<'a>(s: Skin, label: &'static str, m: Option<FilesMsg>, kind: BtnKind) -> Element<'a, Msg> {
+    button(btn_label(&s, label).size(11))
+        .on_press_maybe(m.map(Msg::Files))
+        .padding([0.0, 8.0])
+        .style(skin::btn(s, kind))
+        .into()
+}
 
 fn act<'a>(s: Skin, label: &'static str, m: Option<FilesMsg>, kind: BtnKind) -> Element<'a, Msg> {
     button(btn_label(&s, label).size(13))
@@ -134,11 +143,11 @@ impl App {
         status = status.push(container(muted(&s, f.status_text(self.now).unwrap_or(""))).width(Length::Fill).clip(true));
         for j in &f.jobs {
             let finishing = j.token.finishing();
-            let name = t(&s, format!("{}: {}", j.kind.label(), file_name(&j.target))).size(13).wrapping(Wrapping::None);
+            let name = t(&s, format!("{}: {}", j.kind.label(), file_name(&j.target))).size(12).wrapping(Wrapping::None);
             status = status.push(container(name).max_width(220.0).clip(true));
-            status = status.push(act(s, if finishing { "Finishing…" } else { "Cancel" }, (!finishing).then_some(FilesMsg::CancelJob(j.id)), BtnKind::Danger));
+            status = status.push(small_act(s, if finishing { "Finishing…" } else { "Cancel" }, (!finishing).then_some(FilesMsg::CancelJob(j.id)), BtnKind::Danger));
         }
-        let status = container(status).center_y(STATUS_H).width(Length::Fill);
+        top = top.push(container(status).center_y(STATUS_H).width(Length::Fill));
 
         let head = row![
             Space::new().width(INDENT + 4.0),
@@ -185,7 +194,6 @@ impl App {
             title,
             actions,
             top,
-            status,
             head,
             scrollable(list).id(scroll_id()).on_scroll(|v| Msg::Files(FilesMsg::Scrolled(v))).height(Length::Fill),
             footer,
