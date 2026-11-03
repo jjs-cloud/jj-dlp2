@@ -104,8 +104,6 @@ const COLUMN_FRAME: f32 = 1.0;
 const COLUMN_GAP: f32 = 14.0;
 const SITE_CLIP_CHARS: usize = 12;
 const SITE_CHAR_W: f32 = 0.6;
-const TIME_CHARS: f32 = 11.0;
-const TIME_CHAR_W: f32 = 0.6;
 const PW_SITE: u32 = 104;
 const PW_STATE: u32 = 170;
 const PW_OPEN: u32 = 56;
@@ -125,7 +123,6 @@ struct RowMetrics {
     dot: f32,
     toggler: f32,
     site_w: f32,
-    time_w: f32,
     spacing: f32,
     pad_h: f32,
 }
@@ -148,7 +145,6 @@ impl RowMetrics {
             dot: at(7.0, 10.0).round(),
             toggler: at(12.0, 18.0).round(),
             site_w: (site_chars as f32 * chip * SITE_CHAR_W + 2.0 * chip_pad_h).ceil() + 2.0,
-            time_w: (TIME_CHARS * text(10.0, 12.0) * TIME_CHAR_W).ceil() + 2.0,
             spacing: at(8.0, 12.0),
             pad_h: at(6.0, 12.0) - pad_trim,
         }
@@ -706,15 +702,11 @@ impl App {
             .width(m.site_w)
             .clip(true),
             name_el,
-            container(
-                iced::widget::text(time_text)
-                    .font(s.font)
-                    .size(m.info)
-                    .color(time_color)
-                    .wrapping(Wrapping::None)
-            )
-            .width(m.time_w)
-            .clip(true),
+            iced::widget::text(time_text)
+                .font(s.font)
+                .size(m.info)
+                .color(time_color)
+                .wrapping(Wrapping::None),
             compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id)),
             toggler(st.enabled)
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
