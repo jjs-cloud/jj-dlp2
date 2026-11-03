@@ -428,8 +428,8 @@ impl App {
                 .style(skin::btn(s, kind))
         };
         let mut title = row![
-            switch("LIVESTREAMS", MonitorTab::Livestreams),
-            switch("POSTS", MonitorTab::Posts),
+            switch("Livestreams", MonitorTab::Livestreams),
+            switch("Posts", MonitorTab::Posts),
             Space::new().width(Length::Fill)
         ]
             .spacing(8)
@@ -448,7 +448,9 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
+        if self.monitor_tab == MonitorTab::Livestreams {
+            title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
+        }
         if self.monitor_tab == MonitorTab::Posts {
             return column![title, muted(&s, "Coming soon!")].spacing(12).into();
         }
@@ -2152,13 +2154,30 @@ impl App {
                         .on_press(Msg::DefaultsSite(id))
                         .padding([5.0, 12.0])
                         .style(skin::btn(s, BtnKind::Ghost)),
-                )
-                .push(
+                );
+            if self.confirm_remove_site == Some(id) {
+                actions = actions
+                    .push(warn_text(&s, format!("Remove site and {count} streamers?")))
+                    .push(
+                        button(t(&s, "Confirm").size(13))
+                            .on_press(Msg::ConfirmRemoveSite(id))
+                            .padding([5.0, 12.0])
+                            .style(skin::btn(s, BtnKind::Danger)),
+                    )
+                    .push(
+                        button(t(&s, "Cancel").size(13))
+                            .on_press(Msg::CancelRemoveSite)
+                            .padding([5.0, 12.0])
+                            .style(skin::btn(s, BtnKind::Ghost)),
+                    );
+            } else {
+                actions = actions.push(
                     button(t(&s, "Remove site").size(13))
                         .on_press(Msg::RemoveSite(id))
                         .padding([5.0, 12.0])
                         .style(skin::btn(s, BtnKind::Danger)),
                 );
+            }
         } else {
             actions = actions
                 .push(

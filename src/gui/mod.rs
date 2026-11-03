@@ -603,6 +603,8 @@ pub enum Msg {
     DefaultsStreamer(StreamerId),
     AddSite(Preset),
     RemoveSite(SiteId),
+    ConfirmRemoveSite(SiteId),
+    CancelRemoveSite,
     Draft(SiteId, DraftField),
     SaveSite(SiteId),
     RevertSite(SiteId),
@@ -673,6 +675,7 @@ pub struct App {
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: HashMap<SiteId, (String, String)>,
     open_streamer_settings: HashSet<StreamerId>,
+    confirm_remove_site: Option<SiteId>,
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
@@ -723,6 +726,7 @@ impl App {
             new_streamer: HashMap::new(),
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
+            confirm_remove_site: None,
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
@@ -871,13 +875,25 @@ impl App {
             }
             Msg::SetTab(t) => {
                 self.tab = t;
+                if t == Tab::Monitor {
+                    // Collapse any open streamer settings on entering Monitor.
+                    self.open_streamer_settings.clear();
+                    self.schedule_picker = None;
+                }
                 if t == Tab::Files {
                     self.files.on_enter();
                 }
             }
             Msg::Files(m) => return self.files_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
-            Msg::SetMonitorTab(w) => self.monitor_tab = w,
+            Msg::SetMonitorTab(w) => {
+                if w == MonitorTab::Livestreams && self.monitor_tab != w {
+                    // Collapse any open streamer settings when returning to Livestreams.
+                    self.open_streamer_settings.clear();
+                    self.schedule_picker = None;
+                }
+                self.monitor_tab = w;
+            }
             Msg::OpenAddSite => {
                 self.tab = Tab::Settings;
                 self.settings_tab = SettingsTab::Sites;
@@ -948,9 +964,14 @@ impl App {
                 if id == NEW_SITE_ID {
                     self.drafts.remove(&id);
                 } else {
-                    self.client.send(PolicyCommand::RemoveSite(id));
+                    self.confirm_remove_site = Some(id);
                 }
             }
+            Msg::ConfirmRemoveSite(id) => {
+                self.confirm_remove_site = None;
+                self.client.send(PolicyCommand::RemoveSite(id));
+            }
+            Msg::CancelRemoveSite => self.confirm_remove_site = None,
             Msg::Draft(id, field) => {
                 if let Some(d) = self.drafts.get_mut(&id) {
                     match field {
@@ -1224,6 +1245,9 @@ impl App {
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.open_streamer_settings.retain(|id| s.streamers.iter().any(|x| x.id == *id));
         self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
+        if self.confirm_remove_site.is_some_and(|id| !s.sites.iter().any(|x| x.id == id)) {
+            self.confirm_remove_site = None;
+        }
         self.issues.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.settings = s;
     }
