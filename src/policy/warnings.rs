@@ -63,9 +63,9 @@ fn parse_patterns(text: &str) -> Vec<String> {
     text.split('|').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect()
 }
 
-/// True when the lowercase `line` contains any of the lowercase `patterns`.
-fn matches_any(line: &str, patterns: &[String]) -> bool {
-    patterns.iter().any(|p| line.contains(p.as_str()))
+/// The first of the lowercase `patterns` that the lowercase `line` contains.
+fn first_match<'a>(line: &str, patterns: &'a [String]) -> Option<&'a str> {
+    patterns.iter().map(String::as_str).find(|p| line.contains(p))
 }
 
 #[derive(Default)]
@@ -78,8 +78,8 @@ pub struct WarnTracker {
 }
 
 impl WarnTracker {
-    /// Counts the kinds `line` matches under the site's patterns; returns those not yet logged this live span.
-    pub fn on_line(&mut self, id: StreamerId, site: &Site, line: &str) -> Vec<WarnKind> {
+    /// Counts the kinds `line` matches under the site's patterns; returns those not yet logged this live span, with the pattern hit.
+    pub fn on_line(&mut self, id: StreamerId, site: &Site, line: &str) -> Vec<(WarnKind, String)> {
         let c = self.compiled.entry(site.id).or_default();
         if !c.is_current(site) {
             *c = Compiled::of(site);
@@ -89,14 +89,12 @@ impl WarnTracker {
         }
         let low = line.to_lowercase();
         let hits = [
-            (WarnKind::Interrupt, matches_any(&low, &c.interrupt)),
-            (WarnKind::Error, matches_any(&low, &c.error)),
+            (WarnKind::Interrupt, first_match(&low, &c.interrupt).map(str::to_string)),
+            (WarnKind::Error, first_match(&low, &c.error).map(str::to_string)),
         ];
         let mut fresh = Vec::new();
         for (kind, hit) in hits {
-            if !hit {
-                continue;
-            }
+            let Some(pattern) = hit else { continue };
             let w = self.counts.entry(id).or_default();
             match kind {
                 WarnKind::Interrupt => w.interrupts += 1,
@@ -104,7 +102,7 @@ impl WarnTracker {
             }
             self.dirty = true;
             if self.logged.insert((id, kind)) {
-                fresh.push(kind);
+                fresh.push((kind, pattern));
             }
         }
         fresh
@@ -162,7 +160,8 @@ mod tests {
     fn patterns_split_trim_and_skip_blanks() {
         assert_eq!(parse_patterns(" Packet corrupt | timestamp discontinuity ||"), ["packet corrupt", "timestamp discontinuity"]);
         assert!(parse_patterns("  ").is_empty());
-        assert!(!matches_any("anything", &[]));
+        assert_eq!(first_match("a packet corrupt b", &["x".to_string(), "packet corrupt".to_string()]), Some("packet corrupt"));
+        assert_eq!(first_match("anything", &[]), None);
     }
 
     #[test]
@@ -220,12 +219,12 @@ mod tests {
     #[test]
     fn each_kind_is_logged_once_per_live_span() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        assert_eq!(t.on_line(1, &site, PACKET), [WarnKind::Error]);
+        assert_eq!(t.on_line(1, &site, PACKET), [(WarnKind::Error, "packet corrupt".to_string())]);
         assert!(t.on_line(1, &site, DISCONT).is_empty());
-        assert_eq!(t.on_line(1, &site, AD_TAG), [WarnKind::Interrupt]);
-        assert_eq!(t.on_line(2, &site, PACKET), [WarnKind::Error]);
+        assert_eq!(t.on_line(1, &site, AD_TAG), [(WarnKind::Interrupt, "ext-x-discontinuity".to_string())]);
+        assert_eq!(t.on_line(2, &site, PACKET), [(WarnKind::Error, "packet corrupt".to_string())]);
         t.end_span(1);
-        assert_eq!(t.on_line(1, &site, PACKET), [WarnKind::Error]);
+        assert_eq!(t.on_line(1, &site, PACKET), [(WarnKind::Error, "packet corrupt".to_string())]);
         assert!(t.on_line(2, &site, PACKET).is_empty());
     }
 

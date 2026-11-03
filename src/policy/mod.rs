@@ -624,8 +624,8 @@ impl Policy {
             return;
         }
         let name = self.settings.streamers.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
-        for kind in fresh {
-            self.log(format!("{name}: {}", kind.log_text()));
+        for (kind, pattern) in fresh {
+            self.log(format!("{name}: {}: {pattern}", kind.log_text()));
         }
     }
 
