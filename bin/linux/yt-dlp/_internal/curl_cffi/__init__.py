@@ -2,18 +2,27 @@ __all__ = [
     "Curl",
     "AsyncCurl",
     "CurlMime",
+    "CurlShare",
     "CurlError",
     "CurlInfo",
     "CurlOpt",
     "CurlMOpt",
     "CurlECode",
     "CurlHttpVersion",
+    "CurlProxyType",
     "CurlFollow",
     "CurlSslVersion",
     "CurlWsFlag",
+    "CurlWsOption",
+    "CurlShareOpt",
+    "CurlLockData",
+    "CurlLockAccess",
+    "CurlShareCode",
     "config_warnings",
+    "Fingerprint",
+    "FingerprintManager",
+    "get_fingerprint",
     "ffi",
-    "is_pro",
     "lib",
     "Session",
     "AsyncSession",
@@ -39,6 +48,8 @@ __all__ = [
     "WebSocketRetryStrategy",
     "WsCloseCode",
     "ExtraFingerprints",
+    "CacheBackend",
+    "FileCacheBackend",
     "CookieTypes",
     "HeaderTypes",
     "ProxySpec",
@@ -57,21 +68,29 @@ from .const import (
     CurlFollow,
     CurlHttpVersion,
     CurlInfo,
+    CurlLockAccess,
+    CurlLockData,
     CurlMOpt,
     CurlOpt,
+    CurlProxyType,
+    CurlShareCode,
+    CurlShareOpt,
     CurlSslVersion,
     CurlWsFlag,
+    CurlWsOption,
 )
-from .curl import Curl, CurlError, CurlMime
+from .curl import Curl, CurlError, CurlMime, CurlShare
 
 from .requests import (
     AsyncSession,
     AsyncWebSocket,
     BrowserType,
     BrowserTypeLiteral,
+    CacheBackend,
     Cookies,
     CookieTypes,
     ExtraFingerprints,
+    FileCacheBackend,
     Headers,
     HeaderTypes,
     ProxySpec,
@@ -95,6 +114,7 @@ from .requests import (
     request,
 )
 
-from .utils import config_warnings, is_pro
+from .utils import config_warnings
+from .fingerprints import Fingerprint, FingerprintManager, get_fingerprint
 
 config_warnings(on=False)

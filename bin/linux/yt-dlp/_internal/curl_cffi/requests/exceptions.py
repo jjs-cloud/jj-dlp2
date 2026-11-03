@@ -3,7 +3,7 @@
 # With our own addtions
 
 import json
-from typing import Literal, Union
+from typing import Any, Literal, Union
 
 from ..const import CurlECode
 from ..curl import CurlError
@@ -18,8 +18,8 @@ class RequestException(CurlError, OSError):
         msg,
         code: Union[CurlECode, Literal[0]] = 0,
         response=None,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ):
         super().__init__(msg, code, *args, **kwargs)
         self.response = response
@@ -146,9 +146,8 @@ class RetryError(RequestException):
     """Custom retries logic failed. not used"""
 
 
-# not used
 class UnrewindableBodyError(RequestException):
-    """Requests encountered an error when trying to rewind a body. not used"""
+    """The request body could not be rewound for a redirect or retry."""
 
 
 class InterfaceError(RequestException):
@@ -198,6 +197,7 @@ CODE2ERROR = {
     CurlECode.SSL_ENGINE_NOTFOUND: SSLError,
     CurlECode.SSL_ENGINE_SETFAILED: SSLError,
     CurlECode.SEND_ERROR: ConnectionError,
+    CurlECode.SEND_FAIL_REWIND: UnrewindableBodyError,
     CurlECode.RECV_ERROR: ConnectionError,
     CurlECode.SSL_CERTPROBLEM: SSLError,
     CurlECode.SSL_CIPHER: SSLError,
