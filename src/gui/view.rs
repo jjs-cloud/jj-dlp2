@@ -1942,9 +1942,9 @@ impl App {
         .spacing(8)
         .align_y(Alignment::End);
 
-        // Greyed, blank and non-editable while output forwarding is off; the stored text is kept.
-        let pattern_field = |value: &'a str, f: fn(String) -> DraftField| -> Element<'a, Msg> {
-            if d.forward_output {
+        // Greyed, blank and non-editable while output forwarding or the kind's warning is off; the stored text is kept.
+        let pattern_field = |value: &'a str, warn: bool, f: fn(String) -> DraftField| -> Element<'a, Msg> {
+            if d.forward_output && warn {
                 field("", value, f)
             } else {
                 text_input("", "").padding(5).size(13).style(skin::input(s)).into()
@@ -1958,16 +1958,30 @@ impl App {
                     .text_size(12)
             )
             .width(Length::Shrink),
+            container(
+                toggler(d.warn_interrupts)
+                    .label("Warn on Interrupts")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::WarnInterrupts(v)))
+                    .text_size(12)
+            )
+            .width(Length::Shrink),
+            container(
+                toggler(d.warn_errors)
+                    .label("Warn on Errors")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::WarnErrors(v)))
+                    .text_size(12)
+            )
+            .width(Length::Shrink),
             cell(
-                labeled("Interrupt patterns (separate with |)", pattern_field(&d.interrupt_patterns, DraftField::InterruptPatterns)),
+                labeled("Interrupt patterns (separate with |)", pattern_field(&d.interrupt_patterns, d.warn_interrupts, DraftField::InterruptPatterns)),
                 Length::FillPortion(1)
             ),
             cell(
-                labeled("Error patterns (separate with |)", pattern_field(&d.error_patterns, DraftField::ErrorPatterns)),
+                labeled("Error patterns (separate with |)", pattern_field(&d.error_patterns, d.warn_errors, DraftField::ErrorPatterns)),
                 Length::FillPortion(1)
             ),
         ]
-        .spacing(24)
+        .spacing(16)
         .align_y(Alignment::End);
 
         let split_input = text_input("", &d.split_minutes)

@@ -130,6 +130,10 @@ pub struct Site {
     pub interrupt_patterns: String,
     /// `|`-separated phrases that mark an ffmpeg error in recorder output; blank turns the ERROR chip off.
     pub error_patterns: String,
+    /// Count and flag interrupt matches; off ignores the interrupt patterns.
+    pub warn_interrupts: bool,
+    /// Count and flag error matches; off ignores the error patterns.
+    pub warn_errors: bool,
     /// Site colour as `#RRGGBB`; `None` uses the theme's secondary accent.
     pub color: Option<String>,
     /// Master switch for notifications about this site's streamers.
@@ -488,6 +492,8 @@ mod tests {
             forward_output: false,
             interrupt_patterns: String::new(),
             error_patterns: String::new(),
+            warn_interrupts: true,
+            warn_errors: true,
             color: None,
             notify: false,
             notify_desktop: false,

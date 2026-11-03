@@ -32,6 +32,8 @@ impl WarnKind {
 struct Compiled {
     interrupt_raw: String,
     error_raw: String,
+    warn_interrupts: bool,
+    warn_errors: bool,
     interrupt: Vec<String>,
     error: Vec<String>,
 }
@@ -41,13 +43,18 @@ impl Compiled {
         Self {
             interrupt_raw: site.interrupt_patterns.clone(),
             error_raw: site.error_patterns.clone(),
-            interrupt: parse_patterns(&site.interrupt_patterns),
-            error: parse_patterns(&site.error_patterns),
+            warn_interrupts: site.warn_interrupts,
+            warn_errors: site.warn_errors,
+            interrupt: if site.warn_interrupts { parse_patterns(&site.interrupt_patterns) } else { Vec::new() },
+            error: if site.warn_errors { parse_patterns(&site.error_patterns) } else { Vec::new() },
         }
     }
 
     fn is_current(&self, site: &Site) -> bool {
-        self.interrupt_raw == site.interrupt_patterns && self.error_raw == site.error_patterns
+        self.interrupt_raw == site.interrupt_patterns
+            && self.error_raw == site.error_patterns
+            && self.warn_interrupts == site.warn_interrupts
+            && self.warn_errors == site.warn_errors
     }
 }
 
@@ -185,6 +192,17 @@ mod tests {
         t.on_line(1, &site, AD_TAG);
         assert!(t.counts().is_empty());
         site.error_patterns.clear();
+        t.on_line(1, &site, PACKET);
+        assert!(t.counts().is_empty() && !t.take_dirty());
+    }
+
+    #[test]
+    fn warn_toggles_turn_a_kind_off() {
+        let (mut t, mut site) = (WarnTracker::default(), twitch());
+        site.warn_interrupts = false;
+        t.on_line(1, &site, AD_TAG);
+        assert!(t.counts().is_empty());
+        site.warn_errors = false;
         t.on_line(1, &site, PACKET);
         assert!(t.counts().is_empty() && !t.take_dirty());
     }

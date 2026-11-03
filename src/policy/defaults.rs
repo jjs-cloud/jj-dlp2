@@ -93,6 +93,8 @@ pub fn new_site(preset: Preset) -> NewSite {
         forward_output: true,
         interrupt_patterns: if matches!(preset, Preset::Twitch) { TWITCH_INTERRUPT_PATTERNS.into() } else { String::new() },
         error_patterns: DEFAULT_ERROR_PATTERNS.into(),
+        warn_interrupts: true,
+        warn_errors: true,
         color: Some(color.into()),
         notify: true,
         notify_desktop: true,
