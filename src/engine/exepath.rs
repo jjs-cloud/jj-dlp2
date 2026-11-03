@@ -76,10 +76,10 @@ mod tests {
     #[test]
     fn finds_file_in_later_base_with_mixed_separators() {
         let (a, b) = (temp("a"), temp("b"));
-        let file = b.join("bin").join("windows").join("yt-dlp.exe");
+        let file = b.join("bin").join("yt-dlp").join("windows").join("yt-dlp.exe");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"x").unwrap();
-        let r = resolve_in(r"bin\windows/yt-dlp.exe", &[a.clone(), b.clone()]);
+        let r = resolve_in(r"bin\yt-dlp/windows/yt-dlp.exe", &[a.clone(), b.clone()]);
         assert_eq!(PathBuf::from(r.exe), file);
         let _ = std::fs::remove_dir_all(a);
         let _ = std::fs::remove_dir_all(b);
@@ -88,8 +88,8 @@ mod tests {
     #[test]
     fn missing_file_falls_back_to_original() {
         let a = temp("missing");
-        let r = resolve_in(r"bin\nope\yt-dlp.exe", &[a.clone()]);
-        assert_eq!(r.exe, r"bin\nope\yt-dlp.exe");
+        let r = resolve_in(r"bin\yt-dlp\nope\yt-dlp.exe", &[a.clone()]);
+        assert_eq!(r.exe, r"bin\yt-dlp\nope\yt-dlp.exe");
         assert!(r.note.is_none());
         let _ = std::fs::remove_dir_all(a);
     }
@@ -99,14 +99,14 @@ mod tests {
     fn sets_executable_bit_once() {
         use std::os::unix::fs::PermissionsExt;
         let a = temp("chmod");
-        let file = a.join("bin").join("yt-dlp");
+        let file = a.join("bin").join("yt-dlp").join("linux").join("yt-dlp_linux");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"x").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let first = resolve_in("bin/yt-dlp", &[a.clone()]);
+        let first = resolve_in("bin/yt-dlp/linux/yt-dlp_linux", &[a.clone()]);
         assert!(first.note.unwrap().contains("set executable bit"));
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o755);
-        assert!(resolve_in("bin/yt-dlp", &[a.clone()]).note.is_none());
+        assert!(resolve_in("bin/yt-dlp/linux/yt-dlp_linux", &[a.clone()]).note.is_none());
         let _ = std::fs::remove_dir_all(a);
     }
 }

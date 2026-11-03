@@ -1615,12 +1615,14 @@ impl App {
                 .style(skin::btn(s, kind))
         };
         let switcher = row![
-            switch("Sites", SettingsTab::Sites),
+            switch("Livestreams", SettingsTab::Sites),
+            switch("Posts", SettingsTab::Posts),
             switch("General", SettingsTab::General)
         ]
         .spacing(8);
         let body = match self.settings_tab {
             SettingsTab::Sites => self.settings_sites(s),
+            SettingsTab::Posts => muted(&s, "Coming soon!").into(),
             SettingsTab::General => self.settings_general(s),
         };
         column![switcher, body].spacing(12).height(Length::Fill).into()

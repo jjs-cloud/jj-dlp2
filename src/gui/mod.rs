@@ -81,6 +81,7 @@ pub enum Tab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Sites,
+    Posts,
     General,
 }
 
@@ -906,6 +907,10 @@ impl App {
                 }
             }
             Msg::SetTab(t) => {
+                // Collapse all processes when leaving the Processes tab.
+                if self.tab == Tab::Processes && t != Tab::Processes {
+                    self.expanded_procs.clear();
+                }
                 self.tab = t;
                 if t == Tab::Monitor {
                     // Collapse any open streamer settings on entering Monitor.
@@ -927,6 +932,9 @@ impl App {
                 self.monitor_tab = w;
             }
             Msg::OpenAddSite => {
+                if self.tab == Tab::Processes {
+                    self.expanded_procs.clear();
+                }
                 self.tab = Tab::Settings;
                 self.settings_tab = SettingsTab::Sites;
             }
