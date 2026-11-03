@@ -628,7 +628,8 @@ impl Policy {
     /// Sends the batched output lines to front ends.
     fn flush_output(&mut self) {
         if !self.pending_output.is_empty() {
-            self.emit(PolicyEvent::Output(std::mem::take(&mut self.pending_output)));
+            let output = std::mem::take(&mut self.pending_output);
+            self.emit(PolicyEvent::Output(output));
         }
     }
 
