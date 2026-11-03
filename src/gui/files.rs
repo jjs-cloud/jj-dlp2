@@ -485,13 +485,11 @@ impl App {
             }
             FilesMsg::ExpandAll => {
                 self.files.collapsed.clear();
-                self.files.say("Expanded all folders");
                 self.files.rebuild();
             }
             FilesMsg::CollapseAll => {
                 let subs = rows::subfolders(&self.files.records, &self.files.roots);
                 self.files.collapsed.extend(subs);
-                self.files.say("Collapsed all folders");
                 self.files.rebuild();
             }
             FilesMsg::OpenSelected => {

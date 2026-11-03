@@ -137,7 +137,6 @@ pub enum PolicyCommand {
     OpenConfigDir,
     /// Opens the folder holding the recorder and checker logs.
     OpenLogsDir,
-    OpenOutputDir(SiteId),
     /// Opens the file a recorder is writing, once its path is verified.
     OpenRecording(RecorderId),
     /// Sends a test notification to the given targets, ignoring cooldowns.
@@ -1255,9 +1254,6 @@ impl Policy {
                 if let Err(e) = open::that_detached(&dir) {
                     self.log(format!("could not open {}: {e}", dir.display()));
                 }
-            }
-            PolicyCommand::OpenOutputDir(site_id) => {
-                let _ = open::that_detached(output_dir(&self.settings, site_id));
             }
             PolicyCommand::OpenRecording(id) => self.open_recording(id),
             PolicyCommand::TestNotification { site_name, targets } => {

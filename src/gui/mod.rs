@@ -84,6 +84,13 @@ pub enum SettingsTab {
     General,
 }
 
+/// Sub-pages of the Monitor tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonitorTab {
+    Livestreams,
+    Posts,
+}
+
 /// Where the update banner is in its flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateStage {
@@ -575,11 +582,11 @@ pub enum Msg {
     SetTab(Tab),
     Files(files::FilesMsg),
     SetSettingsTab(SettingsTab),
+    SetMonitorTab(MonitorTab),
     OpenAddSite,
     ThemeChosen(ThemeKind),
     OpenConfigDir,
     OpenLogsDir,
-    OpenOutputDir(SiteId),
     OpenRecording(RecorderId),
     NewStreamerName(SiteId, String),
     NewStreamerUsername(SiteId, String),
@@ -669,6 +676,8 @@ pub struct App {
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
+    monitor_tab: MonitorTab,
+    site_added: Option<(String, u64)>,
     global_out: String,
     phase: f32,
     now: u64,
@@ -717,6 +726,8 @@ impl App {
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
+            monitor_tab: MonitorTab::Livestreams,
+            site_added: None,
             global_out: String::new(),
             phase: 0.0,
             now: now_secs(),
@@ -850,6 +861,7 @@ impl App {
                 if let Some(name) = self.pending_jump.clone() {
                     if let Some(task) = self.jump_to_site(&name) {
                         self.pending_jump = None;
+                        self.site_added = Some((name, self.now));
                         return task;
                     }
                 }
@@ -865,6 +877,7 @@ impl App {
             }
             Msg::Files(m) => return self.files_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
+            Msg::SetMonitorTab(w) => self.monitor_tab = w,
             Msg::OpenAddSite => {
                 self.tab = Tab::Settings;
                 self.settings_tab = SettingsTab::Sites;
@@ -875,7 +888,6 @@ impl App {
             }
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenLogsDir => self.client.send(PolicyCommand::OpenLogsDir),
-            Msg::OpenOutputDir(site_id) => self.client.send(PolicyCommand::OpenOutputDir(site_id)),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
             Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
             Msg::NewStreamerUsername(id, v) => self.new_streamer.entry(id).or_default().1 = v,

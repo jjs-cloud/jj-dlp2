@@ -84,7 +84,7 @@ fn cell<'a>(w: f32, content: impl Into<Element<'a, Msg>>) -> Element<'a, Msg> {
     container(content).width(w).padding([0.0, 6.0]).into()
 }
 
-fn head_cell<'a>(s: Skin, sort: Sort, label: &'static str, key: SortKey, w: Length) -> Element<'a, Msg> {
+fn head_cell<'a>(s: Skin, sort: Sort, label: &'static str, key: SortKey, w: Length, left: f32) -> Element<'a, Msg> {
     let arrow = if sort.key != key {
         ""
     } else if sort.asc {
@@ -95,7 +95,7 @@ fn head_cell<'a>(s: Skin, sort: Sort, label: &'static str, key: SortKey, w: Leng
     let kind = if sort.key == key { BtnKind::Primary } else { BtnKind::Ghost };
     button(btn_label(&s, format!("{label}{arrow}")).size(12).width(Length::Fill))
         .on_press(Msg::Files(FilesMsg::HeaderSort(key)))
-        .padding([4.0, 6.0])
+        .padding(iced::Padding { top: 4.0, right: 6.0, bottom: 4.0, left })
         .width(w)
         .style(skin::btn(s, kind))
         .into()
@@ -114,7 +114,6 @@ impl App {
         let title = row![
             self.section_title(s, "FILES"),
             Space::new().width(Length::Fill),
-            flag("Group by folder", f.group, FilesMsg::ToggleGroup),
             flag("Delete empty folders", f.delete_empty, FilesMsg::ToggleDeleteEmpty),
         ]
         .spacing(16)
@@ -123,6 +122,7 @@ impl App {
         let actions = row![
             act(s, "Expand all", f.any_collapsed().then_some(FilesMsg::ExpandAll), BtnKind::Ghost),
             act(s, "Collapse all", f.any_expanded().then_some(FilesMsg::CollapseAll), BtnKind::Ghost),
+            flag("Group by folder", f.group, FilesMsg::ToggleGroup),
             Space::new().width(Length::Fill),
             act(s, "Open", has_file.then_some(FilesMsg::OpenSelected), BtnKind::Ghost),
             act(s, "Show in folder", f.sel.is_some().then_some(FilesMsg::RevealSelected), BtnKind::Ghost),
@@ -150,12 +150,11 @@ impl App {
         top = top.push(container(status).center_y(STATUS_H).width(Length::Fill));
 
         let head = row![
-            Space::new().width(INDENT + 4.0),
-            head_cell(s, f.sort, "Name", SortKey::Name, Length::Fill),
-            head_cell(s, f.sort, "Status", SortKey::Status, Length::Fixed(W_STATUS)),
-            head_cell(s, f.sort, "Modified", SortKey::Modified, Length::Fixed(W_MODIFIED)),
-            head_cell(s, f.sort, "Size", SortKey::Size, Length::Fixed(W_SIZE)),
-            head_cell(s, f.sort, "Rate", SortKey::Rate, Length::Fixed(W_RATE)),
+            head_cell(s, f.sort, "Name", SortKey::Name, Length::Fill, INDENT + 10.0),
+            head_cell(s, f.sort, "Status", SortKey::Status, Length::Fixed(W_STATUS), 6.0),
+            head_cell(s, f.sort, "Modified", SortKey::Modified, Length::Fixed(W_MODIFIED), 6.0),
+            head_cell(s, f.sort, "Size", SortKey::Size, Length::Fixed(W_SIZE), 6.0),
+            head_cell(s, f.sort, "Rate", SortKey::Rate, Length::Fixed(W_RATE), 6.0),
             Space::new().width(8.0),
         ]
         .spacing(0)
@@ -187,7 +186,7 @@ impl App {
         let footer = row![
             muted(&s, format!("{} files · {}", f.records.len(), human_size(total))),
             Space::new().width(Length::Fill),
-            muted(&s, "Enter / double-click: open    Del: recycle bin    Shift+Del: delete permanently").wrapping(Wrapping::None),
+            muted(&s, "↑/↓/PgUp/PgDn/Home/End: move    Enter / double-click: open    Del: recycle bin    Shift+Del: delete permanently").wrapping(Wrapping::None),
         ];
 
         let body = column![

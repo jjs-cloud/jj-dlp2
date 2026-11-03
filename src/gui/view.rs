@@ -2,7 +2,7 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, NEW_SITE_ID, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
+    App, DraftField, MonitorTab, Msg, NEW_SITE_ID, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
     StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
@@ -17,6 +17,9 @@ use iced::{Alignment, Color, Element, Length};
 use iced_aw::date_picker::Date;
 use iced_aw::time_picker::{Period, Time};
 use iced_aw::{DatePicker, TimePicker};
+
+/// Seconds the "has been added!" message stays up.
+const SITE_ADDED_SECS: u64 = 4;
 
 const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -416,14 +419,28 @@ impl App {
     }
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
-        let mut title = row![self.section_title(s, "STREAMERS"), Space::new().width(Length::Fill)]
-            .spacing(14)
+        let switch = |label: &'static str, which: MonitorTab| {
+            let on = self.monitor_tab == which;
+            let kind = if on { BtnKind::TabActive } else { BtnKind::TabIdle };
+            button(t(&s, label).size(13).color(if on { s.bg } else { s.muted }))
+                .on_press(Msg::SetMonitorTab(which))
+                .padding([6.0, 16.0])
+                .style(skin::btn(s, kind))
+        };
+        let mut title = row![
+            switch("LIVESTREAMS", MonitorTab::Livestreams),
+            switch("POSTS", MonitorTab::Posts),
+            Space::new().width(Length::Fill)
+        ]
+            .spacing(8)
             .padding(iced::Padding {
                 right: 8.0,
                 ..Default::default()
             })
             .align_y(Alignment::Center);
-        if self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id)) {
+        if self.monitor_tab == MonitorTab::Livestreams
+            && (self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id)))
+        {
             title = title.push(
                 button(btn_label(&s, "Clear warnings").size(12))
                     .on_press(Msg::ClearWarnings)
@@ -432,6 +449,9 @@ impl App {
             );
         }
         title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
+        if self.monitor_tab == MonitorTab::Posts {
+            return column![title, muted(&s, "Coming soon!")].spacing(12).into();
+        }
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
@@ -1169,14 +1189,13 @@ impl App {
                 .label("Record")
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
                 .text_size(12),
-            button(t(&s, "Settings").size(12))
+            button(btn_label(&s, "Settings").size(12))
                 .on_press(Msg::ToggleStreamerSettings(id))
                 .padding([5.0, 10.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-            button(t(&s, "Folder").size(12))
-                .on_press(Msg::OpenOutputDir(st.site_id))
-                .padding([5.0, 10.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
+                .style(skin::btn(
+                    s,
+                    if self.open_streamer_settings.contains(&id) { BtnKind::Primary } else { BtnKind::Ghost }
+                )),
             button(t(&s, "Remove").size(12))
                 .on_press(Msg::RemoveStreamer(id))
                 .padding([5.0, 10.0])
@@ -1582,6 +1601,11 @@ impl App {
                     .padding([7.0, 14.0])
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
+        }
+        if let Some((name, at)) = &self.site_added {
+            if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
+                add = add.push(t(&s, format!("{name} has been added!")).size(13).color(s.live));
+            }
         }
         let new_draft = self.drafts.get(&NEW_SITE_ID);
         if self.settings.sites.is_empty() && new_draft.is_none() {
