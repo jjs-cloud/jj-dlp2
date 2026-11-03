@@ -46,7 +46,7 @@ pub fn run(client: PolicyClient) -> iced::Result {
         .title("jj-dlp")
         .subscription(App::subscription)
         .theme(App::theme)
-        .window(window::Settings { size: Size::new(win_w, win_h), icon: app_icon(), ..Default::default() })
+        .window(window::Settings { size: Size::new(win_w, win_h), position: window::Position::Centered, icon: app_icon(), ..Default::default() })
         .antialiasing(true)
         .run();
     save_size_on_exit();

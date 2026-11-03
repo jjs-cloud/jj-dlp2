@@ -17,7 +17,6 @@ const W_MODIFIED: f32 = 160.0;
 const W_SIZE: f32 = 90.0;
 const W_RATE: f32 = 100.0;
 const INDENT: f32 = 18.0;
-const STATUS_H: f32 = 20.0;
 
 /// Compact button that fits the one-line status row.
 fn small_act<'a>(s: Skin, label: &'static str, m: Option<FilesMsg>, kind: BtnKind) -> Element<'a, Msg> {
@@ -111,14 +110,6 @@ impl App {
             act(s, label, has_file.then_some(FilesMsg::OpenPanel(k)), kind_for(k))
         };
 
-        let title = row![
-            self.section_title(s, "FILES"),
-            Space::new().width(Length::Fill),
-            flag("Delete empty folders", f.delete_empty, FilesMsg::ToggleDeleteEmpty),
-        ]
-        .spacing(16)
-        .align_y(Alignment::Center);
-
         let actions = row![
             act(s, "Expand all", f.any_collapsed().then_some(FilesMsg::ExpandAll), BtnKind::Ghost),
             act(s, "Collapse all", f.any_expanded().then_some(FilesMsg::CollapseAll), BtnKind::Ghost),
@@ -134,11 +125,6 @@ impl App {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        let mut top = Column::new().spacing(8);
-        if let Some(p) = &f.panel {
-            top = top.push(self.files_panel(s, p));
-        }
-
         let mut status = Row::new().spacing(10).align_y(Alignment::Center);
         status = status.push(container(muted(&s, f.status_text(self.now).unwrap_or(""))).width(Length::Fill).clip(true));
         for j in &f.jobs {
@@ -147,7 +133,14 @@ impl App {
             status = status.push(container(name).max_width(220.0).clip(true));
             status = status.push(small_act(s, if finishing { "Finishing…" } else { "Cancel" }, (!finishing).then_some(FilesMsg::CancelJob(j.id)), BtnKind::Danger));
         }
-        top = top.push(container(status).center_y(STATUS_H).width(Length::Fill));
+
+        let title = row![
+            self.section_title(s, "FILES"),
+            container(status).width(Length::Fill),
+            flag("Delete empty folders", f.delete_empty, FilesMsg::ToggleDeleteEmpty),
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center);
 
         let head = row![
             head_cell(s, f.sort, "Name", SortKey::Name, Length::Fill, 6.0),
@@ -189,15 +182,13 @@ impl App {
             muted(&s, "↑/↓/PgUp/PgDn/Home/End: move    Enter / double-click: open    Del: recycle bin    Shift+Del: delete permanently").wrapping(Wrapping::None),
         ];
 
-        let body = column![
-            title,
-            actions,
-            top,
-            head,
-            scrollable(list).id(scroll_id()).on_scroll(|v| Msg::Files(FilesMsg::Scrolled(v))).height(Length::Fill),
-            footer,
-        ]
-        .spacing(10);
+        let mut body = column![title, actions].spacing(10);
+        if let Some(p) = &f.panel {
+            body = body.push(self.files_panel(s, p));
+        }
+        body = body.push(head);
+        body = body.push(scrollable(list).id(scroll_id()).on_scroll(|v| Msg::Files(FilesMsg::Scrolled(v))).height(Length::Fill));
+        body = body.push(footer);
         container(body).padding(14).width(Length::Fill).height(Length::Fill).style(skin::card(s, None)).into()
     }
 

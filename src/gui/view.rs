@@ -384,20 +384,26 @@ impl App {
     }
 
     fn tabs(&self, s: Skin) -> Element<'_, Msg> {
+        let alert = self.monitor_alert();
         let tab = |label: &'static str, which: Tab| {
+            let pulsing = alert && which == Tab::Monitor;
             let kind = if self.tab == which {
                 BtnKind::TabActive
             } else {
                 BtnKind::TabIdle
             };
-            button(
+            let b = button(
                 t(&s, label)
                     .size(14)
-                    .color(if self.tab == which { s.bg } else { s.muted }),
+                    .color(if self.tab == which || pulsing { s.bg } else { s.muted }),
             )
             .on_press(Msg::SetTab(which))
-            .padding([7.0, 18.0])
-            .style(skin::btn(s, kind))
+            .padding([7.0, 18.0]);
+            if pulsing {
+                b.style(skin::tab_alert(s, self.phase))
+            } else {
+                b.style(skin::btn(s, kind))
+            }
         };
         row![
             tab("Monitor", Tab::Monitor),
@@ -438,9 +444,7 @@ impl App {
                 ..Default::default()
             })
             .align_y(Alignment::Center);
-        if self.monitor_tab == MonitorTab::Livestreams
-            && (self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id)))
-        {
+        if self.monitor_tab == MonitorTab::Livestreams && self.monitor_alert() {
             title = title.push(
                 button(btn_label(&s, "Clear warnings").size(12))
                     .on_press(Msg::ClearWarnings)
@@ -591,6 +595,11 @@ impl App {
     }
 
     /// True when at least one RESTARTED, INTERRUPT or ERROR chip is showing.
+    /// True while the Clear warnings button applies.
+    fn monitor_alert(&self) -> bool {
+        self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id))
+    }
+
     fn any_warning_chip(&self) -> bool {
         self.settings.streamers.iter().any(|st| {
             let w = self.warns(st.id);

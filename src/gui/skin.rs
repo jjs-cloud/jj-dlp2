@@ -297,6 +297,22 @@ pub fn btn(s: Skin, kind: BtnKind) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
+/// Pulsing warn-to-danger tab button used while warnings are present.
+pub fn tab_alert(s: Skin, phase: f32) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let ph = pulse(phase);
+        let alpha = if hovered { 1.0 } else { 0.55 + 0.45 * ph };
+        button::Style {
+            background: Some(s.gradient(0.0, with_alpha(s.warn, alpha), with_alpha(s.danger, alpha))),
+            text_color: s.bg,
+            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: Radius::from(s.radius * 0.7) },
+            shadow: s.glow_shadow(s.danger, 0.3 + 0.5 * ph, 10.0 + 10.0 * ph),
+            snap: false,
+        }
+    }
+}
+
 /// A clickable tile or table row; `color` tints the border when it is not the muted colour.
 pub fn tile(s: Skin, color: Color, selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
