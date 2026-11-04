@@ -704,8 +704,8 @@ impl App {
             name_el,
             {
                 let mut times = Row::new().spacing(4).align_y(Alignment::Center);
-                if let Some(&(_, h)) = self.resolutions.get(&id) {
-                    times = times.push(iced::widget::text(format!("{h}p")).font(s.font).size(m.info).color(s.muted).wrapping(Wrapping::None));
+                if let Some(&(w, h)) = self.resolutions.get(&id) {
+                    times = times.push(iced::widget::text(format!("{}p ", w.min(h))).font(s.font).size(m.info).color(s.muted).wrapping(Wrapping::None));
                 }
                 times.push(iced::widget::text(time_text).font(s.font).size(m.info).color(time_color).wrapping(Wrapping::None))
             },
