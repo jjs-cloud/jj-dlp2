@@ -1,6 +1,6 @@
 [package]
 name = "jj-dlp"
-version = "2.0.2-rc.2"
+version = "2.0.2-rc.1"
 edition = "2024"
 rust-version = "1.89"
 repository = "https://github.com/jjs-cloud/jj-dlp2"
@@ -8,7 +8,8 @@ repository = "https://github.com/jjs-cloud/jj-dlp2"
 [dependencies]
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
 directories = "6.0.0"
-iced = { version = "0.14.0", features = ["tokio", "advanced"] }
+iced = { version = "0.14.0", features = ["tokio", "advanced", "image"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["date_picker", "time_picker"] }
 open = "5.4.5"
 rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }

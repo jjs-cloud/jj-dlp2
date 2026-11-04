@@ -1,0 +1,449 @@
+//! Posts monitor: tracked accounts, the post library and their JSON persistence.
+
+pub mod runner;
+
+use crate::api::DEFAULT_EXE;
+use crate::policy::notify;
+use crate::settings::config_dir;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+pub const DEFAULT_INTERVAL_SECS: u64 = 60;
+pub const MIN_INTERVAL_SECS: u64 = 15;
+pub const DEFAULT_SITE_TMPL: &str = "https://www.tiktok.com/@{username}";
+/// Checker arguments used when blank; `{url}` is the profile (or post) URL.
+pub const DEFAULT_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
+/// Download arguments used when blank; `{url}` is the post URL and `{dir}` the download folder.
+pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
+pub const DEFAULT_CARD_W: f32 = 170.0;
+pub const CARD_W_MIN: f32 = 120.0;
+pub const CARD_W_MAX: f32 = 260.0;
+/// Failed downloads are retried until they have failed this many times.
+pub const MAX_ATTEMPTS: u8 = 3;
+
+fn yes() -> bool {
+    true
+}
+
+/// One profile that is checked for new posts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Account {
+    pub name: String,
+    pub url: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// True once a check of this account has succeeded.
+    #[serde(default)]
+    pub baselined: bool,
+}
+
+/// Contents of posts.json.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostsConfig {
+    pub accounts: Vec<Account>,
+    pub interval_secs: u64,
+    pub exe_path: String,
+    /// Blank uses `DEFAULT_CHECKER_ARGS`.
+    pub checker_args: String,
+    /// Blank uses `DEFAULT_DOWNLOAD_ARGS`.
+    pub download_args: String,
+    pub site_tmpl: String,
+    pub output_dir: String,
+    pub auto_download: bool,
+    pub backfill: bool,
+    pub mark_on_open: bool,
+    pub notify_desktop: bool,
+    pub notify_ntfy: bool,
+    pub ntfy_topic: String,
+    pub paused: bool,
+    pub newest_first: bool,
+    pub card_w: f32,
+}
+
+impl Default for PostsConfig {
+    fn default() -> Self {
+        PostsConfig {
+            accounts: Vec::new(),
+            interval_secs: DEFAULT_INTERVAL_SECS,
+            exe_path: String::new(),
+            checker_args: String::new(),
+            download_args: String::new(),
+            site_tmpl: DEFAULT_SITE_TMPL.to_string(),
+            output_dir: String::new(),
+            auto_download: true,
+            backfill: true,
+            mark_on_open: true,
+            notify_desktop: true,
+            notify_ntfy: false,
+            ntfy_topic: String::new(),
+            paused: false,
+            newest_first: true,
+            card_w: DEFAULT_CARD_W,
+        }
+    }
+}
+
+impl PostsConfig {
+    pub fn exe_or_default(&self) -> &str {
+        let t = self.exe_path.trim();
+        if t.is_empty() { DEFAULT_EXE } else { t }
+    }
+
+    pub fn checker_or_default(&self) -> &str {
+        let t = self.checker_args.trim();
+        if t.is_empty() { DEFAULT_CHECKER_ARGS } else { t }
+    }
+
+    pub fn download_or_default(&self) -> &str {
+        let t = self.download_args.trim();
+        if t.is_empty() { DEFAULT_DOWNLOAD_ARGS } else { t }
+    }
+
+    /// The `--user-agent` value in the checker arguments, for thumbnail requests.
+    pub fn user_agent(&self) -> Option<String> {
+        let toks = tokenize(self.checker_or_default());
+        toks.iter().enumerate().find_map(|(i, t)| match t.strip_prefix("--user-agent=") {
+            Some(v) => Some(v.to_string()),
+            None if t == "--user-agent" => toks.get(i + 1).cloned(),
+            None => None,
+        })
+    }
+
+    /// The download folder: the configured one, else `posts` inside the global output folder.
+    pub fn output_folder(&self, global_dir: &str) -> PathBuf {
+        let t = self.output_dir.trim();
+        if t.is_empty() { Path::new(global_dir.trim()).join("posts") } else { PathBuf::from(t) }
+    }
+
+    /// An account from a username or profile URL; `None` when blank, malformed or already added.
+    pub fn account_from_input(&self, input: &str) -> Option<Account> {
+        let input = input.trim();
+        let (name, url) = if input.starts_with("http://") || input.starts_with("https://") {
+            let path = input.split(['?', '#']).next().unwrap_or(input);
+            let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+            (last.trim_start_matches('@').to_string(), input.to_string())
+        } else {
+            let name = input.trim_start_matches('@').to_string();
+            let tmpl = if self.site_tmpl.trim().is_empty() { DEFAULT_SITE_TMPL } else { self.site_tmpl.trim() };
+            (name.clone(), tmpl.replace("{username}", &name))
+        };
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            return None;
+        }
+        let dup = self.accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name) || a.url == url);
+        (!dup).then_some(Account { name, url, enabled: true, baselined: false })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PostState {
+    /// Known but not downloaded.
+    #[default]
+    Remote,
+    Queued,
+    Downloading,
+    Ready,
+    Failed,
+    /// Dismissed or deleted by the user; kept so it is never fetched again.
+    Removed,
+}
+
+/// Which slice of the library the main area shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Unviewed,
+    Viewed,
+    Starred,
+    Failed,
+}
+
+impl Section {
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::Unviewed => "Unviewed",
+            Section::Viewed => "Viewed",
+            Section::Starred => "Starred",
+            Section::Failed => "Failed",
+        }
+    }
+}
+
+/// One post found on an account.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Post {
+    pub id: String,
+    pub account: String,
+    pub title: String,
+    pub url: String,
+    pub posted_at: Option<u64>,
+    pub duration: Option<u64>,
+    pub found_at: u64,
+    /// True while a thumbnail file exists for this post.
+    pub has_thumb: bool,
+    pub file: Option<String>,
+    pub state: PostState,
+    pub error: String,
+    pub attempts: u8,
+    pub viewed: bool,
+    pub viewed_at: Option<u64>,
+    pub starred: bool,
+}
+
+impl Post {
+    /// When the post was made, else when it was found.
+    pub fn sort_time(&self) -> u64 {
+        self.posted_at.unwrap_or(self.found_at)
+    }
+
+    pub fn thumb_path(&self) -> PathBuf {
+        thumbs_dir().join(thumb_name(&self.id))
+    }
+
+    pub fn in_section(&self, section: Section) -> bool {
+        if self.state == PostState::Removed {
+            return false;
+        }
+        match section {
+            Section::Unviewed => !self.viewed,
+            Section::Viewed => self.viewed,
+            Section::Starred => self.starred,
+            Section::Failed => self.state == PostState::Failed,
+        }
+    }
+
+    /// True when the lowercase `query` is blank or appears in the title or account.
+    pub fn matches_query(&self, query: &str) -> bool {
+        query.is_empty() || self.title.to_lowercase().contains(query) || self.account.to_lowercase().contains(query)
+    }
+}
+
+fn path_in_config(name: &str) -> PathBuf {
+    config_dir().join(name)
+}
+
+pub fn thumbs_dir() -> PathBuf {
+    path_in_config("post_thumbs")
+}
+
+/// The thumbnail file name for a post id.
+pub fn thumb_name(id: &str) -> String {
+    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    format!("{safe}.jpg")
+}
+
+fn write_atomic<T: Serialize>(path: &Path, value: &T) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let tmp = path.with_extension("json.tmp");
+    if let Ok(json) = serde_json::to_string_pretty(value) {
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn load_config() -> PostsConfig {
+    read_json(&path_in_config("posts.json"))
+}
+
+pub fn save_config(cfg: &PostsConfig) {
+    write_atomic(&path_in_config("posts.json"), cfg);
+}
+
+/// Loads the library, requeuing interrupted downloads and dropping references to missing files.
+pub fn load_library() -> Vec<Post> {
+    let mut posts: Vec<Post> = read_json(&path_in_config("posts_library.json"));
+    for p in &mut posts {
+        if p.state == PostState::Downloading {
+            p.state = PostState::Queued;
+        }
+        if p.has_thumb && !p.thumb_path().is_file() {
+            p.has_thumb = false;
+        }
+        if p.state == PostState::Ready && !p.file.as_deref().is_some_and(|f| Path::new(f).is_file()) {
+            p.state = PostState::Remote;
+            p.file = None;
+        }
+    }
+    posts
+}
+
+pub fn save_library(posts: &[Post]) {
+    write_atomic(&path_in_config("posts_library.json"), &posts);
+}
+
+/// The fields of one yt-dlp JSON entry that the monitor uses.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    pub thumb_url: Option<String>,
+    pub posted_at: Option<u64>,
+    pub duration: Option<u64>,
+}
+
+/// Parses one line of yt-dlp `--dump-json` output; `None` when it has no id or URL.
+pub fn parse_entry(line: &str) -> Option<Entry> {
+    let line = line.trim();
+    if !line.starts_with('{') {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let id = match v.get("id")? {
+        Value::String(s) if !s.is_empty() => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return None,
+    };
+    let url = text("webpage_url").or_else(|| text("url").filter(|u| u.starts_with("http")))?.to_string();
+    let title = text("title").or_else(|| text("description")).unwrap_or("").lines().next().unwrap_or("").trim().to_string();
+    let thumb_url = text("thumbnail").map(str::to_string).or_else(|| {
+        v.get("thumbnails")?.as_array()?.iter().rev().find_map(|t| t.get("url")?.as_str().map(str::to_string))
+    });
+    let posted_at = v
+        .get("timestamp")
+        .and_then(Value::as_f64)
+        .filter(|t| *t > 0.0)
+        .map(|t| t as u64)
+        .or_else(|| text("upload_date").and_then(date_to_secs));
+    let duration = v.get("duration").and_then(Value::as_f64).filter(|d| *d > 0.0).map(|d| d.round() as u64);
+    Some(Entry { id, url, title, thumb_url, posted_at, duration })
+}
+
+/// Unix seconds of midnight UTC for a `YYYYMMDD` date.
+fn date_to_secs(s: &str) -> Option<u64> {
+    if s.len() != 8 || !s.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let (y, m, d) = (s[0..4].parse().ok()?, s[4..6].parse().ok()?, s[6..8].parse().ok()?);
+    let secs = chrono::NaiveDate::from_ymd_opt(y, m, d)?.and_hms_opt(0, 0, 0)?.and_utc().timestamp();
+    u64::try_from(secs).ok()
+}
+
+/// Splits on whitespace, honouring "double" and 'single' quotes.
+pub fn tokenize(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    for c in input.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => cur.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                in_token = true;
+            }
+            None if c.is_whitespace() => {
+                if in_token {
+                    out.push(std::mem::take(&mut cur));
+                    in_token = false;
+                }
+            }
+            None => {
+                cur.push(c);
+                in_token = true;
+            }
+        }
+    }
+    if in_token {
+        out.push(cur);
+    }
+    out
+}
+
+/// Replaces `{url}` and `{dir}` in each argument; the URL is appended if `{url}` is absent.
+fn expand(template: &str, url: &str, dir: &str) -> Vec<String> {
+    let mut args: Vec<String> = tokenize(template).into_iter().map(|t| t.replace("{url}", url).replace("{dir}", dir)).collect();
+    if !template.contains("{url}") {
+        args.push(url.to_string());
+    }
+    args
+}
+
+/// Checker arguments for a profile or single post URL.
+pub fn checker_cmd(cfg: &PostsConfig, url: &str) -> Vec<String> {
+    expand(cfg.checker_or_default(), url, "")
+}
+
+/// Download arguments for one post into `dir`.
+pub fn download_cmd(cfg: &PostsConfig, url: &str, dir: &str) -> Vec<String> {
+    expand(cfg.download_or_default(), url, dir)
+}
+
+/// The notification for new posts of one account.
+pub fn new_posts_message(account: &str, posts: &[Post]) -> notify::Message {
+    let first = posts.first().map(|p| p.title.as_str()).filter(|t| !t.is_empty()).unwrap_or("New post");
+    let body = if posts.len() > 1 { format!("{first}\n+{} more", posts.len() - 1) } else { first.to_string() };
+    let title = if posts.len() > 1 { format!("{} new posts from @{account}", posts.len()) } else { format!("New post from @{account}") };
+    notify::Message { title, body, click: posts.first().map(|p| p.url.clone()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_reads_core_fields() {
+        let l = r#"{"id":"123","webpage_url":"https://tiktok.com/@a/video/123","title":"hi\nthere","thumbnails":[{"url":"u1"},{"url":"u2"}],"timestamp":1700000000.0,"duration":12.4}"#;
+        let e = parse_entry(l).unwrap();
+        assert_eq!((e.id.as_str(), e.title.as_str(), e.thumb_url.as_deref()), ("123", "hi", Some("u2")));
+        assert_eq!((e.posted_at, e.duration), (Some(1700000000), Some(12)));
+        assert!(parse_entry("not json").is_none());
+        assert!(parse_entry(r#"{"id":"1"}"#).is_none());
+    }
+
+    #[test]
+    fn upload_date_parses() {
+        assert_eq!(date_to_secs("20240101"), Some(1704067200));
+        assert_eq!(date_to_secs("2024"), None);
+    }
+
+    #[test]
+    fn accounts_from_names_and_urls() {
+        let mut cfg = PostsConfig::default();
+        let a = cfg.account_from_input(" @Emiru ").unwrap();
+        assert_eq!((a.name.as_str(), a.url.as_str()), ("Emiru", "https://www.tiktok.com/@Emiru"));
+        cfg.accounts.push(a);
+        assert!(cfg.account_from_input("emiru").is_none());
+        assert!(cfg.account_from_input("two words").is_none());
+        let b = cfg.account_from_input("https://www.tiktok.com/@ash/?lang=en").unwrap();
+        assert_eq!(b.name, "ash");
+    }
+
+    #[test]
+    fn commands_fill_placeholders() {
+        let mut cfg = PostsConfig::default();
+        let dl = download_cmd(&cfg, "https://x/v/1", "C:\\out dir");
+        assert!(dl.contains(&"C:\\out dir".to_string()) && dl.last().map(String::as_str) == Some("https://x/v/1"));
+        assert!(cfg.user_agent().unwrap().starts_with("Mozilla/5.0"));
+        cfg.checker_args = "--dump-json".into();
+        assert_eq!(checker_cmd(&cfg, "u"), vec!["--dump-json", "u"]);
+        assert_eq!(cfg.user_agent(), None);
+    }
+
+    #[test]
+    fn tokenizer_keeps_quoted_values() {
+        assert_eq!(tokenize(r#"--a "b c" 'd e' f"#), vec!["--a", "b c", "d e", "f"]);
+    }
+
+    #[test]
+    fn sections_filter_posts() {
+        let mut p = Post { viewed: true, starred: true, ..Default::default() };
+        assert!(p.in_section(Section::Viewed) && p.in_section(Section::Starred) && !p.in_section(Section::Unviewed));
+        p.state = PostState::Removed;
+        assert!(!p.in_section(Section::Viewed));
+    }
+
+    #[test]
+    fn thumb_names_are_filesystem_safe() {
+        assert_eq!(thumb_name("a/b:1"), "a_b_1.jpg");
+    }
+}

@@ -2,6 +2,8 @@
 
 mod files;
 mod files_view;
+mod posts;
+mod posts_view;
 pub mod prefs;
 mod skin;
 mod view;
@@ -592,6 +594,7 @@ pub enum Msg {
     Tick(#[allow(dead_code)] Instant),
     SetTab(Tab),
     Files(files::FilesMsg),
+    Posts(posts::PostsMsg),
     SetSettingsTab(SettingsTab),
     SetMonitorTab(MonitorTab),
     OpenAddSite,
@@ -741,6 +744,7 @@ pub struct App {
     update_error: Option<String>,
     update_cfg: UpdateConfig,
     files: files::FilesState,
+    posts: posts::PostsState,
 }
 
 impl App {
@@ -795,6 +799,7 @@ impl App {
             update_error: None,
             update_cfg: UpdateConfig::default(),
             files: files::FilesState::new(),
+            posts: posts::PostsState::new(),
         };
         if let Some(e) = crate::policy::update::take_last_error() {
             app.push_log(e);
@@ -914,9 +919,11 @@ impl App {
                         return task;
                     }
                 }
+                let posts = self.posts_tick();
                 if self.tab == Tab::Files {
-                    return self.files_tick();
+                    return Task::batch([posts, self.files_tick()]);
                 }
+                return posts;
             }
             Msg::SetTab(t) => {
                 // Collapse all processes when leaving the Processes tab.
@@ -934,6 +941,7 @@ impl App {
                 }
             }
             Msg::Files(m) => return self.files_update(m),
+            Msg::Posts(m) => return self.posts_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
             Msg::SetMonitorTab(w) => {
                 if w == MonitorTab::Livestreams && self.monitor_tab != w {

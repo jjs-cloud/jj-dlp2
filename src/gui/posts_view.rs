@@ -1,0 +1,393 @@
+//! Views of the Posts monitor and its settings.
+
+use super::posts::PostsMsg;
+use super::skin::{self, BtnKind, Skin};
+use super::view::{btn_label, card_box, clip, fmt_ago, muted, t, warn_text};
+use super::{App, Msg};
+use crate::posts::{self, Post, PostState, Section};
+use iced::widget::text::Wrapping;
+use iced::widget::{Column, Row, Space, button, column, container, row, scrollable, slider, stack, text_input, toggler};
+use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
+
+const SIDEBAR_W: f32 = 210.0;
+const GAP: f32 = 10.0;
+const CARD_PAD: f32 = 8.0;
+/// Window width taken by the page padding, the sidebar gap and the scrollbar.
+const CHROME_W: f32 = 36.0 + 12.0 + 26.0;
+
+fn send(m: PostsMsg) -> Msg {
+    Msg::Posts(m)
+}
+
+/// `m:ss` or `h:mm:ss` for a clip length.
+fn fmt_clock(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// A small dark label that stays readable on top of a thumbnail.
+fn badge<'a>(label: String, color: Color) -> Element<'a, Msg> {
+    container(iced::widget::text(label).size(10).color(color))
+        .padding([2.0, 6.0])
+        .style(|_| container::Style {
+            background: Some(Background::Color(Color { a: 0.72, ..Color::BLACK })),
+            border: Border { radius: 6.0.into(), ..Default::default() },
+            ..Default::default()
+        })
+        .into()
+}
+
+/// One entry of the sidebar lists.
+fn nav_item<'a>(s: Skin, label: String, count: usize, selected: bool, msg: PostsMsg) -> Element<'a, Msg> {
+    let count_color = if count > 0 && !selected { s.accent2 } else { s.muted };
+    button(
+        row![
+            t(&s, label).size(13).width(Length::Fill).wrapping(Wrapping::None),
+            iced::widget::text(count.to_string()).font(s.font).size(12).color(count_color),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    )
+    .on_press(send(msg))
+    .padding([7.0, 10.0])
+    .width(Length::Fill)
+    .style(skin::tile(s, s.muted, selected))
+    .into()
+}
+
+fn card_btn<'a>(s: Skin, label: &'static str, msg: PostsMsg, kind: BtnKind) -> Element<'a, Msg> {
+    button(btn_label(&s, label).size(11).width(Length::Fill).align_x(Alignment::Center))
+        .on_press(send(msg))
+        .padding([4.0, 4.0])
+        .width(Length::Fill)
+        .style(skin::btn(s, kind))
+        .into()
+}
+
+fn field<'a>(s: Skin, label: &'static str, hint: &'static str, value: &'a str, invalid: bool, on: fn(String) -> PostsMsg) -> Element<'a, Msg> {
+    row![
+        t(&s, label).size(13).width(170),
+        text_input(hint, value).on_input(move |v| send(on(v))).padding(8).style(skin::input_required(s, invalid)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn flag<'a>(label: &'static str, on: bool, make: fn(bool) -> PostsMsg) -> Element<'a, Msg> {
+    toggler(on).label(label).on_toggle(move |v| send(make(v))).text_size(12).into()
+}
+
+impl App {
+    pub(super) fn posts_view(&self, s: Skin) -> Element<'_, Msg> {
+        row![self.posts_sidebar(s), self.posts_main(s)].spacing(12).height(Length::Fill).into()
+    }
+
+    fn posts_sidebar(&self, s: Skin) -> Element<'_, Msg> {
+        let p = &self.posts;
+        let acct = p.account.as_deref();
+        let mut nav = Column::new().spacing(4).push(self.section_title(s, "LIBRARY"));
+        for sec in [Section::Unviewed, Section::Viewed, Section::Starred] {
+            nav = nav.push(nav_item(s, sec.label().to_string(), p.count(sec, acct), p.section == sec, PostsMsg::SetSection(sec)));
+        }
+        let failed = p.count(Section::Failed, acct);
+        if failed > 0 {
+            nav = nav.push(nav_item(s, "Failed".into(), failed, p.section == Section::Failed, PostsMsg::SetSection(Section::Failed)));
+        }
+        nav = nav.push(Space::new().height(8)).push(self.section_title(s, "ACCOUNTS"));
+        nav = nav.push(nav_item(s, "All accounts".into(), p.count(Section::Unviewed, None), acct.is_none(), PostsMsg::SetAccount(None)));
+        for a in &p.cfg.accounts {
+            let mark = if p.errors.contains_key(&a.name) { "⚠ " } else { "" };
+            let off = if a.enabled { "" } else { " (off)" };
+            let label = format!("{mark}@{}{off}", clip(&a.name, 16));
+            let selected = acct.is_some_and(|x| x.eq_ignore_ascii_case(&a.name));
+            nav = nav.push(nav_item(s, label, p.count(Section::Unviewed, Some(&a.name)), selected, PostsMsg::SetAccount(Some(a.name.clone()))));
+        }
+        let status = if p.checking {
+            "Checking…".to_string()
+        } else if p.cfg.paused {
+            "Paused".to_string()
+        } else {
+            p.secs_to_next().map_or("No accounts enabled".to_string(), |n| format!("Next check in {n}s"))
+        };
+        let last = p.last_check.map(|at| format!("Last check {}", fmt_ago(self.now.saturating_sub(at))));
+        let controls = column![
+            muted(&s, status),
+            muted(&s, last.unwrap_or_default()),
+            row![
+                card_btn(s, "Check now", PostsMsg::CheckNow, BtnKind::Ghost),
+                card_btn(s, if p.cfg.paused { "Resume" } else { "Pause" }, PostsMsg::Paused(!p.cfg.paused), BtnKind::Ghost),
+            ]
+            .spacing(6),
+        ]
+        .spacing(4);
+        container(column![scrollable(nav).height(Length::Fill), controls].spacing(10))
+            .padding(12)
+            .width(SIDEBAR_W)
+            .height(Length::Fill)
+            .style(skin::card(s, None))
+            .into()
+    }
+
+    fn posts_main(&self, s: Skin) -> Element<'_, Msg> {
+        let p = &self.posts;
+        let visible = p.visible();
+        let mut bar = Row::new().spacing(10).align_y(Alignment::Center);
+        bar = bar.push(iced::widget::text(format!("{} · {}", p.section.label().to_uppercase(), visible.len())).font(s.font).size(13).color(s.accent2));
+        bar = bar.push(container(muted(&s, p.status_text(self.now).unwrap_or(""))).width(Length::Fill).clip(true));
+        bar = bar.push(
+            text_input("Search", &p.search).on_input(|v| send(PostsMsg::Search(v))).padding([5.0, 8.0]).width(160).style(skin::input(s)),
+        );
+        bar = bar.push(flag("Newest first", p.cfg.newest_first, PostsMsg::NewestFirst));
+        bar = bar.push(
+            slider(posts::CARD_W_MIN..=posts::CARD_W_MAX, p.cfg.card_w, |v| send(PostsMsg::CardWidth(v)))
+                .step(10.0_f32)
+                .on_release(send(PostsMsg::CardWidthSave))
+                .width(90),
+        );
+        if p.section == Section::Unviewed && !visible.is_empty() {
+            bar = bar.push(
+                button(btn_label(&s, "Mark all viewed").size(12))
+                    .on_press(send(PostsMsg::MarkAllViewed))
+                    .padding([4.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            );
+        }
+        let mut col = Column::new().spacing(10).push(bar);
+        let mut errors: Vec<(&String, &String)> = p.errors.iter().collect();
+        errors.sort();
+        for (name, e) in errors {
+            col = col.push(warn_text(&s, format!("⚠ @{name}: {}", clip(e, 200))));
+        }
+        if visible.is_empty() {
+            return col.push(self.posts_empty(s)).into();
+        }
+        let w = p.cfg.card_w;
+        let avail = (self.win_w - SIDEBAR_W - CHROME_W).max(w);
+        let cols = (((avail + GAP) / (w + GAP)).floor() as usize).max(1);
+        let shown: Vec<&Post> = visible.iter().take(p.shown).copied().collect();
+        let mut grid = Column::new().spacing(GAP);
+        for chunk in shown.chunks(cols) {
+            let mut r = Row::new().spacing(GAP);
+            for post in chunk {
+                r = r.push(self.post_card(s, *post, w));
+            }
+            grid = grid.push(r);
+        }
+        if visible.len() > shown.len() {
+            let more = format!("Show more ({} remaining)", visible.len() - shown.len());
+            grid = grid.push(
+                button(btn_label(&s, more).size(12))
+                    .on_press(send(PostsMsg::ShowMore))
+                    .padding([6.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            );
+        }
+        col.push(scrollable(container(grid).padding(iced::Padding { right: 10.0, ..Default::default() })).height(Length::Fill)).into()
+    }
+
+    fn posts_empty(&self, s: Skin) -> Element<'_, Msg> {
+        let p = &self.posts;
+        if p.cfg.accounts.is_empty() {
+            return card_box(
+                s,
+                column![
+                    t(&s, "No accounts yet."),
+                    muted(&s, "Add the profiles to watch; new posts are downloaded and shown here with thumbnails."),
+                    button(btn_label(&s, "Add an account").size(13))
+                        .on_press(send(PostsMsg::OpenSettings))
+                        .padding([8.0, 14.0])
+                        .style(skin::btn(s, BtnKind::Primary)),
+                ]
+                .spacing(10),
+            );
+        }
+        let text = match p.section {
+            Section::Unviewed => "You're all caught up.",
+            Section::Viewed => "Posts you have viewed will appear here.",
+            Section::Starred => "Star a post to keep it here.",
+            Section::Failed => "No failed downloads.",
+        };
+        muted(&s, text).into()
+    }
+
+    fn post_card<'a>(&'a self, s: Skin, post: &'a Post, w: f32) -> Element<'a, Msg> {
+        let iw = w - 2.0 * CARD_PAD;
+        let ih = (iw * 1.45).round();
+        let preview: Element<'a, Msg> = if post.has_thumb {
+            iced::widget::image::<iced::widget::image::Handle>(iced::widget::image::Handle::from_path(post.thumb_path()))
+                .width(iw)
+                .height(ih)
+                .content_fit(ContentFit::Cover)
+                .opacity(if post.viewed { 0.6_f32 } else { 1.0_f32 })
+                .border_radius(6.0)
+                .into()
+        } else {
+            container(muted(&s, "No preview"))
+                .center_x(iw)
+                .center_y(ih)
+                .style(skin::inset(s))
+                .into()
+        };
+        let state_badge = match post.state {
+            PostState::Downloading => Some(("Downloading…", s.accent2)),
+            PostState::Queued => Some(("Queued", s.muted)),
+            PostState::Failed => Some(("Failed", s.danger)),
+            PostState::Remote => Some(("Not saved", s.warn)),
+            PostState::Ready | PostState::Removed => None,
+        };
+        let top = state_badge.map_or_else(|| Space::new().into(), |(l, c)| badge(l.to_string(), c));
+        let bottom: Element<'a, Msg> = match post.duration {
+            Some(d) => badge(fmt_clock(d), Color::WHITE),
+            None => Space::new().into(),
+        };
+        let overlay = container(
+            column![top, Space::new().height(Length::Fill), row![Space::new().width(Length::Fill), bottom]],
+        )
+        .padding(6)
+        .width(iw)
+        .height(ih);
+        let thumb = button(stack([preview, overlay.into()]))
+            .on_press(send(PostsMsg::Play(post.id.clone())))
+            .padding(0)
+            .style(|_, _| button::Style::default());
+
+        let ago = fmt_ago(self.now.saturating_sub(post.sort_time()));
+        let meta = row![
+            iced::widget::text(format!("@{}", clip(&post.account, 14))).font(s.font).size(12).color(s.accent2),
+            muted(&s, ago).size(11),
+        ]
+        .spacing(6);
+        let caption = if post.title.is_empty() { "(no caption)".to_string() } else { clip(&post.title, 70) };
+        let title = container(t(&s, caption).size(12)).height(32).clip(true);
+
+        let id = &post.id;
+        let play = if post.state == PostState::Ready { "Play" } else { "Open" };
+        let (seen_label, seen_kind) = if post.viewed { ("Unview", BtnKind::Ghost) } else { ("Viewed", BtnKind::Ghost) };
+        let row1 = row![
+            card_btn(s, play, PostsMsg::Play(id.clone()), BtnKind::Primary),
+            card_btn(s, seen_label, PostsMsg::ToggleViewed(id.clone()), seen_kind),
+        ]
+        .spacing(6);
+        let star = card_btn(
+            s,
+            if post.starred { "★" } else { "☆" },
+            PostsMsg::ToggleStar(id.clone()),
+            if post.starred { BtnKind::Primary } else { BtnKind::Ghost },
+        );
+        let page = card_btn(s, "Page", PostsMsg::OpenPage(id.clone()), BtnKind::Ghost);
+        let row2 = match post.state {
+            PostState::Ready => row![
+                star,
+                card_btn(s, "Folder", PostsMsg::Reveal(id.clone()), BtnKind::Ghost),
+                card_btn(s, "Delete", PostsMsg::Delete(id.clone()), BtnKind::Danger),
+            ],
+            PostState::Remote => row![star, card_btn(s, "Download", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
+            PostState::Failed => row![star, card_btn(s, "Retry", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
+            _ => row![star, page],
+        }
+        .spacing(6);
+
+        let mut body = Column::new().spacing(6).push(thumb).push(meta).push(title);
+        if post.state == PostState::Failed && !post.error.is_empty() {
+            body = body.push(warn_text(&s, clip(&post.error, 60)).size(10));
+        }
+        container(body.push(row1).push(row2)).padding(CARD_PAD).width(w).style(skin::card(s, None)).into()
+    }
+
+    pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
+        let p = &self.posts;
+        let c = &p.cfg;
+        let mut accounts = Column::new()
+            .spacing(8)
+            .push(self.section_title(s, "ACCOUNTS"))
+            .push(muted(&s, "Profiles checked for new posts. Enter a username, or paste a full profile URL."));
+        for a in &c.accounts {
+            let (on_name, rm_name) = (a.name.clone(), a.name.clone());
+            accounts = accounts.push(
+                row![
+                    t(&s, format!("@{}", a.name)).size(13).width(150),
+                    container(muted(&s, clip(&a.url, 70))).width(Length::Fill).clip(true),
+                    toggler(a.enabled).on_toggle(move |v| send(PostsMsg::ToggleAccount(on_name.clone(), v))),
+                    button(btn_label(&s, "Remove").size(12))
+                        .on_press(send(PostsMsg::RemoveAccount(rm_name)))
+                        .padding([4.0, 10.0])
+                        .style(skin::btn(s, BtnKind::Danger)),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            );
+        }
+        accounts = accounts.push(
+            row![
+                text_input("Username or profile URL", &p.new_account)
+                    .on_input(|v| send(PostsMsg::NewAccount(v)))
+                    .on_submit(send(PostsMsg::AddAccount))
+                    .padding(8)
+                    .style(skin::input(s)),
+                button(btn_label(&s, "Add").size(13))
+                    .on_press_maybe((!p.new_account.trim().is_empty()).then(|| send(PostsMsg::AddAccount)))
+                    .padding([8.0, 16.0])
+                    .style(skin::btn(s, BtnKind::Primary)),
+            ]
+            .spacing(8),
+        );
+        accounts = accounts.push(muted(&s, p.status_text(self.now).unwrap_or("")));
+
+        let interval_bad = !p.interval_text.trim().parse::<u64>().is_ok_and(|n| n >= posts::MIN_INTERVAL_SECS);
+        let checking = column![
+            self.section_title(s, "CHECKING"),
+            muted(&s, format!("Seconds between checks (at least {}). Blank argument lines use the defaults; {{url}} is the profile or post URL.", posts::MIN_INTERVAL_SECS)),
+            field(s, "Check every (seconds)", "60", &p.interval_text, interval_bad, PostsMsg::Interval),
+            field(s, "yt-dlp path", crate::api::DEFAULT_EXE, &c.exe_path, false, PostsMsg::Exe),
+            field(s, "Checker arguments", posts::DEFAULT_CHECKER_ARGS, &c.checker_args, false, PostsMsg::CheckerArgs),
+            field(s, "Profile URL template", posts::DEFAULT_SITE_TMPL, &c.site_tmpl, false, PostsMsg::SiteTmpl),
+            flag("Pause checking", c.paused, PostsMsg::Paused),
+        ]
+        .spacing(8);
+
+        let out_dir = c.output_folder(&self.settings.default_output_dir).to_string_lossy().into_owned();
+        let downloads = column![
+            self.section_title(s, "DOWNLOADS"),
+            flag("Download new posts automatically", c.auto_download, PostsMsg::AutoDownload),
+            flag("Download existing posts when an account is first checked", c.backfill, PostsMsg::Backfill),
+            flag("Mark a post viewed when it is opened", c.mark_on_open, PostsMsg::MarkOnOpen),
+            row![
+                t(&s, "Download folder").size(13).width(170),
+                text_input(&out_dir, &c.output_dir).on_input(|v| send(PostsMsg::OutputDir(v))).padding(8).style(skin::input(s)),
+                button(btn_label(&s, "Browse").size(13))
+                    .on_press(send(PostsMsg::BrowseOutput))
+                    .padding([8.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+                button(btn_label(&s, "Open").size(13))
+                    .on_press(send(PostsMsg::OpenOutputDir))
+                    .padding([8.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            muted(&s, "{dir} is the download folder above and {url} the post URL."),
+            field(s, "Download arguments", posts::DEFAULT_DOWNLOAD_ARGS, &c.download_args, false, PostsMsg::DownloadArgs),
+        ]
+        .spacing(8);
+
+        let topic_bad = c.notify_ntfy && !crate::policy::notify::topic_valid(&c.ntfy_topic);
+        let notifications = column![
+            self.section_title(s, "NOTIFICATIONS"),
+            muted(&s, "Sent when a check finds new posts; an account's first check stays silent."),
+            flag("Desktop notification", c.notify_desktop, PostsMsg::NotifyDesktop),
+            flag("ntfy notification", c.notify_ntfy, PostsMsg::NotifyNtfy),
+            field(s, "ntfy topic", "topic name", &c.ntfy_topic, topic_bad, PostsMsg::NtfyTopic),
+        ]
+        .spacing(8);
+
+        let col = Column::new()
+            .spacing(12)
+            .padding(iced::Padding { right: 8.0, ..Default::default() })
+            .push(card_box(s, accounts))
+            .push(card_box(s, checking))
+            .push(card_box(s, downloads))
+            .push(card_box(s, notifications));
+        scrollable(col).height(Length::Fill).into()
+    }
+}

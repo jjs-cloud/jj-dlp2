@@ -76,7 +76,7 @@ fn fmt_dur(secs: u64) -> String {
 }
 
 /// Largest whole unit of an elapsed time, e.g. `5m ago`, `3h ago`, `2d ago`.
-fn fmt_ago(secs: u64) -> String {
+pub(super) fn fmt_ago(secs: u64) -> String {
     match secs {
         0..=59 => "<1m ago".to_string(),
         60..=3599 => format!("{}m ago", secs / 60),
@@ -85,7 +85,7 @@ fn fmt_ago(secs: u64) -> String {
     }
 }
 
-fn clip(s: &str, max: usize) -> String {
+pub(super) fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
@@ -421,7 +421,7 @@ impl App {
     }
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
-        let switch = |label: &'static str, which: MonitorTab| {
+        let switch = |label: String, which: MonitorTab| {
             let on = self.monitor_tab == which;
             let kind = if on { BtnKind::TabActive } else { BtnKind::TabIdle };
             button(t(&s, label).size(13).color(if on { s.bg } else { s.muted }))
@@ -430,8 +430,8 @@ impl App {
                 .style(skin::btn(s, kind))
         };
         let mut title = row![
-            switch("Livestreams", MonitorTab::Livestreams),
-            switch("Posts", MonitorTab::Posts),
+            switch("Livestreams".to_string(), MonitorTab::Livestreams),
+            switch(self.posts_tab_label(), MonitorTab::Posts),
             Space::new().width(Length::Fill)
         ]
             .spacing(8)
@@ -452,7 +452,7 @@ impl App {
             title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
         }
         if self.monitor_tab == MonitorTab::Posts {
-            return column![title, muted(&s, "Coming soon!")].spacing(12).into();
+            return column![title, self.posts_view(s)].spacing(12).height(Length::Fill).into();
         }
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
@@ -1619,7 +1619,7 @@ impl App {
         .spacing(8);
         let body = match self.settings_tab {
             SettingsTab::Sites => self.settings_sites(s),
-            SettingsTab::Posts => muted(&s, "Coming soon!").into(),
+            SettingsTab::Posts => self.posts_settings(s),
             SettingsTab::General => self.settings_general(s),
         };
         column![switcher, body].spacing(12).height(Length::Fill).into()
