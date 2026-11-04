@@ -705,6 +705,7 @@ pub struct App {
     warnings: HashMap<StreamerId, Warnings>,
     live_since: HashMap<StreamerId, u64>,
     last_live: HashMap<StreamerId, u64>,
+    resolutions: HashMap<StreamerId, (u32, u32)>,
     checks: HashMap<SiteId, CheckInfo>,
     issues: HashMap<StreamerId, String>,
     notices: Vec<Notice>,
@@ -757,6 +758,7 @@ impl App {
             warnings: HashMap::new(),
             live_since: HashMap::new(),
             last_live: HashMap::new(),
+            resolutions: HashMap::new(),
             checks: HashMap::new(),
             issues: HashMap::new(),
             notices: Vec::new(),
@@ -1226,6 +1228,14 @@ impl App {
             PolicyEvent::LiveSince(map) => self.live_since = map,
             PolicyEvent::LastLive(map) => self.last_live = map,
             PolicyEvent::RecordingFiles(map) => self.recording_files = map,
+            PolicyEvent::Resolution(id, size) => match size {
+                Some(v) => {
+                    self.resolutions.insert(id, v);
+                }
+                None => {
+                    self.resolutions.remove(&id);
+                }
+            },
             PolicyEvent::Restarts(map) => self.restarts = map,
             PolicyEvent::Warnings(map) => self.warnings = map,
             PolicyEvent::Output(batch) => {

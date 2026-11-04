@@ -702,11 +702,13 @@ impl App {
             .width(m.site_w)
             .clip(true),
             name_el,
-            iced::widget::text(time_text)
-                .font(s.font)
-                .size(m.info)
-                .color(time_color)
-                .wrapping(Wrapping::None),
+            {
+                let mut times = Row::new().spacing(4).align_y(Alignment::Center);
+                if let Some(&(_, h)) = self.resolutions.get(&id) {
+                    times = times.push(iced::widget::text(format!("{h}p")).font(s.font).size(m.info).color(s.muted).wrapping(Wrapping::None));
+                }
+                times.push(iced::widget::text(time_text).font(s.font).size(m.info).color(time_color).wrapping(Wrapping::None))
+            },
             compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id)),
             toggler(st.enabled)
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
@@ -1209,6 +1211,9 @@ impl App {
                             .size(15)
                             .color(if st.enabled { s.text } else { s.muted }),
                     );
+                    if let Some(&(w, h)) = self.resolutions.get(&id) {
+                        name = name.push(muted(&s, format!("{w} x {h}")));
+                    }
                     if let Some(d) = self.live_for(id, status) {
                         name = name.push(muted(&s, format!("live for {}", fmt_dur(d))));
                     }

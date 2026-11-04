@@ -20,6 +20,7 @@ pub mod layout;
 pub mod live;
 pub mod notify;
 mod outpath;
+mod probe;
 mod restarts;
 mod schedule;
 mod segments;
@@ -173,6 +174,8 @@ pub enum PolicyEvent {
     LastLive(HashMap<StreamerId, u64>),
     /// File state of every active recording; sent whenever it changes.
     RecordingFiles(HashMap<RecorderId, RecordingFile>),
+    /// A streamer's recording resolution as (width, height); `None` once it has no recording.
+    Resolution(StreamerId, Option<(u32, u32)>),
     /// Streamer id to its restart count; streamers with none are absent.
     Restarts(HashMap<StreamerId, u32>),
     /// Streamer id to its interrupt and error counts; streamers with none are absent.
@@ -469,6 +472,7 @@ impl Policy {
                 if let Some(streamer_id) = self.files.remove(*id) {
                     if !self.recorder_pids.values().any(|(sid, _)| *sid == streamer_id) {
                         outpath::remove_sidecar(streamer_id);
+                        self.emit(PolicyEvent::Resolution(streamer_id, None));
                     }
                 }
                 self.emit_files();
@@ -683,6 +687,9 @@ impl Policy {
                 self.run_step(step);
             }
         }
+        if let Some(streamer_id) = up.confirmed_for {
+            self.probe_resolution(id, streamer_id);
+        }
         self.note_part_one_file(id);
         for line in up.logs {
             self.log(line);
@@ -695,6 +702,27 @@ impl Policy {
             });
         }
         self.emit_files();
+    }
+
+    /// Runs ffprobe on the recording's file in the background and reports its resolution.
+    fn probe_resolution(&self, id: RecorderId, streamer_id: StreamerId) {
+        let Some(path) = self.files.trusted_path(id).map(Path::to_path_buf) else { return };
+        let name = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.name.clone()).unwrap_or_default();
+        let tx = self.events.clone();
+        tokio::spawn(async move {
+            let ev = match probe::resolution(&path).await {
+                Ok(size) => PolicyEvent::Resolution(streamer_id, Some(size)),
+                Err(e) => {
+                    let msg = match e {
+                        probe::ProbeError::NotFound => format!("{name}: ffprobe not found in PATH; resolution not shown"),
+                        probe::ProbeError::Failed(why) => format!("{name}: ffprobe could not read the resolution: {why}"),
+                    };
+                    uilog::append(&msg);
+                    PolicyEvent::Log(msg)
+                }
+            };
+            let _ = tx.send(ev);
+        });
     }
 
     /// The absolute folder a streamer's recordings are written to.
