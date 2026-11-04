@@ -17,6 +17,7 @@ const THUMB_BOX: (u32, u32) = (360, 640);
 /// What one check found for one account.
 #[derive(Debug, Clone)]
 pub struct AccountReport {
+    pub site_id: SiteId,
     pub name: String,
     pub new_posts: Vec<Post>,
     pub error: Option<String>,
@@ -25,6 +26,7 @@ pub struct AccountReport {
 #[derive(Debug, Clone)]
 pub struct CycleReport {
     pub at: u64,
+    pub site_ids: Vec<SiteId>,
     pub accounts: Vec<AccountReport>,
 }
 
@@ -71,20 +73,22 @@ async fn run(exe: &str, args: &[String], limit: Duration) -> Result<std::process
     }
 }
 
-/// Checks every enabled account once, sequentially.
-pub async fn check_cycle(cfg: PostsConfig, mut known: HashSet<String>) -> CycleReport {
+/// Checks every enabled account of the given sites once, sequentially.
+pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>) -> CycleReport {
     let mut accounts = Vec::new();
-    for acct in cfg.accounts.iter().filter(|a| a.enabled) {
-        let report = check_account(&cfg, acct, &known).await;
-        known.extend(report.new_posts.iter().map(|p| p.id.clone()));
-        accounts.push(report);
+    for site in &sites {
+        for acct in site.accounts.iter().filter(|a| a.enabled) {
+            let report = check_account(site, acct, &known).await;
+            known.extend(report.new_posts.iter().map(|p| p.id.clone()));
+            accounts.push(report);
+        }
     }
-    CycleReport { at: now_secs(), accounts }
+    CycleReport { at: now_secs(), site_ids: sites.iter().map(|s| s.id).collect(), accounts }
 }
 
-async fn check_account(cfg: &PostsConfig, acct: &Account, known: &HashSet<String>) -> AccountReport {
-    let fail = |e: String| AccountReport { name: acct.name.clone(), new_posts: Vec::new(), error: Some(e) };
-    let out = match run(cfg.exe_or_default(), &checker_cmd(cfg, &acct.url), LIST_TIMEOUT).await {
+async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>) -> AccountReport {
+    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), error: Some(e) };
+    let out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT).await {
         Ok(o) => o,
         Err(e) => return fail(e),
     };
@@ -97,7 +101,7 @@ async fn check_account(cfg: &PostsConfig, acct: &Account, known: &HashSet<String
     let mut new_posts = Vec::new();
     for mut entry in entries.into_iter().filter(|e| !known.contains(&e.id)) {
         if entry.thumb_url.is_none() || entry.title.is_empty() {
-            if let Some(full) = fetch_info(cfg, &entry.url).await {
+            if let Some(full) = fetch_info(site, &entry.url).await {
                 entry.thumb_url = entry.thumb_url.or(full.thumb_url);
                 entry.posted_at = entry.posted_at.or(full.posted_at);
                 entry.duration = entry.duration.or(full.duration);
@@ -107,11 +111,12 @@ async fn check_account(cfg: &PostsConfig, acct: &Account, known: &HashSet<String
             }
         }
         let has_thumb = match entry.thumb_url.clone() {
-            Some(url) => fetch_thumbnail(url, cfg.user_agent(), entry.id.clone()).await,
+            Some(url) => fetch_thumbnail(url, site.user_agent(), entry.id.clone()).await,
             None => false,
         };
         new_posts.push(Post {
             id: entry.id,
+            site_id: site.id,
             account: acct.name.clone(),
             title: entry.title,
             url: entry.url,
@@ -122,12 +127,12 @@ async fn check_account(cfg: &PostsConfig, acct: &Account, known: &HashSet<String
             ..Default::default()
         });
     }
-    AccountReport { name: acct.name.clone(), new_posts, error: None }
+    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, error: None }
 }
 
 /// Full metadata of one post, or `None` when yt-dlp could not read it.
-async fn fetch_info(cfg: &PostsConfig, url: &str) -> Option<Entry> {
-    let out = run(cfg.exe_or_default(), &checker_cmd(cfg, url), INFO_TIMEOUT).await.ok()?;
+async fn fetch_info(site: &PostSite, url: &str) -> Option<Entry> {
+    let out = run(site.exe_or_default(), &checker_cmd(site, url), INFO_TIMEOUT).await.ok()?;
     String::from_utf8_lossy(&out.stdout).lines().find_map(parse_entry)
 }
 
@@ -206,11 +211,11 @@ fn find_by_id(dir: &Path, id: &str, depth: u32) -> Option<PathBuf> {
 }
 
 /// Downloads one post, then makes sure it has a thumbnail.
-pub async fn download(cfg: PostsConfig, post: Post, global_dir: String) -> DownloadOutcome {
-    let folder = cfg.output_folder(&global_dir);
+pub async fn download(site: PostSite, post: Post, global_dir: String) -> DownloadOutcome {
+    let folder = site.output_folder(&global_dir);
     let _ = std::fs::create_dir_all(&folder);
-    let args = download_cmd(&cfg, &post.url, &folder.to_string_lossy());
-    let out = match run(cfg.exe_or_default(), &args, DOWNLOAD_TIMEOUT).await {
+    let args = download_cmd(&site, &post.url, &folder.to_string_lossy());
+    let out = match run(site.exe_or_default(), &args, DOWNLOAD_TIMEOUT).await {
         Ok(o) => o,
         Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb },
     };

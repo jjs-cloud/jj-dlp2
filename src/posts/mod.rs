@@ -11,19 +11,30 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_INTERVAL_SECS: u64 = 60;
 pub const MIN_INTERVAL_SECS: u64 = 15;
-pub const DEFAULT_SITE_TMPL: &str = "https://www.tiktok.com/@{username}";
-/// Checker arguments used when blank; `{url}` is the profile (or post) URL.
-pub const DEFAULT_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
-/// Download arguments used when blank; `{url}` is the post URL and `{dir}` the download folder.
-pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
+/// Checker arguments used when a site's own are blank; `{url}` is the profile (or post) URL.
+pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
+/// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
+pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
+const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
+const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
 pub const DEFAULT_CARD_W: f32 = 170.0;
 pub const CARD_W_MIN: f32 = 120.0;
 pub const CARD_W_MAX: f32 = 260.0;
 /// Failed downloads are retried until they have failed this many times.
 pub const MAX_ATTEMPTS: u8 = 3;
 
+pub type SiteId = u64;
+
 fn yes() -> bool {
     true
+}
+
+/// Starting points offered by the Add site row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    Tiktok,
+    Blank,
 }
 
 /// One profile that is checked for new posts.
@@ -38,54 +49,28 @@ pub struct Account {
     pub baselined: bool,
 }
 
-/// Contents of posts.json.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A website whose accounts are checked, with its own commands and settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct PostsConfig {
-    pub accounts: Vec<Account>,
-    pub interval_secs: u64,
+pub struct PostSite {
+    pub id: SiteId,
+    pub name: String,
+    /// Blank uses `DEFAULT_EXE`.
     pub exe_path: String,
+    /// Blank uses `DEFAULT_INTERVAL_SECS`.
+    pub interval_secs: Option<u64>,
     /// Blank uses `DEFAULT_CHECKER_ARGS`.
     pub checker_args: String,
     /// Blank uses `DEFAULT_DOWNLOAD_ARGS`.
     pub download_args: String,
-    pub site_tmpl: String,
+    /// Profile URL pattern; `{username}` is replaced with the name typed when adding an account.
+    pub url_template: String,
+    /// Empty means `posts` inside the global output folder.
     pub output_dir: String,
-    pub auto_download: bool,
-    pub backfill: bool,
-    pub mark_on_open: bool,
-    pub notify_desktop: bool,
-    pub notify_ntfy: bool,
-    pub ntfy_topic: String,
-    pub paused: bool,
-    pub newest_first: bool,
-    pub card_w: f32,
+    pub accounts: Vec<Account>,
 }
 
-impl Default for PostsConfig {
-    fn default() -> Self {
-        PostsConfig {
-            accounts: Vec::new(),
-            interval_secs: DEFAULT_INTERVAL_SECS,
-            exe_path: String::new(),
-            checker_args: String::new(),
-            download_args: String::new(),
-            site_tmpl: DEFAULT_SITE_TMPL.to_string(),
-            output_dir: String::new(),
-            auto_download: true,
-            backfill: true,
-            mark_on_open: true,
-            notify_desktop: true,
-            notify_ntfy: false,
-            ntfy_topic: String::new(),
-            paused: false,
-            newest_first: true,
-            card_w: DEFAULT_CARD_W,
-        }
-    }
-}
-
-impl PostsConfig {
+impl PostSite {
     pub fn exe_or_default(&self) -> &str {
         let t = self.exe_path.trim();
         if t.is_empty() { DEFAULT_EXE } else { t }
@@ -99,6 +84,11 @@ impl PostsConfig {
     pub fn download_or_default(&self) -> &str {
         let t = self.download_args.trim();
         if t.is_empty() { DEFAULT_DOWNLOAD_ARGS } else { t }
+    }
+
+    /// Seconds between checks, never below the minimum.
+    pub fn interval_or_default(&self) -> u64 {
+        self.interval_secs.unwrap_or(DEFAULT_INTERVAL_SECS).max(MIN_INTERVAL_SECS)
     }
 
     /// The `--user-agent` value in the checker arguments, for thumbnail requests.
@@ -117,6 +107,10 @@ impl PostsConfig {
         if t.is_empty() { Path::new(global_dir.trim()).join("posts") } else { PathBuf::from(t) }
     }
 
+    pub fn has_enabled_accounts(&self) -> bool {
+        self.accounts.iter().any(|a| a.enabled)
+    }
+
     /// An account from a username or profile URL; `None` when blank, malformed or already added.
     pub fn account_from_input(&self, input: &str) -> Option<Account> {
         let input = input.trim();
@@ -125,8 +119,11 @@ impl PostsConfig {
             let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
             (last.trim_start_matches('@').to_string(), input.to_string())
         } else {
+            let tmpl = self.url_template.trim();
+            if tmpl.is_empty() {
+                return None;
+            }
             let name = input.trim_start_matches('@').to_string();
-            let tmpl = if self.site_tmpl.trim().is_empty() { DEFAULT_SITE_TMPL } else { self.site_tmpl.trim() };
             (name.clone(), tmpl.replace("{username}", &name))
         };
         if name.is_empty() || name.chars().any(char::is_whitespace) {
@@ -134,6 +131,79 @@ impl PostsConfig {
         }
         let dup = self.accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name) || a.url == url);
         (!dup).then_some(Account { name, url, enabled: true, baselined: false })
+    }
+}
+
+/// Contents of posts.json.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostsConfig {
+    pub sites: Vec<PostSite>,
+    pub auto_download: bool,
+    pub backfill: bool,
+    pub mark_on_open: bool,
+    pub notify_desktop: bool,
+    pub notify_ntfy: bool,
+    pub ntfy_topic: String,
+    pub paused: bool,
+    pub newest_first: bool,
+    pub card_w: f32,
+}
+
+impl Default for PostsConfig {
+    fn default() -> Self {
+        PostsConfig {
+            sites: Vec::new(),
+            auto_download: true,
+            backfill: true,
+            mark_on_open: true,
+            notify_desktop: true,
+            notify_ntfy: false,
+            ntfy_topic: String::new(),
+            paused: false,
+            newest_first: true,
+            card_w: DEFAULT_CARD_W,
+        }
+    }
+}
+
+impl PostsConfig {
+    pub fn site(&self, id: SiteId) -> Option<&PostSite> {
+        self.sites.iter().find(|s| s.id == id)
+    }
+
+    pub fn site_mut(&mut self, id: SiteId) -> Option<&mut PostSite> {
+        self.sites.iter_mut().find(|s| s.id == id)
+    }
+
+    /// Adds a site from a preset; `None` when the TikTok preset already exists.
+    pub fn add_site(&mut self, preset: Preset) -> Option<SiteId> {
+        let id = self.sites.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+        let taken = |name: &str| self.sites.iter().any(|s| s.name.eq_ignore_ascii_case(name));
+        let site = match preset {
+            Preset::Tiktok => {
+                if taken("TikTok") {
+                    return None;
+                }
+                PostSite {
+                    id,
+                    name: "TikTok".into(),
+                    checker_args: TIKTOK_CHECKER_ARGS.into(),
+                    download_args: TIKTOK_DOWNLOAD_ARGS.into(),
+                    url_template: TIKTOK_URL_TEMPLATE.into(),
+                    ..Default::default()
+                }
+            }
+            Preset::Blank => {
+                let name = std::iter::once("New site".to_string())
+                    .chain((2..).map(|n| format!("New site {n}")))
+                    .find(|n| !taken(n))
+                    .unwrap_or_default();
+                PostSite { id, name, ..Default::default() }
+            }
+        };
+        self.sites.push(site);
+        Some(id)
     }
 }
 
@@ -175,6 +245,7 @@ impl Section {
 #[serde(default)]
 pub struct Post {
     pub id: String,
+    pub site_id: SiteId,
     pub account: String,
     pub title: String,
     pub url: String,
@@ -369,13 +440,13 @@ fn expand(template: &str, url: &str, dir: &str) -> Vec<String> {
 }
 
 /// Checker arguments for a profile or single post URL.
-pub fn checker_cmd(cfg: &PostsConfig, url: &str) -> Vec<String> {
-    expand(cfg.checker_or_default(), url, "")
+pub fn checker_cmd(site: &PostSite, url: &str) -> Vec<String> {
+    expand(site.checker_or_default(), url, "")
 }
 
 /// Download arguments for one post into `dir`.
-pub fn download_cmd(cfg: &PostsConfig, url: &str, dir: &str) -> Vec<String> {
-    expand(cfg.download_or_default(), url, dir)
+pub fn download_cmd(site: &PostSite, url: &str, dir: &str) -> Vec<String> {
+    expand(site.download_or_default(), url, dir)
 }
 
 /// The notification for new posts of one account.
@@ -406,27 +477,49 @@ mod tests {
         assert_eq!(date_to_secs("2024"), None);
     }
 
+    fn tiktok() -> PostSite {
+        let mut cfg = PostsConfig::default();
+        let id = cfg.add_site(Preset::Tiktok).unwrap();
+        cfg.site(id).unwrap().clone()
+    }
+
     #[test]
     fn accounts_from_names_and_urls() {
-        let mut cfg = PostsConfig::default();
-        let a = cfg.account_from_input(" @Emiru ").unwrap();
+        let mut site = tiktok();
+        let a = site.account_from_input(" @Emiru ").unwrap();
         assert_eq!((a.name.as_str(), a.url.as_str()), ("Emiru", "https://www.tiktok.com/@Emiru"));
-        cfg.accounts.push(a);
-        assert!(cfg.account_from_input("emiru").is_none());
-        assert!(cfg.account_from_input("two words").is_none());
-        let b = cfg.account_from_input("https://www.tiktok.com/@ash/?lang=en").unwrap();
+        site.accounts.push(a);
+        assert!(site.account_from_input("emiru").is_none());
+        assert!(site.account_from_input("two words").is_none());
+        let b = site.account_from_input("https://www.tiktok.com/@ash/?lang=en").unwrap();
         assert_eq!(b.name, "ash");
     }
 
     #[test]
-    fn commands_fill_placeholders() {
+    fn blank_site_needs_a_url_for_accounts() {
         let mut cfg = PostsConfig::default();
-        let dl = download_cmd(&cfg, "https://x/v/1", "C:\\out dir");
+        let id = cfg.add_site(Preset::Blank).unwrap();
+        assert!(cfg.site(id).unwrap().account_from_input("someone").is_none());
+        assert!(cfg.site(id).unwrap().account_from_input("https://example.com/u/someone").is_some());
+        assert_eq!(cfg.add_site(Preset::Blank).map(|i| cfg.site(i).unwrap().name.clone()), Some("New site 2".into()));
+    }
+
+    #[test]
+    fn tiktok_preset_is_added_once() {
+        let mut cfg = PostsConfig::default();
+        assert!(cfg.add_site(Preset::Tiktok).is_some());
+        assert!(cfg.add_site(Preset::Tiktok).is_none());
+    }
+
+    #[test]
+    fn commands_fill_placeholders() {
+        let mut site = tiktok();
+        let dl = download_cmd(&site, "https://x/v/1", "C:\\out dir");
         assert!(dl.contains(&"C:\\out dir".to_string()) && dl.last().map(String::as_str) == Some("https://x/v/1"));
-        assert!(cfg.user_agent().unwrap().starts_with("Mozilla/5.0"));
-        cfg.checker_args = "--dump-json".into();
-        assert_eq!(checker_cmd(&cfg, "u"), vec!["--dump-json", "u"]);
-        assert_eq!(cfg.user_agent(), None);
+        assert!(site.user_agent().unwrap().starts_with("Mozilla/5.0"));
+        site.checker_args = "--dump-json".into();
+        assert_eq!(checker_cmd(&site, "u"), vec!["--dump-json", "u"]);
+        assert_eq!(site.user_agent(), None);
     }
 
     #[test]

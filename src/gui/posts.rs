@@ -5,7 +5,7 @@ use crate::api::{now_secs, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::notify;
 use crate::posts::runner::{self, CycleReport, DownloadOutcome};
-use crate::posts::{self, Post, PostState, PostsConfig, Section, MIN_INTERVAL_SECS};
+use crate::posts::{self, Post, PostSite, PostState, Preset, Section, SiteId, MIN_INTERVAL_SECS};
 use iced::widget::text_editor::{Action, Content, Edit};
 use iced::Task;
 use std::collections::{HashMap, HashSet};
@@ -19,21 +19,41 @@ const MAX_DOWNLOADS: usize = 2;
 const STATUS_SECS: u64 = 5;
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(3);
 
+/// Identifies an account: its site and name.
+pub type AccountKey = (SiteId, String);
+
+/// Editor state of one site's settings card.
+pub struct SiteUi {
+    pub interval: String,
+    pub checker: Content,
+    pub download: Content,
+    pub new_account: String,
+}
+
+impl SiteUi {
+    fn from_site(site: &PostSite) -> Self {
+        SiteUi {
+            interval: site.interval_secs.map(|n| n.to_string()).unwrap_or_default(),
+            checker: Content::with_text(&site.checker_args),
+            download: Content::with_text(&site.download_args),
+            new_account: String::new(),
+        }
+    }
+}
+
 pub struct PostsState {
-    pub cfg: PostsConfig,
+    pub cfg: posts::PostsConfig,
     pub posts: Vec<Post>,
     pub section: Section,
-    pub account: Option<String>,
+    pub account: Option<AccountKey>,
     pub search: String,
     pub shown: usize,
-    pub new_account: String,
-    pub interval_text: String,
-    pub checker_edit: Content,
-    pub download_edit: Content,
-    pub errors: HashMap<String, String>,
+    pub ui: HashMap<SiteId, SiteUi>,
+    pub confirm_remove: Option<SiteId>,
+    pub errors: HashMap<AccountKey, String>,
     pub last_check: Option<u64>,
     pub checking: bool,
-    pub next_check: Instant,
+    next_check: HashMap<SiteId, Instant>,
     downloads: usize,
     status: Option<(String, u64)>,
 }
@@ -41,21 +61,20 @@ pub struct PostsState {
 impl PostsState {
     pub fn new() -> Self {
         let cfg = posts::load_config();
+        let soon = Instant::now() + FIRST_CHECK_DELAY;
         PostsState {
-            interval_text: cfg.interval_secs.to_string(),
-            checker_edit: Content::with_text(&cfg.checker_args),
-            download_edit: Content::with_text(&cfg.download_args),
+            ui: cfg.sites.iter().map(|s| (s.id, SiteUi::from_site(s))).collect(),
+            next_check: cfg.sites.iter().map(|s| (s.id, soon)).collect(),
             cfg,
             posts: posts::load_library(),
             section: Section::Unviewed,
             account: None,
             search: String::new(),
             shown: PAGE,
-            new_account: String::new(),
+            confirm_remove: None,
             errors: HashMap::new(),
             last_check: None,
             checking: false,
-            next_check: Instant::now() + FIRST_CHECK_DELAY,
             downloads: 0,
             status: None,
         }
@@ -83,7 +102,7 @@ impl PostsState {
     }
 
     fn account_ok(&self, p: &Post) -> bool {
-        self.account.as_deref().is_none_or(|a| p.account.eq_ignore_ascii_case(a))
+        self.account.as_ref().is_none_or(|(sid, name)| p.site_id == *sid && p.account.eq_ignore_ascii_case(name))
     }
 
     /// Posts in the current section, account and search, in display order.
@@ -99,10 +118,10 @@ impl PostsState {
     }
 
     /// Posts in `section`, for the account when one is given.
-    pub fn count(&self, section: Section, account: Option<&str>) -> usize {
+    pub fn count(&self, section: Section, account: Option<(SiteId, &str)>) -> usize {
         self.posts
             .iter()
-            .filter(|p| p.in_section(section) && account.is_none_or(|a| p.account.eq_ignore_ascii_case(a)))
+            .filter(|p| p.in_section(section) && account.is_none_or(|(sid, n)| p.site_id == sid && p.account.eq_ignore_ascii_case(n)))
             .count()
     }
 
@@ -110,31 +129,41 @@ impl PostsState {
         self.count(Section::Unviewed, None)
     }
 
-    /// Seconds until the next check, or `None` while paused, checking or with nothing to check.
+    /// Seconds until the next site is checked, or `None` while paused, checking or with nothing to check.
     pub fn secs_to_next(&self) -> Option<u64> {
-        if self.checking || self.cfg.paused || !self.cfg.accounts.iter().any(|a| a.enabled) {
+        if self.checking || self.cfg.paused {
             return None;
         }
-        Some(self.next_check.saturating_duration_since(Instant::now()).as_secs())
+        let now = Instant::now();
+        self.cfg
+            .sites
+            .iter()
+            .filter(|s| s.has_enabled_accounts())
+            .map(|s| self.next_check.get(&s.id).map_or(0, |t| t.saturating_duration_since(now).as_secs()))
+            .min()
     }
 
-    /// Applies an editor action to the checker or download argument box and saves edits.
-    fn edit_args(&mut self, action: Action, checker: bool) {
+    /// Applies an editor action to a site's checker or download argument box and saves edits.
+    fn edit_args(&mut self, id: SiteId, action: Action, checker: bool) {
         if matches!(action, Action::Edit(Edit::Enter)) {
             return;
         }
         let is_edit = action.is_edit();
-        let content = if checker { &mut self.checker_edit } else { &mut self.download_edit };
+        let Some(ui) = self.ui.get_mut(&id) else { return };
+        let content = if checker { &mut ui.checker } else { &mut ui.download };
         content.perform(action);
-        if is_edit {
-            let text = content.text();
-            if checker {
-                self.cfg.checker_args = text;
-            } else {
-                self.cfg.download_args = text;
-            }
-            self.save_cfg();
+        if !is_edit {
+            return;
         }
+        let text = content.text();
+        if let Some(site) = self.cfg.site_mut(id) {
+            if checker {
+                site.checker_args = text;
+            } else {
+                site.download_args = text;
+            }
+        }
+        self.save_cfg();
     }
 
     fn reset_view(&mut self) {
@@ -159,13 +188,26 @@ impl PostsState {
     }
 }
 
+/// One editable field of a site's settings card.
+#[derive(Debug, Clone)]
+pub enum SiteField {
+    Name(String),
+    Interval(String),
+    Exe(String),
+    UrlTemplate(String),
+    OutDir(String),
+    Checker(Action),
+    Download(Action),
+    NewAccount(String),
+}
+
 #[derive(Debug, Clone)]
 pub enum PostsMsg {
     Checked(CycleReport),
     Downloaded(String, DownloadOutcome),
     Notified(Vec<String>),
     SetSection(Section),
-    SetAccount(Option<String>),
+    SetAccount(Option<AccountKey>),
     Search(String),
     ShowMore,
     CheckNow,
@@ -182,40 +224,48 @@ pub enum PostsMsg {
     CardWidth(f32),
     CardWidthSave,
     OpenSettings,
-    NewAccount(String),
-    AddAccount,
-    RemoveAccount(String),
-    ToggleAccount(String, bool),
-    Interval(String),
-    Exe(String),
-    CheckerArgs(Action),
-    DownloadArgs(Action),
-    OutputDir(String),
-    SiteTmpl(String),
+    AddSite(Preset),
+    RemoveSite(SiteId),
+    ConfirmRemoveSite(SiteId),
+    CancelRemoveSite,
+    Site(SiteId, SiteField),
+    AddAccount(SiteId),
+    RemoveAccount(SiteId, String),
+    ToggleAccount(SiteId, String, bool),
+    BrowseOutput(SiteId),
+    OutputChosen(SiteId, Option<PathBuf>),
+    OpenOutputDir(SiteId),
     AutoDownload(bool),
     Backfill(bool),
     MarkOnOpen(bool),
     NotifyDesktop(bool),
     NotifyNtfy(bool),
     NtfyTopic(String),
-    BrowseOutput,
-    OutputChosen(Option<PathBuf>),
-    OpenOutputDir,
 }
 
 impl App {
-    fn posts_out_dir(&self) -> PathBuf {
-        self.posts.cfg.output_folder(&self.settings.default_output_dir)
+    fn posts_out_dir(&self, id: SiteId) -> PathBuf {
+        let global = &self.settings.default_output_dir;
+        self.posts.cfg.site(id).map_or_else(|| PathBuf::from(global), |s| s.output_folder(global))
     }
 
     /// Starts due checks and queued downloads; called on every tick.
     pub(super) fn posts_tick(&mut self) -> Task<Msg> {
         let mut tasks = Vec::new();
-        let p = &mut self.posts;
-        let due = Instant::now() >= p.next_check;
-        if !p.checking && !p.cfg.paused && due && p.cfg.accounts.iter().any(|a| a.enabled) {
-            p.checking = true;
-            tasks.push(self.posts_start_check());
+        let now = Instant::now();
+        if !self.posts.checking && !self.posts.cfg.paused {
+            let due: Vec<PostSite> = self
+                .posts
+                .cfg
+                .sites
+                .iter()
+                .filter(|s| s.has_enabled_accounts() && self.posts.next_check.get(&s.id).is_none_or(|t| now >= *t))
+                .cloned()
+                .collect();
+            if !due.is_empty() {
+                self.posts.checking = true;
+                tasks.push(self.posts_start_check(due));
+            }
         }
         while self.posts.downloads < MAX_DOWNLOADS {
             let Some(next) = self.next_queued() else { break };
@@ -224,10 +274,9 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn posts_start_check(&self) -> Task<Msg> {
-        let cfg = self.posts.cfg.clone();
+    fn posts_start_check(&self, sites: Vec<PostSite>) -> Task<Msg> {
         let known: HashSet<String> = self.posts.posts.iter().map(|p| p.id.clone()).collect();
-        Task::perform(runner::check_cycle(cfg, known), |r| Msg::Posts(PostsMsg::Checked(r)))
+        Task::perform(runner::check_cycle(sites, known), |r| Msg::Posts(PostsMsg::Checked(r)))
     }
 
     /// The id of the newest queued post.
@@ -236,43 +285,58 @@ impl App {
     }
 
     fn posts_start_download(&mut self, id: String) -> Task<Msg> {
+        let site_id = self.posts.posts.iter().find(|p| p.id == id).map(|p| p.site_id);
+        let site = site_id.and_then(|sid| self.posts.cfg.site(sid).cloned());
         let Some(post) = self.posts.post_mut(&id) else { return Task::none() };
+        let Some(site) = site else {
+            post.state = PostState::Failed;
+            post.attempts = posts::MAX_ATTEMPTS;
+            post.error = "Its site was removed".into();
+            return Task::none();
+        };
         post.state = PostState::Downloading;
         let post = post.clone();
         self.posts.downloads += 1;
-        let cfg = self.posts.cfg.clone();
         let dir = self.settings.default_output_dir.clone();
-        Task::perform(runner::download(cfg, post, dir), move |o| Msg::Posts(PostsMsg::Downloaded(id.clone(), o)))
+        Task::perform(runner::download(site, post, dir), move |o| Msg::Posts(PostsMsg::Downloaded(id.clone(), o)))
     }
 
     /// Merges a finished check into the library and queues what is new.
     fn posts_on_checked(&mut self, report: CycleReport) -> Task<Msg> {
         let mut tasks = Vec::new();
         let mut logs = Vec::new();
-        let interval = Duration::from_secs(self.posts.cfg.interval_secs.max(MIN_INTERVAL_SECS));
+        let now = Instant::now();
         self.posts.checking = false;
         self.posts.last_check = Some(report.at);
-        self.posts.next_check = Instant::now() + interval;
+        for sid in &report.site_ids {
+            if let Some(site) = self.posts.cfg.site(*sid) {
+                let next = now + Duration::from_secs(site.interval_or_default());
+                self.posts.next_check.insert(*sid, next);
+            }
+        }
         for ar in report.accounts {
-            let Some(idx) = self.posts.cfg.accounts.iter().position(|a| a.name == ar.name) else { continue };
+            let key = (ar.site_id, ar.name.clone());
+            let Some(site) = self.posts.cfg.site_mut(ar.site_id) else { continue };
+            let Some(acct) = site.accounts.iter_mut().find(|a| a.name == ar.name) else { continue };
+            let site_name = site.name.clone();
             if let Some(e) = &ar.error {
-                if self.posts.errors.insert(ar.name.clone(), e.clone()).as_ref() != Some(e) {
-                    logs.push(format!("Posts: @{}: {e}", ar.name));
+                if self.posts.errors.insert(key, e.clone()).as_ref() != Some(e) {
+                    logs.push(format!("Posts: {site_name} @{}: {e}", ar.name));
                 }
                 continue;
             }
-            self.posts.errors.remove(&ar.name);
-            let first = !self.posts.cfg.accounts[idx].baselined;
-            self.posts.cfg.accounts[idx].baselined = true;
-            let cfg = &self.posts.cfg;
+            self.posts.errors.remove(&key);
+            let first = !acct.baselined;
+            acct.baselined = true;
+            let (backfill, auto) = (self.posts.cfg.backfill, self.posts.cfg.auto_download);
             let mut added = Vec::new();
             for mut post in ar.new_posts {
                 if self.posts.posts.iter().any(|p| p.id == post.id) {
                     continue;
                 }
-                if first && !cfg.backfill {
+                if first && !backfill {
                     post.viewed = true;
-                } else if cfg.auto_download {
+                } else if auto {
                     post.state = PostState::Queued;
                 }
                 added.push(post);
@@ -280,7 +344,7 @@ impl App {
             if added.is_empty() {
                 continue;
             }
-            logs.push(format!("Posts: {} new from @{}", added.len(), ar.name));
+            logs.push(format!("Posts: {} new from @{} on {site_name}", added.len(), ar.name));
             if !first {
                 if let Some(t) = self.posts_notify(&ar.name, &added) {
                     tasks.push(t);
@@ -366,7 +430,12 @@ impl App {
                 self.posts.reset_view();
             }
             PostsMsg::ShowMore => self.posts.shown += PAGE,
-            PostsMsg::CheckNow => self.posts.next_check = Instant::now(),
+            PostsMsg::CheckNow => {
+                let now = Instant::now();
+                for site in &self.posts.cfg.sites {
+                    self.posts.next_check.insert(site.id, now);
+                }
+            }
             PostsMsg::Paused(v) => {
                 self.posts.cfg.paused = v;
                 self.posts.save_cfg();
@@ -420,56 +489,59 @@ impl App {
                 self.tab = Tab::Settings;
                 self.settings_tab = SettingsTab::Posts;
             }
-            PostsMsg::NewAccount(v) => self.posts.new_account = v,
-            PostsMsg::AddAccount => {
-                match self.posts.cfg.account_from_input(&self.posts.new_account) {
+            PostsMsg::AddSite(preset) => match self.posts.cfg.add_site(preset) {
+                Some(id) => {
+                    let Some(site) = self.posts.cfg.site(id) else { return Task::none() };
+                    let name = site.name.clone();
+                    self.posts.ui.insert(id, SiteUi::from_site(site));
+                    self.posts.next_check.insert(id, Instant::now());
+                    self.posts.save_cfg();
+                    self.posts.say(format!("{name} has been added!"));
+                }
+                None => self.posts.say("TikTok is already added"),
+            },
+            PostsMsg::RemoveSite(id) => self.posts.confirm_remove = Some(id),
+            PostsMsg::CancelRemoveSite => self.posts.confirm_remove = None,
+            PostsMsg::ConfirmRemoveSite(id) => self.posts_remove_site(id),
+            PostsMsg::Site(id, field) => self.posts_site_field(id, field),
+            PostsMsg::AddAccount(id) => {
+                let input = self.posts.ui.get(&id).map(|u| u.new_account.clone()).unwrap_or_default();
+                let account = self.posts.cfg.site(id).and_then(|s| s.account_from_input(&input));
+                match account {
                     Some(a) => {
                         let name = a.name.clone();
-                        self.posts.cfg.accounts.push(a);
-                        self.posts.new_account.clear();
-                        self.posts.next_check = Instant::now();
+                        if let Some(site) = self.posts.cfg.site_mut(id) {
+                            site.accounts.push(a);
+                        }
+                        if let Some(ui) = self.posts.ui.get_mut(&id) {
+                            ui.new_account.clear();
+                        }
+                        self.posts.next_check.insert(id, Instant::now());
                         self.posts.save_cfg();
                         self.posts.say(format!("Added @{name}"));
                     }
                     None => self.posts.say("Enter a new username or profile URL"),
                 }
             }
-            PostsMsg::RemoveAccount(name) => {
-                self.posts.cfg.accounts.retain(|a| a.name != name);
-                self.posts.errors.remove(&name);
-                if self.posts.account.as_deref() == Some(name.as_str()) {
+            PostsMsg::RemoveAccount(id, name) => {
+                if let Some(site) = self.posts.cfg.site_mut(id) {
+                    site.accounts.retain(|a| a.name != name);
+                }
+                self.posts.errors.remove(&(id, name.clone()));
+                if self.posts.account.as_ref() == Some(&(id, name)) {
                     self.posts.account = None;
                 }
                 self.posts.save_cfg();
             }
-            PostsMsg::ToggleAccount(name, on) => {
-                if let Some(a) = self.posts.cfg.accounts.iter_mut().find(|a| a.name == name) {
+            PostsMsg::ToggleAccount(id, name, on) => {
+                let acct = self.posts.cfg.site_mut(id).and_then(|s| s.accounts.iter_mut().find(|a| a.name == name));
+                if let Some(a) = acct {
                     a.enabled = on;
                 }
                 self.posts.save_cfg();
             }
-            PostsMsg::Interval(v) => {
-                if let Ok(n) = v.trim().parse::<u64>() {
-                    if n >= MIN_INTERVAL_SECS {
-                        self.posts.cfg.interval_secs = n;
-                        self.posts.save_cfg();
-                    }
-                }
-                self.posts.interval_text = v;
-            }
-            PostsMsg::Exe(v) => self.posts_edit(|c| c.exe_path = v),
-            PostsMsg::CheckerArgs(a) => self.posts.edit_args(a, true),
-            PostsMsg::DownloadArgs(a) => self.posts.edit_args(a, false),
-            PostsMsg::OutputDir(v) => self.posts_edit(|c| c.output_dir = v),
-            PostsMsg::SiteTmpl(v) => self.posts_edit(|c| c.site_tmpl = v),
-            PostsMsg::AutoDownload(v) => self.posts_edit(|c| c.auto_download = v),
-            PostsMsg::Backfill(v) => self.posts_edit(|c| c.backfill = v),
-            PostsMsg::MarkOnOpen(v) => self.posts_edit(|c| c.mark_on_open = v),
-            PostsMsg::NotifyDesktop(v) => self.posts_edit(|c| c.notify_desktop = v),
-            PostsMsg::NotifyNtfy(v) => self.posts_edit(|c| c.notify_ntfy = v),
-            PostsMsg::NtfyTopic(v) => self.posts_edit(|c| c.ntfy_topic = v),
-            PostsMsg::BrowseOutput => {
-                let start = self.posts_out_dir();
+            PostsMsg::BrowseOutput(id) => {
+                let start = self.posts_out_dir(id);
                 return Task::perform(
                     async move {
                         let mut dlg = rfd::AsyncFileDialog::new().set_title("Posts download folder");
@@ -478,24 +550,90 @@ impl App {
                         }
                         dlg.pick_folder().await.map(|h| h.path().to_path_buf())
                     },
-                    |p| Msg::Posts(PostsMsg::OutputChosen(p)),
+                    move |p| Msg::Posts(PostsMsg::OutputChosen(id, p)),
                 );
             }
-            PostsMsg::OutputChosen(Some(dir)) => self.posts_edit(|c| c.output_dir = dir.to_string_lossy().into_owned()),
-            PostsMsg::OutputChosen(None) => {}
-            PostsMsg::OpenOutputDir => {
-                let dir = self.posts_out_dir();
+            PostsMsg::OutputChosen(id, Some(dir)) => {
+                if let Some(site) = self.posts.cfg.site_mut(id) {
+                    site.output_dir = dir.to_string_lossy().into_owned();
+                }
+                self.posts.save_cfg();
+            }
+            PostsMsg::OutputChosen(_, None) => {}
+            PostsMsg::OpenOutputDir(id) => {
+                let dir = self.posts_out_dir(id);
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = open::that_detached(dir);
             }
+            PostsMsg::AutoDownload(v) => self.posts_edit(|c| c.auto_download = v),
+            PostsMsg::Backfill(v) => self.posts_edit(|c| c.backfill = v),
+            PostsMsg::MarkOnOpen(v) => self.posts_edit(|c| c.mark_on_open = v),
+            PostsMsg::NotifyDesktop(v) => self.posts_edit(|c| c.notify_desktop = v),
+            PostsMsg::NotifyNtfy(v) => self.posts_edit(|c| c.notify_ntfy = v),
+            PostsMsg::NtfyTopic(v) => self.posts_edit(|c| c.ntfy_topic = v),
         }
         Task::none()
     }
 
     /// Applies one config edit and saves it.
-    fn posts_edit(&mut self, f: impl FnOnce(&mut PostsConfig)) {
+    fn posts_edit(&mut self, f: impl FnOnce(&mut posts::PostsConfig)) {
         f(&mut self.posts.cfg);
         self.posts.save_cfg();
+    }
+
+    /// Applies one edit of a site's settings card and saves it.
+    fn posts_site_field(&mut self, id: SiteId, field: SiteField) {
+        match field {
+            SiteField::Checker(a) => return self.posts.edit_args(id, a, true),
+            SiteField::Download(a) => return self.posts.edit_args(id, a, false),
+            SiteField::NewAccount(v) => {
+                if let Some(ui) = self.posts.ui.get_mut(&id) {
+                    ui.new_account = v;
+                }
+                return;
+            }
+            SiteField::Interval(v) => {
+                let parsed = match v.trim() {
+                    "" => Some(None),
+                    t => t.parse::<u64>().ok().filter(|n| *n >= MIN_INTERVAL_SECS).map(Some),
+                };
+                if let (Some(value), Some(site)) = (parsed, self.posts.cfg.site_mut(id)) {
+                    site.interval_secs = value;
+                }
+                if let Some(ui) = self.posts.ui.get_mut(&id) {
+                    ui.interval = v;
+                }
+            }
+            other => {
+                let Some(site) = self.posts.cfg.site_mut(id) else { return };
+                match other {
+                    SiteField::Name(v) => site.name = v,
+                    SiteField::Exe(v) => site.exe_path = v,
+                    SiteField::UrlTemplate(v) => site.url_template = v,
+                    SiteField::OutDir(v) => site.output_dir = v,
+                    _ => {}
+                }
+            }
+        }
+        self.posts.save_cfg();
+    }
+
+    /// Removes a site with its accounts, posts and thumbnails.
+    fn posts_remove_site(&mut self, id: SiteId) {
+        self.posts.confirm_remove = None;
+        self.posts.cfg.sites.retain(|s| s.id != id);
+        self.posts.ui.remove(&id);
+        self.posts.next_check.remove(&id);
+        self.posts.errors.retain(|(sid, _), _| *sid != id);
+        if self.posts.account.as_ref().is_some_and(|(sid, _)| *sid == id) {
+            self.posts.account = None;
+        }
+        for p in self.posts.posts.iter().filter(|p| p.site_id == id) {
+            let _ = std::fs::remove_file(p.thumb_path());
+        }
+        self.posts.posts.retain(|p| p.site_id != id);
+        self.posts.save_cfg();
+        self.posts.save_lib();
     }
 
     /// Opens the downloaded file, or the post page when there is none, and marks it viewed.
