@@ -6,12 +6,15 @@ use super::view::{btn_label, card_box, clip, fmt_ago, muted, t, warn_text};
 use super::{App, Msg};
 use crate::posts::{self, Post, PostState, Section};
 use iced::widget::text::Wrapping;
-use iced::widget::{Column, Row, Space, button, column, container, row, scrollable, slider, stack, text_input, toggler};
+use iced::widget::text_editor::{self, Action};
+use iced::widget::{Column, Row, Space, button, column, container, row, scrollable, slider, stack, text_editor as editor, text_input, toggler};
 use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
 
 const SIDEBAR_W: f32 = 210.0;
 const GAP: f32 = 10.0;
 const CARD_PAD: f32 = 8.0;
+/// Two 13px lines at the default 1.3 line height plus 8px padding top and bottom.
+const ARGS_BOX_H: f32 = 2.0 * 13.0 * 1.3 + 16.0;
 /// Window width taken by the page padding, the sidebar gap and the scrollbar.
 const CHROME_W: f32 = 36.0 + 12.0 + 26.0;
 
@@ -71,6 +74,16 @@ fn field<'a>(s: Skin, label: &'static str, hint: &'static str, value: &'a str, i
     ]
     .spacing(10)
     .align_y(Alignment::Center)
+    .into()
+}
+
+/// A wrapping command-line box that is two lines tall and scrolls beyond that.
+fn args_field<'a>(s: Skin, label: &'static str, hint: &'static str, content: &'a text_editor::Content, on: fn(Action) -> PostsMsg) -> Element<'a, Msg> {
+    row![
+        t(&s, label).size(13).width(170),
+        editor(content).placeholder(hint).on_action(move |a| send(on(a))).font(s.font).size(13).padding(8).height(ARGS_BOX_H).style(skin::editor(s)),
+    ]
+    .spacing(10)
     .into()
 }
 
@@ -340,7 +353,7 @@ impl App {
             muted(&s, format!("Seconds between checks (at least {}). Blank argument lines use the defaults; {{url}} is the profile or post URL.", posts::MIN_INTERVAL_SECS)),
             field(s, "Check every (seconds)", "60", &p.interval_text, interval_bad, PostsMsg::Interval),
             field(s, "yt-dlp path", crate::api::DEFAULT_EXE, &c.exe_path, false, PostsMsg::Exe),
-            field(s, "Checker arguments", posts::DEFAULT_CHECKER_ARGS, &c.checker_args, false, PostsMsg::CheckerArgs),
+            args_field(s, "Checker arguments", posts::DEFAULT_CHECKER_ARGS, &p.checker_edit, PostsMsg::CheckerArgs),
             field(s, "Profile URL template", posts::DEFAULT_SITE_TMPL, &c.site_tmpl, false, PostsMsg::SiteTmpl),
             flag("Pause checking", c.paused, PostsMsg::Paused),
         ]
@@ -367,7 +380,7 @@ impl App {
             .spacing(8)
             .align_y(Alignment::Center),
             muted(&s, "{dir} is the download folder above and {url} the post URL."),
-            field(s, "Download arguments", posts::DEFAULT_DOWNLOAD_ARGS, &c.download_args, false, PostsMsg::DownloadArgs),
+            args_field(s, "Download arguments", posts::DEFAULT_DOWNLOAD_ARGS, &p.download_edit, PostsMsg::DownloadArgs),
         ]
         .spacing(8);
 

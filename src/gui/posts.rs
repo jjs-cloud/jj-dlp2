@@ -6,6 +6,7 @@ use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::notify;
 use crate::posts::runner::{self, CycleReport, DownloadOutcome};
 use crate::posts::{self, Post, PostState, PostsConfig, Section, MIN_INTERVAL_SECS};
+use iced::widget::text_editor::{Action, Content, Edit};
 use iced::Task;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,8 @@ pub struct PostsState {
     pub shown: usize,
     pub new_account: String,
     pub interval_text: String,
+    pub checker_edit: Content,
+    pub download_edit: Content,
     pub errors: HashMap<String, String>,
     pub last_check: Option<u64>,
     pub checking: bool,
@@ -40,6 +43,8 @@ impl PostsState {
         let cfg = posts::load_config();
         PostsState {
             interval_text: cfg.interval_secs.to_string(),
+            checker_edit: Content::with_text(&cfg.checker_args),
+            download_edit: Content::with_text(&cfg.download_args),
             cfg,
             posts: posts::load_library(),
             section: Section::Unviewed,
@@ -113,6 +118,25 @@ impl PostsState {
         Some(self.next_check.saturating_duration_since(Instant::now()).as_secs())
     }
 
+    /// Applies an editor action to the checker or download argument box and saves edits.
+    fn edit_args(&mut self, action: Action, checker: bool) {
+        if matches!(action, Action::Edit(Edit::Enter)) {
+            return;
+        }
+        let is_edit = action.is_edit();
+        let content = if checker { &mut self.checker_edit } else { &mut self.download_edit };
+        content.perform(action);
+        if is_edit {
+            let text = content.text();
+            if checker {
+                self.cfg.checker_args = text;
+            } else {
+                self.cfg.download_args = text;
+            }
+            self.save_cfg();
+        }
+    }
+
     fn reset_view(&mut self) {
         self.shown = PAGE;
     }
@@ -164,8 +188,8 @@ pub enum PostsMsg {
     ToggleAccount(String, bool),
     Interval(String),
     Exe(String),
-    CheckerArgs(String),
-    DownloadArgs(String),
+    CheckerArgs(Action),
+    DownloadArgs(Action),
     OutputDir(String),
     SiteTmpl(String),
     AutoDownload(bool),
@@ -434,8 +458,8 @@ impl App {
                 self.posts.interval_text = v;
             }
             PostsMsg::Exe(v) => self.posts_edit(|c| c.exe_path = v),
-            PostsMsg::CheckerArgs(v) => self.posts_edit(|c| c.checker_args = v),
-            PostsMsg::DownloadArgs(v) => self.posts_edit(|c| c.download_args = v),
+            PostsMsg::CheckerArgs(a) => self.posts.edit_args(a, true),
+            PostsMsg::DownloadArgs(a) => self.posts.edit_args(a, false),
             PostsMsg::OutputDir(v) => self.posts_edit(|c| c.output_dir = v),
             PostsMsg::SiteTmpl(v) => self.posts_edit(|c| c.site_tmpl = v),
             PostsMsg::AutoDownload(v) => self.posts_edit(|c| c.auto_download = v),

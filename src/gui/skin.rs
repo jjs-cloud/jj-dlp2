@@ -2,7 +2,7 @@
 
 use iced::border::Radius;
 use iced::gradient::Linear;
-use iced::widget::{button, container, text_input};
+use iced::widget::{button, container, text_editor, text_input};
 use iced::{Background, Border, Color, Font, Gradient, Shadow, Theme, Vector};
 use std::f32::consts::PI;
 
@@ -399,6 +399,31 @@ pub fn input_required(s: Skin, invalid: bool) -> impl Fn(&Theme, text_input::Sta
                 radius: Radius::from(s.radius * 0.6),
             },
             icon: s.muted,
+            placeholder: with_alpha(s.muted, 0.7),
+            value: s.text,
+            selection: with_alpha(s.accent, 0.35),
+        }
+    }
+}
+
+/// Multi-line editor style matching the text inputs.
+pub fn editor(s: Skin) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style {
+    move |_, status| {
+        let focused = matches!(status, text_editor::Status::Focused { .. });
+        let hovered = matches!(status, text_editor::Status::Hovered | text_editor::Status::Focused { is_hovered: true });
+        text_editor::Style {
+            background: Background::Color(with_alpha(s.bg, 0.7)),
+            border: Border {
+                color: if focused {
+                    s.accent
+                } else if hovered {
+                    with_alpha(s.accent, 0.6)
+                } else {
+                    s.border
+                },
+                width: 1.0,
+                radius: Radius::from(s.radius * 0.6),
+            },
             placeholder: with_alpha(s.muted, 0.7),
             value: s.text,
             selection: with_alpha(s.accent, 0.35),
