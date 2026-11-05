@@ -18,26 +18,98 @@ pub const PAGE: usize = 40;
 const MAX_DOWNLOADS: usize = 2;
 const STATUS_SECS: u64 = 5;
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(3);
+/// Time between auto-delete sweeps.
+const SWEEP_EVERY: Duration = Duration::from_secs(3600);
+const SECS_PER_DAY: u64 = 86_400;
+/// Draft key for the unsaved blank site; real site ids start at 1.
+pub const NEW_SITE: SiteId = 0;
 
 /// Identifies an account: its site and name.
 pub type AccountKey = (SiteId, String);
 
-/// Editor state of one site's settings card.
-pub struct SiteUi {
+/// Unsaved edits to one site's settings card.
+pub struct SiteDraft {
+    pub name: String,
     pub interval: String,
+    pub exe: String,
+    pub url_template: String,
+    pub output_dir: String,
+    pub auto_delete: String,
     pub checker: Content,
     pub download: Content,
-    pub new_account: String,
+    pub paused: bool,
+    pub auto_download: bool,
+    pub backfill: bool,
+    pub mark_on_open: bool,
+    pub notify_desktop: bool,
+    pub notify_ntfy: bool,
+    pub ntfy_topic: String,
 }
 
-impl SiteUi {
-    fn from_site(site: &PostSite) -> Self {
-        SiteUi {
+impl SiteDraft {
+    pub fn from_site(site: &PostSite) -> Self {
+        SiteDraft {
+            name: site.name.clone(),
             interval: site.interval_secs.map(|n| n.to_string()).unwrap_or_default(),
+            exe: site.exe_path.clone(),
+            url_template: site.url_template.clone(),
+            output_dir: site.output_dir.clone(),
+            auto_delete: site.auto_delete_days.map(|n| n.to_string()).unwrap_or_default(),
             checker: Content::with_text(&site.checker_args),
             download: Content::with_text(&site.download_args),
-            new_account: String::new(),
+            paused: site.paused,
+            auto_download: site.auto_download,
+            backfill: site.backfill,
+            mark_on_open: site.mark_on_open,
+            notify_desktop: site.notify_desktop,
+            notify_ntfy: site.notify_ntfy,
+            ntfy_topic: site.ntfy_topic.clone(),
         }
+    }
+
+    /// The template for a site name: TikTok's, else blank; the name is kept.
+    pub fn from_defaults(name: &str) -> Self {
+        let preset = if name.trim().eq_ignore_ascii_case("tiktok") { Preset::Tiktok } else { Preset::Blank };
+        SiteDraft::from_site(&PostSite { name: name.to_string(), ..PostSite::from_preset(preset) })
+    }
+
+    /// `base` with these edits applied; `None` while a field is invalid.
+    pub fn build(&self, base: &PostSite) -> Option<PostSite> {
+        let number = |text: &str, min: u64| match text.trim() {
+            "" => Some(None),
+            t => t.parse::<u64>().ok().filter(|n| *n >= min).map(Some),
+        };
+        if self.name.trim().is_empty() || (self.notify_ntfy && !crate::policy::notify::topic_valid(&self.ntfy_topic)) {
+            return None;
+        }
+        Some(PostSite {
+            name: self.name.trim().to_string(),
+            interval_secs: number(&self.interval, MIN_INTERVAL_SECS)?,
+            exe_path: self.exe.clone(),
+            url_template: self.url_template.clone(),
+            output_dir: self.output_dir.clone(),
+            auto_delete_days: number(&self.auto_delete, 1)?,
+            checker_args: self.checker.text(),
+            download_args: self.download.text(),
+            paused: self.paused,
+            auto_download: self.auto_download,
+            backfill: self.backfill,
+            mark_on_open: self.mark_on_open,
+            notify_desktop: self.notify_desktop,
+            notify_ntfy: self.notify_ntfy,
+            ntfy_topic: self.ntfy_topic.clone(),
+            ..base.clone()
+        })
+    }
+
+    /// True when the edits are valid, or the site is unsaved.
+    pub fn valid(&self) -> bool {
+        self.build(&PostSite::default()).is_some()
+    }
+
+    /// True when the edits differ from the saved site.
+    pub fn differs_from(&self, saved: &PostSite) -> bool {
+        self.build(saved).is_none_or(|b| b != *saved)
     }
 }
 
@@ -48,12 +120,16 @@ pub struct PostsState {
     pub account: Option<AccountKey>,
     pub search: String,
     pub shown: usize,
-    pub ui: HashMap<SiteId, SiteUi>,
+    pub drafts: HashMap<SiteId, SiteDraft>,
+    pub add_site: Option<SiteId>,
+    pub add_name: String,
+    pub added: Option<(String, u64)>,
     pub confirm_remove: Option<SiteId>,
     pub errors: HashMap<AccountKey, String>,
     pub last_check: Option<u64>,
     pub checking: bool,
     next_check: HashMap<SiteId, Instant>,
+    next_sweep: Instant,
     downloads: usize,
     status: Option<(String, u64)>,
 }
@@ -63,7 +139,11 @@ impl PostsState {
         let cfg = posts::load_config();
         let soon = Instant::now() + FIRST_CHECK_DELAY;
         PostsState {
-            ui: cfg.sites.iter().map(|s| (s.id, SiteUi::from_site(s))).collect(),
+            drafts: cfg.sites.iter().map(|s| (s.id, SiteDraft::from_site(s))).collect(),
+            add_site: None,
+            add_name: String::new(),
+            added: None,
+            next_sweep: soon,
             next_check: cfg.sites.iter().map(|s| (s.id, soon)).collect(),
             cfg,
             posts: posts::load_library(),
@@ -129,41 +209,42 @@ impl PostsState {
         self.count(Section::Unviewed, None)
     }
 
+    /// True when every site that has accounts to check is paused.
+    pub fn all_paused(&self) -> bool {
+        let mut live = self.cfg.sites.iter().filter(|s| s.has_enabled_accounts()).peekable();
+        live.peek().is_some() && live.all(|s| s.paused)
+    }
+
+    /// The site the username box adds to: the chosen one, else TikTok, else the first.
+    pub fn add_target(&self) -> Option<SiteId> {
+        let chosen = self.add_site.filter(|id| self.cfg.site(*id).is_some());
+        chosen
+            .or_else(|| self.cfg.sites.iter().find(|s| s.name.eq_ignore_ascii_case("tiktok")).map(|s| s.id))
+            .or_else(|| self.cfg.sites.first().map(|s| s.id))
+    }
+
     /// Seconds until the next site is checked, or `None` while paused, checking or with nothing to check.
     pub fn secs_to_next(&self) -> Option<u64> {
-        if self.checking || self.cfg.paused {
+        if self.checking {
             return None;
         }
         let now = Instant::now();
         self.cfg
             .sites
             .iter()
-            .filter(|s| s.has_enabled_accounts())
+            .filter(|s| s.has_enabled_accounts() && !s.paused)
             .map(|s| self.next_check.get(&s.id).map_or(0, |t| t.saturating_duration_since(now).as_secs()))
             .min()
     }
 
-    /// Applies an editor action to a site's checker or download argument box and saves edits.
+    /// Applies an editor action to a site's checker or download argument draft.
     fn edit_args(&mut self, id: SiteId, action: Action, checker: bool) {
         if matches!(action, Action::Edit(Edit::Enter)) {
             return;
         }
-        let is_edit = action.is_edit();
-        let Some(ui) = self.ui.get_mut(&id) else { return };
-        let content = if checker { &mut ui.checker } else { &mut ui.download };
+        let Some(d) = self.drafts.get_mut(&id) else { return };
+        let content = if checker { &mut d.checker } else { &mut d.download };
         content.perform(action);
-        if !is_edit {
-            return;
-        }
-        let text = content.text();
-        if let Some(site) = self.cfg.site_mut(id) {
-            if checker {
-                site.checker_args = text;
-            } else {
-                site.download_args = text;
-            }
-        }
-        self.save_cfg();
     }
 
     fn reset_view(&mut self) {
@@ -196,9 +277,16 @@ pub enum SiteField {
     Exe(String),
     UrlTemplate(String),
     OutDir(String),
+    AutoDelete(String),
     Checker(Action),
     Download(Action),
-    NewAccount(String),
+    Paused(bool),
+    AutoDownload(bool),
+    Backfill(bool),
+    MarkOnOpen(bool),
+    NotifyDesktop(bool),
+    NotifyNtfy(bool),
+    NtfyTopic(String),
 }
 
 #[derive(Debug, Clone)]
@@ -225,22 +313,20 @@ pub enum PostsMsg {
     CardWidthSave,
     OpenSettings,
     AddSite(Preset),
+    SaveSite(SiteId),
+    RevertSite(SiteId),
+    DefaultsSite(SiteId),
     RemoveSite(SiteId),
     ConfirmRemoveSite(SiteId),
     CancelRemoveSite,
     Site(SiteId, SiteField),
-    AddAccount(SiteId),
     RemoveAccount(SiteId, String),
-    ToggleAccount(SiteId, String, bool),
+    PickAddSite(SiteId),
+    AddName(String),
+    AddAccount,
     BrowseOutput(SiteId),
     OutputChosen(SiteId, Option<PathBuf>),
     OpenOutputDir(SiteId),
-    AutoDownload(bool),
-    Backfill(bool),
-    MarkOnOpen(bool),
-    NotifyDesktop(bool),
-    NotifyNtfy(bool),
-    NtfyTopic(String),
 }
 
 impl App {
@@ -253,13 +339,17 @@ impl App {
     pub(super) fn posts_tick(&mut self) -> Task<Msg> {
         let mut tasks = Vec::new();
         let now = Instant::now();
-        if !self.posts.checking && !self.posts.cfg.paused {
+        if now >= self.posts.next_sweep {
+            self.posts.next_sweep = now + SWEEP_EVERY;
+            self.posts_sweep();
+        }
+        if !self.posts.checking {
             let due: Vec<PostSite> = self
                 .posts
                 .cfg
                 .sites
                 .iter()
-                .filter(|s| s.has_enabled_accounts() && self.posts.next_check.get(&s.id).is_none_or(|t| now >= *t))
+                .filter(|s| s.has_enabled_accounts() && !s.paused && self.posts.next_check.get(&s.id).is_none_or(|t| now >= *t))
                 .cloned()
                 .collect();
             if !due.is_empty() {
@@ -318,7 +408,7 @@ impl App {
             let key = (ar.site_id, ar.name.clone());
             let Some(site) = self.posts.cfg.site_mut(ar.site_id) else { continue };
             let Some(acct) = site.accounts.iter_mut().find(|a| a.name == ar.name) else { continue };
-            let site_name = site.name.clone();
+            let (site_name, backfill, auto) = (site.name.clone(), site.backfill, site.auto_download);
             if let Some(e) = &ar.error {
                 if self.posts.errors.insert(key, e.clone()).as_ref() != Some(e) {
                     logs.push(format!("Posts: {site_name} @{}: {e}", ar.name));
@@ -328,7 +418,6 @@ impl App {
             self.posts.errors.remove(&key);
             let first = !acct.baselined;
             acct.baselined = true;
-            let (backfill, auto) = (self.posts.cfg.backfill, self.posts.cfg.auto_download);
             let mut added = Vec::new();
             for mut post in ar.new_posts {
                 if self.posts.posts.iter().any(|p| p.id == post.id) {
@@ -346,17 +435,16 @@ impl App {
             }
             logs.push(format!("Posts: {} new from @{} on {site_name}", added.len(), ar.name));
             if !first {
-                if let Some(t) = self.posts_notify(&ar.name, &added) {
+                if let Some(t) = self.posts_notify(ar.site_id, &ar.name, &added) {
                     tasks.push(t);
                 }
             }
             self.posts.posts.extend(added);
         }
-        if self.posts.cfg.auto_download {
-            for p in &mut self.posts.posts {
-                if p.state == PostState::Failed && p.attempts < posts::MAX_ATTEMPTS {
-                    p.state = PostState::Queued;
-                }
+        let auto_sites: HashSet<SiteId> = self.posts.cfg.sites.iter().filter(|s| s.auto_download).map(|s| s.id).collect();
+        for p in &mut self.posts.posts {
+            if p.state == PostState::Failed && p.attempts < posts::MAX_ATTEMPTS && auto_sites.contains(&p.site_id) {
+                p.state = PostState::Queued;
             }
         }
         self.posts.save_cfg();
@@ -367,11 +455,11 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn posts_notify(&self, account: &str, added: &[Post]) -> Option<Task<Msg>> {
-        let cfg = &self.posts.cfg;
+    fn posts_notify(&self, site_id: SiteId, account: &str, added: &[Post]) -> Option<Task<Msg>> {
+        let site = self.posts.cfg.site(site_id)?;
         let targets = notify::Targets {
-            desktop_timeout_secs: cfg.notify_desktop.then_some(DEFAULT_NOTIFY_TIMEOUT_SECS),
-            ntfy_topic: (cfg.notify_ntfy && notify::topic_valid(&cfg.ntfy_topic)).then(|| cfg.ntfy_topic.trim().to_string()),
+            desktop_timeout_secs: site.notify_desktop.then_some(DEFAULT_NOTIFY_TIMEOUT_SECS),
+            ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic)).then(|| site.ntfy_topic.trim().to_string()),
         };
         if targets.is_empty() {
             return None;
@@ -437,7 +525,12 @@ impl App {
                 }
             }
             PostsMsg::Paused(v) => {
-                self.posts.cfg.paused = v;
+                for site in &mut self.posts.cfg.sites {
+                    site.paused = v;
+                }
+                for d in self.posts.drafts.values_mut() {
+                    d.paused = v;
+                }
                 self.posts.save_cfg();
             }
             PostsMsg::Play(id) => self.posts_play(&id),
@@ -489,40 +582,35 @@ impl App {
                 self.tab = Tab::Settings;
                 self.settings_tab = SettingsTab::Posts;
             }
-            PostsMsg::AddSite(preset) => match self.posts.cfg.add_site(preset) {
-                Some(id) => {
-                    let Some(site) = self.posts.cfg.site(id) else { return Task::none() };
-                    let name = site.name.clone();
-                    self.posts.ui.insert(id, SiteUi::from_site(site));
-                    self.posts.next_check.insert(id, Instant::now());
-                    self.posts.save_cfg();
-                    self.posts.say(format!("{name} has been added!"));
+            PostsMsg::AddSite(Preset::Blank) => {
+                self.posts.drafts.entry(NEW_SITE).or_insert_with(|| SiteDraft::from_site(&PostSite::from_preset(Preset::Blank)));
+            }
+            PostsMsg::AddSite(preset) => {
+                let site = PostSite::from_preset(preset);
+                let name = site.name.clone();
+                match self.posts.cfg.add_site(site) {
+                    Some(id) => self.posts_site_added(id, name),
+                    None => self.posts.say(format!("{name} is already added")),
                 }
-                None => self.posts.say("TikTok is already added"),
-            },
+            }
+            PostsMsg::SaveSite(id) => self.posts_save_site(id),
+            PostsMsg::RevertSite(id) => {
+                if let Some(site) = self.posts.cfg.site(id) {
+                    let draft = SiteDraft::from_site(site);
+                    self.posts.drafts.insert(id, draft);
+                }
+            }
+            PostsMsg::DefaultsSite(id) => {
+                let name = self.posts.drafts.get(&id).map(|d| d.name.clone()).unwrap_or_default();
+                self.posts.drafts.insert(id, SiteDraft::from_defaults(&name));
+            }
+            PostsMsg::RemoveSite(NEW_SITE) => {
+                self.posts.drafts.remove(&NEW_SITE);
+            }
             PostsMsg::RemoveSite(id) => self.posts.confirm_remove = Some(id),
             PostsMsg::CancelRemoveSite => self.posts.confirm_remove = None,
             PostsMsg::ConfirmRemoveSite(id) => self.posts_remove_site(id),
             PostsMsg::Site(id, field) => self.posts_site_field(id, field),
-            PostsMsg::AddAccount(id) => {
-                let input = self.posts.ui.get(&id).map(|u| u.new_account.clone()).unwrap_or_default();
-                let account = self.posts.cfg.site(id).and_then(|s| s.account_from_input(&input));
-                match account {
-                    Some(a) => {
-                        let name = a.name.clone();
-                        if let Some(site) = self.posts.cfg.site_mut(id) {
-                            site.accounts.push(a);
-                        }
-                        if let Some(ui) = self.posts.ui.get_mut(&id) {
-                            ui.new_account.clear();
-                        }
-                        self.posts.next_check.insert(id, Instant::now());
-                        self.posts.save_cfg();
-                        self.posts.say(format!("Added @{name}"));
-                    }
-                    None => self.posts.say("Enter a new username or profile URL"),
-                }
-            }
             PostsMsg::RemoveAccount(id, name) => {
                 if let Some(site) = self.posts.cfg.site_mut(id) {
                     site.accounts.retain(|a| a.name != name);
@@ -533,13 +621,9 @@ impl App {
                 }
                 self.posts.save_cfg();
             }
-            PostsMsg::ToggleAccount(id, name, on) => {
-                let acct = self.posts.cfg.site_mut(id).and_then(|s| s.accounts.iter_mut().find(|a| a.name == name));
-                if let Some(a) = acct {
-                    a.enabled = on;
-                }
-                self.posts.save_cfg();
-            }
+            PostsMsg::PickAddSite(id) => self.posts.add_site = Some(id),
+            PostsMsg::AddName(v) => self.posts.add_name = v,
+            PostsMsg::AddAccount => self.posts_add_account(),
             PostsMsg::BrowseOutput(id) => {
                 let start = self.posts_out_dir(id);
                 return Task::perform(
@@ -554,10 +638,9 @@ impl App {
                 );
             }
             PostsMsg::OutputChosen(id, Some(dir)) => {
-                if let Some(site) = self.posts.cfg.site_mut(id) {
-                    site.output_dir = dir.to_string_lossy().into_owned();
+                if let Some(d) = self.posts.drafts.get_mut(&id) {
+                    d.output_dir = dir.to_string_lossy().into_owned();
                 }
-                self.posts.save_cfg();
             }
             PostsMsg::OutputChosen(_, None) => {}
             PostsMsg::OpenOutputDir(id) => {
@@ -565,64 +648,96 @@ impl App {
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = open::that_detached(dir);
             }
-            PostsMsg::AutoDownload(v) => self.posts_edit(|c| c.auto_download = v),
-            PostsMsg::Backfill(v) => self.posts_edit(|c| c.backfill = v),
-            PostsMsg::MarkOnOpen(v) => self.posts_edit(|c| c.mark_on_open = v),
-            PostsMsg::NotifyDesktop(v) => self.posts_edit(|c| c.notify_desktop = v),
-            PostsMsg::NotifyNtfy(v) => self.posts_edit(|c| c.notify_ntfy = v),
-            PostsMsg::NtfyTopic(v) => self.posts_edit(|c| c.ntfy_topic = v),
         }
         Task::none()
     }
 
-    /// Applies one config edit and saves it.
-    fn posts_edit(&mut self, f: impl FnOnce(&mut posts::PostsConfig)) {
-        f(&mut self.posts.cfg);
-        self.posts.save_cfg();
-    }
-
-    /// Applies one edit of a site's settings card and saves it.
+    /// Applies one edit to a site's unsaved draft.
     fn posts_site_field(&mut self, id: SiteId, field: SiteField) {
         match field {
             SiteField::Checker(a) => return self.posts.edit_args(id, a, true),
             SiteField::Download(a) => return self.posts.edit_args(id, a, false),
-            SiteField::NewAccount(v) => {
-                if let Some(ui) = self.posts.ui.get_mut(&id) {
-                    ui.new_account = v;
-                }
-                return;
-            }
-            SiteField::Interval(v) => {
-                let parsed = match v.trim() {
-                    "" => Some(None),
-                    t => t.parse::<u64>().ok().filter(|n| *n >= MIN_INTERVAL_SECS).map(Some),
-                };
-                if let (Some(value), Some(site)) = (parsed, self.posts.cfg.site_mut(id)) {
-                    site.interval_secs = value;
-                }
-                if let Some(ui) = self.posts.ui.get_mut(&id) {
-                    ui.interval = v;
-                }
-            }
-            other => {
-                let Some(site) = self.posts.cfg.site_mut(id) else { return };
-                match other {
-                    SiteField::Name(v) => site.name = v,
-                    SiteField::Exe(v) => site.exe_path = v,
-                    SiteField::UrlTemplate(v) => site.url_template = v,
-                    SiteField::OutDir(v) => site.output_dir = v,
-                    _ => {}
-                }
-            }
+            _ => {}
         }
+        let Some(d) = self.posts.drafts.get_mut(&id) else { return };
+        match field {
+            SiteField::Name(v) => d.name = v,
+            SiteField::Interval(v) => d.interval = v,
+            SiteField::Exe(v) => d.exe = v,
+            SiteField::UrlTemplate(v) => d.url_template = v,
+            SiteField::OutDir(v) => d.output_dir = v,
+            SiteField::AutoDelete(v) => d.auto_delete = v,
+            SiteField::Paused(v) => d.paused = v,
+            SiteField::AutoDownload(v) => d.auto_download = v,
+            SiteField::Backfill(v) => d.backfill = v,
+            SiteField::MarkOnOpen(v) => d.mark_on_open = v,
+            SiteField::NotifyDesktop(v) => d.notify_desktop = v,
+            SiteField::NotifyNtfy(v) => d.notify_ntfy = v,
+            SiteField::NtfyTopic(v) => d.ntfy_topic = v,
+            SiteField::Checker(_) | SiteField::Download(_) => {}
+        }
+    }
+
+    /// Registers a newly added site's editor and first check, and shows the confirmation.
+    fn posts_site_added(&mut self, id: SiteId, name: String) {
+        if let Some(site) = self.posts.cfg.site(id) {
+            self.posts.drafts.insert(id, SiteDraft::from_site(site));
+        }
+        self.posts.next_check.insert(id, Instant::now());
         self.posts.save_cfg();
+        self.posts.added = Some((name, now_secs()));
+    }
+
+    /// Saves a site's draft: adds the unsaved blank site, or updates an existing one.
+    fn posts_save_site(&mut self, id: SiteId) {
+        let saved = self.posts.cfg.site(id).cloned().unwrap_or_default();
+        let Some(site) = self.posts.drafts.get(&id).and_then(|d| d.build(&saved)) else { return };
+        if self.posts.cfg.sites.iter().any(|s| s.id != id && s.name.trim().eq_ignore_ascii_case(&site.name)) {
+            self.posts.say(format!("A site named {} already exists", site.name));
+            return;
+        }
+        if id == NEW_SITE {
+            let name = site.name.clone();
+            if let Some(new_id) = self.posts.cfg.add_site(site) {
+                self.posts.drafts.remove(&NEW_SITE);
+                self.posts_site_added(new_id, name);
+            }
+            return;
+        }
+        if let Some(slot) = self.posts.cfg.site_mut(id) {
+            *slot = site;
+        }
+        self.posts.next_sweep = Instant::now();
+        self.posts.save_cfg();
+        self.posts.say("Changes saved");
+    }
+
+    /// Adds the typed username or profile URL to the site chosen under the posts grid.
+    fn posts_add_account(&mut self) {
+        let Some(id) = self.posts.add_target() else { return };
+        let account = self.posts.cfg.site(id).and_then(|s| s.account_from_input(&self.posts.add_name));
+        let Some(a) = account else {
+            self.posts.say("Enter a new username or profile URL");
+            return;
+        };
+        let name = a.name.clone();
+        if let Some(site) = self.posts.cfg.site_mut(id) {
+            site.accounts.push(a);
+        }
+        self.posts.add_name.clear();
+        self.posts.next_check.insert(id, Instant::now());
+        self.posts.save_cfg();
+        self.posts.say(format!("Added @{name}"));
     }
 
     /// Removes a site with its accounts, posts and thumbnails.
     fn posts_remove_site(&mut self, id: SiteId) {
         self.posts.confirm_remove = None;
         self.posts.cfg.sites.retain(|s| s.id != id);
-        self.posts.ui.remove(&id);
+        self.posts.drafts.remove(&id);
+        if self.posts.add_site == Some(id) {
+            self.posts.add_site = None;
+        }
         self.posts.next_check.remove(&id);
         self.posts.errors.retain(|(sid, _), _| *sid != id);
         if self.posts.account.as_ref().is_some_and(|(sid, _)| *sid == id) {
@@ -644,8 +759,9 @@ impl App {
             Some(f) => ops::open_file(Path::new(f)),
             None => open::that_detached(&post.url).map_err(|e| e.to_string()),
         };
+        let mark = self.posts.cfg.site(post.site_id).is_none_or(|s| s.mark_on_open);
         match result {
-            Ok(()) if self.posts.cfg.mark_on_open => {
+            Ok(()) if mark => {
                 self.posts.set_viewed(id, true);
                 self.posts.save_lib();
             }
@@ -655,13 +771,10 @@ impl App {
     }
 
     /// Sends the downloaded file to the recycle bin and hides the post.
-    fn posts_delete(&mut self, id: &str) {
-        let Some(post) = self.posts.posts.iter().find(|p| p.id == id).cloned() else { return };
+    fn posts_trash(&mut self, id: &str) -> Result<(), String> {
+        let Some(post) = self.posts.posts.iter().find(|p| p.id == id).cloned() else { return Ok(()) };
         if let Some(f) = post.file.as_deref().filter(|f| Path::new(f).is_file()) {
-            if let Err(e) = ops::delete(Path::new(f), DeleteMode::Trash) {
-                self.posts.say(format!("Could not delete: {e}"));
-                return;
-            }
+            ops::delete(Path::new(f), DeleteMode::Trash).map_err(|e| e.to_string())?;
         }
         let _ = std::fs::remove_file(post.thumb_path());
         if let Some(p) = self.posts.post_mut(id) {
@@ -670,8 +783,37 @@ impl App {
             p.has_thumb = false;
             p.viewed = true;
         }
-        self.posts.save_lib();
-        self.posts.say("Moved to the recycle bin");
+        Ok(())
+    }
+
+    fn posts_delete(&mut self, id: &str) {
+        match self.posts_trash(id) {
+            Ok(()) => {
+                self.posts.save_lib();
+                self.posts.say("Moved to the recycle bin");
+            }
+            Err(e) => self.posts.say(format!("Could not delete: {e}")),
+        }
+    }
+
+    /// Deletes unstarred posts older than their site's auto-delete age.
+    fn posts_sweep(&mut self) {
+        let now = now_secs();
+        let limits: HashMap<SiteId, u64> =
+            self.posts.cfg.sites.iter().filter_map(|s| s.auto_delete_days.map(|d| (s.id, d.saturating_mul(SECS_PER_DAY)))).collect();
+        let old: Vec<String> = self
+            .posts
+            .posts
+            .iter()
+            .filter(|p| !p.starred && !matches!(p.state, PostState::Removed | PostState::Downloading))
+            .filter(|p| limits.get(&p.site_id).is_some_and(|max| now.saturating_sub(p.found_at) >= *max))
+            .map(|p| p.id.clone())
+            .collect();
+        let deleted = old.iter().filter(|id| self.posts_trash(id).is_ok()).count();
+        if deleted > 0 {
+            self.posts.save_lib();
+            self.push_log(format!("Posts: auto-deleted {deleted} unstarred post(s)"));
+        }
     }
 
     /// Label of the Posts switch on the Monitor tab, with the unviewed count.

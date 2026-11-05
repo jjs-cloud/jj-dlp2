@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_INTERVAL_SECS: u64 = 60;
+pub const DEFAULT_INTERVAL_SECS: u64 = 300;
+/// Days before unstarred posts are deleted, in the TikTok and blank templates.
+pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 7;
 pub const MIN_INTERVAL_SECS: u64 = 15;
 /// Checker arguments used when a site's own are blank; `{url}` is the profile (or post) URL.
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
@@ -50,7 +52,7 @@ pub struct Account {
 }
 
 /// A website whose accounts are checked, with its own commands and settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PostSite {
     pub id: SiteId,
@@ -67,10 +69,57 @@ pub struct PostSite {
     pub url_template: String,
     /// Empty means `posts` inside the global output folder.
     pub output_dir: String,
+    pub paused: bool,
+    pub auto_download: bool,
+    pub backfill: bool,
+    pub mark_on_open: bool,
+    pub notify_desktop: bool,
+    pub notify_ntfy: bool,
+    pub ntfy_topic: String,
+    /// Unstarred posts older than this many days are deleted; `None` keeps them.
+    pub auto_delete_days: Option<u64>,
     pub accounts: Vec<Account>,
 }
 
+impl Default for PostSite {
+    fn default() -> Self {
+        PostSite {
+            id: 0,
+            name: String::new(),
+            exe_path: String::new(),
+            interval_secs: None,
+            checker_args: String::new(),
+            download_args: String::new(),
+            url_template: String::new(),
+            output_dir: String::new(),
+            paused: false,
+            auto_download: true,
+            backfill: true,
+            mark_on_open: true,
+            notify_desktop: true,
+            notify_ntfy: false,
+            ntfy_topic: String::new(),
+            auto_delete_days: Some(DEFAULT_AUTO_DELETE_DAYS),
+            accounts: Vec::new(),
+        }
+    }
+}
+
 impl PostSite {
+    /// An unsaved site holding a preset's values; the id is assigned when it is added.
+    pub fn from_preset(preset: Preset) -> PostSite {
+        match preset {
+            Preset::Tiktok => PostSite {
+                name: "TikTok".into(),
+                checker_args: TIKTOK_CHECKER_ARGS.into(),
+                download_args: TIKTOK_DOWNLOAD_ARGS.into(),
+                url_template: TIKTOK_URL_TEMPLATE.into(),
+                ..Default::default()
+            },
+            Preset::Blank => PostSite::default(),
+        }
+    }
+
     pub fn exe_or_default(&self) -> &str {
         let t = self.exe_path.trim();
         if t.is_empty() { DEFAULT_EXE } else { t }
@@ -139,31 +188,13 @@ impl PostSite {
 #[serde(default)]
 pub struct PostsConfig {
     pub sites: Vec<PostSite>,
-    pub auto_download: bool,
-    pub backfill: bool,
-    pub mark_on_open: bool,
-    pub notify_desktop: bool,
-    pub notify_ntfy: bool,
-    pub ntfy_topic: String,
-    pub paused: bool,
     pub newest_first: bool,
     pub card_w: f32,
 }
 
 impl Default for PostsConfig {
     fn default() -> Self {
-        PostsConfig {
-            sites: Vec::new(),
-            auto_download: true,
-            backfill: true,
-            mark_on_open: true,
-            notify_desktop: true,
-            notify_ntfy: false,
-            ntfy_topic: String::new(),
-            paused: false,
-            newest_first: true,
-            card_w: DEFAULT_CARD_W,
-        }
+        PostsConfig { sites: Vec::new(), newest_first: true, card_w: DEFAULT_CARD_W }
     }
 }
 
@@ -176,32 +207,18 @@ impl PostsConfig {
         self.sites.iter_mut().find(|s| s.id == id)
     }
 
-    /// Adds a site from a preset; `None` when the TikTok preset already exists.
-    pub fn add_site(&mut self, preset: Preset) -> Option<SiteId> {
-        let id = self.sites.iter().map(|s| s.id).max().unwrap_or(0) + 1;
-        let taken = |name: &str| self.sites.iter().any(|s| s.name.eq_ignore_ascii_case(name));
-        let site = match preset {
-            Preset::Tiktok => {
-                if taken("TikTok") {
-                    return None;
-                }
-                PostSite {
-                    id,
-                    name: "TikTok".into(),
-                    checker_args: TIKTOK_CHECKER_ARGS.into(),
-                    download_args: TIKTOK_DOWNLOAD_ARGS.into(),
-                    url_template: TIKTOK_URL_TEMPLATE.into(),
-                    ..Default::default()
-                }
-            }
-            Preset::Blank => {
-                let name = std::iter::once("New site".to_string())
-                    .chain((2..).map(|n| format!("New site {n}")))
-                    .find(|n| !taken(n))
-                    .unwrap_or_default();
-                PostSite { id, name, ..Default::default() }
-            }
-        };
+    /// True when a site already uses the name.
+    pub fn name_taken(&self, name: &str) -> bool {
+        self.sites.iter().any(|s| s.name.trim().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// Adds `site` under a fresh id; `None` when its name is already used.
+    pub fn add_site(&mut self, mut site: PostSite) -> Option<SiteId> {
+        if self.name_taken(&site.name) {
+            return None;
+        }
+        site.id = self.sites.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+        let id = site.id;
         self.sites.push(site);
         Some(id)
     }
@@ -478,9 +495,7 @@ mod tests {
     }
 
     fn tiktok() -> PostSite {
-        let mut cfg = PostsConfig::default();
-        let id = cfg.add_site(Preset::Tiktok).unwrap();
-        cfg.site(id).unwrap().clone()
+        PostSite::from_preset(Preset::Tiktok)
     }
 
     #[test]
@@ -497,18 +512,23 @@ mod tests {
 
     #[test]
     fn blank_site_needs_a_url_for_accounts() {
-        let mut cfg = PostsConfig::default();
-        let id = cfg.add_site(Preset::Blank).unwrap();
-        assert!(cfg.site(id).unwrap().account_from_input("someone").is_none());
-        assert!(cfg.site(id).unwrap().account_from_input("https://example.com/u/someone").is_some());
-        assert_eq!(cfg.add_site(Preset::Blank).map(|i| cfg.site(i).unwrap().name.clone()), Some("New site 2".into()));
+        let site = PostSite::from_preset(Preset::Blank);
+        assert!(site.account_from_input("someone").is_none());
+        assert!(site.account_from_input("https://example.com/u/someone").is_some());
     }
 
     #[test]
-    fn tiktok_preset_is_added_once() {
+    fn site_names_are_unique() {
         let mut cfg = PostsConfig::default();
-        assert!(cfg.add_site(Preset::Tiktok).is_some());
-        assert!(cfg.add_site(Preset::Tiktok).is_none());
+        assert!(cfg.add_site(tiktok()).is_some());
+        assert!(cfg.add_site(tiktok()).is_none());
+    }
+
+    #[test]
+    fn templates_default_to_seven_day_cleanup() {
+        assert_eq!(tiktok().auto_delete_days, Some(7));
+        assert_eq!(PostSite::from_preset(Preset::Blank).auto_delete_days, Some(7));
+        assert_eq!(tiktok().interval_or_default(), 300);
     }
 
     #[test]

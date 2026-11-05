@@ -41,7 +41,7 @@ pub(super) fn muted<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.muted).size(12)
 }
 
-fn chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
+pub(super) fn chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
     container(iced::widget::text(label).font(s.font).size(11).color(color))
         .padding([3.0, 10.0])
         .style(skin::chip(s, color))

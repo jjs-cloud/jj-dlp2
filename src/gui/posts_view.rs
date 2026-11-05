@@ -1,16 +1,18 @@
 //! Views of the Posts monitor and its settings.
 
-use super::posts::{PostsMsg, SiteField, SiteUi};
+use super::posts::{PostsMsg, SiteDraft, SiteField, NEW_SITE};
 use super::skin::{self, BtnKind, Skin};
-use super::view::{btn_label, card_box, clip, fmt_ago, muted, t, warn_text};
+use super::view::{btn_label, card_box, chip, clip, fmt_ago, muted, t, warn_text};
 use super::{App, Msg};
 use crate::posts::{self, Post, PostSite, PostState, Preset, Section};
 use iced::widget::text::Wrapping;
 use iced::widget::text_editor::{self, Action};
-use iced::widget::{Column, Row, Space, button, column, container, row, scrollable, slider, stack, text_editor as editor, text_input, toggler};
+use iced::widget::{Column, Row, Space, button, column, container, pick_list, row, scrollable, slider, stack, text_editor as editor, text_input, toggler};
 use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
 
 const SIDEBAR_W: f32 = 210.0;
+/// Seconds the "has been added!" message stays up.
+const SITE_ADDED_SECS: u64 = 4;
 const GAP: f32 = 10.0;
 const CARD_PAD: f32 = 8.0;
 /// Two 13px lines at the default 1.3 line height plus 8px padding top and bottom.
@@ -61,20 +63,23 @@ fn nav_item<'a>(s: Skin, label: String, count: usize, selected: bool, msg: Posts
 fn card_btn<'a>(s: Skin, label: &'static str, msg: PostsMsg, kind: BtnKind) -> Element<'a, Msg> {
     button(btn_label(&s, label).size(11).width(Length::Fill).align_x(Alignment::Center))
         .on_press(send(msg))
-        .padding([4.0, 4.0])
+        .padding([4.0, 2.0])
         .width(Length::Fill)
         .style(skin::btn(s, kind))
         .into()
 }
 
-fn field<'a>(s: Skin, label: &'static str, hint: &'static str, value: &'a str, invalid: bool, on: fn(String) -> PostsMsg) -> Element<'a, Msg> {
-    row![
-        t(&s, label).size(13).width(170),
-        text_input(hint, value).on_input(move |v| send(on(v))).padding(8).style(skin::input_required(s, invalid)),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .into()
+/// One entry of the site selector.
+#[derive(Debug, Clone, PartialEq)]
+struct SiteChoice {
+    id: posts::SiteId,
+    name: String,
+}
+
+impl std::fmt::Display for SiteChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
 }
 
 fn flag<'a>(label: &'static str, on: bool, make: fn(bool) -> PostsMsg) -> Element<'a, Msg> {
@@ -115,7 +120,7 @@ impl App {
         }
         let status = if p.checking {
             "Checking…".to_string()
-        } else if p.cfg.paused {
+        } else if p.all_paused() {
             "Paused".to_string()
         } else {
             p.secs_to_next().map_or("No accounts enabled".to_string(), |n| format!("Next check in {n}s"))
@@ -126,12 +131,22 @@ impl App {
             muted(&s, last.unwrap_or_default()),
             row![
                 card_btn(s, "Check now", PostsMsg::CheckNow, BtnKind::Ghost),
-                card_btn(s, if p.cfg.paused { "Resume" } else { "Pause" }, PostsMsg::Paused(!p.cfg.paused), BtnKind::Ghost),
+                card_btn(s, if p.all_paused() { "Resume" } else { "Pause" }, PostsMsg::Paused(!p.all_paused()), BtnKind::Ghost),
             ]
             .spacing(6),
         ]
         .spacing(4);
-        container(column![scrollable(nav).height(Length::Fill), controls].spacing(10))
+        let mut bottom = Column::new().spacing(10);
+        if let Some((sid, name)) = &p.account {
+            bottom = bottom.push(
+                button(btn_label(&s, format!("Remove @{}", clip(name, 14))).size(12).width(Length::Fill).align_x(Alignment::Center))
+                    .on_press(send(PostsMsg::RemoveAccount(*sid, name.clone())))
+                    .padding([6.0, 10.0])
+                    .width(Length::Fill)
+                    .style(skin::btn(s, BtnKind::Danger)),
+            );
+        }
+        container(column![scrollable(nav).height(Length::Fill), bottom.push(controls)].spacing(10))
             .padding(12)
             .width(SIDEBAR_W)
             .height(Length::Fill)
@@ -170,7 +185,8 @@ impl App {
             col = col.push(warn_text(&s, format!("⚠ @{name}: {}", clip(e, 200))));
         }
         if visible.is_empty() {
-            return col.push(self.posts_empty(s)).into();
+            let empty = container(self.posts_empty(s)).height(Length::Fill);
+            return col.push(empty).push(self.posts_add_bar(s)).height(Length::Fill).into();
         }
         let w = p.cfg.card_w;
         let avail = (self.win_w - SIDEBAR_W - CHROME_W).max(w);
@@ -193,24 +209,54 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        col.push(scrollable(container(grid).padding(iced::Padding { right: 10.0, ..Default::default() })).height(Length::Fill)).into()
+        col.push(scrollable(container(grid).padding(iced::Padding { right: 10.0, ..Default::default() })).height(Length::Fill))
+            .push(self.posts_add_bar(s))
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// Site selector, username box and Add button under the posts.
+    fn posts_add_bar(&self, s: Skin) -> Element<'_, Msg> {
+        let p = &self.posts;
+        let choices: Vec<SiteChoice> = p.cfg.sites.iter().map(|x| SiteChoice { id: x.id, name: x.name.clone() }).collect();
+        let selected = p.add_target().and_then(|id| choices.iter().find(|c| c.id == id).cloned());
+        let can_add = selected.is_some() && !p.add_name.trim().is_empty();
+        row![
+            pick_list(choices, selected, |c: SiteChoice| send(PostsMsg::PickAddSite(c.id))).placeholder("Site").padding(6).text_size(13).width(150),
+            text_input("Username", &p.add_name)
+                .on_input(|v| send(PostsMsg::AddName(v)))
+                .on_submit_maybe(can_add.then(|| send(PostsMsg::AddAccount)))
+                .padding(6)
+                .size(13)
+                .width(Length::Fill)
+                .style(skin::input(s)),
+            button(btn_label(&s, "Add").size(13))
+                .on_press_maybe(can_add.then(|| send(PostsMsg::AddAccount)))
+                .padding([6.0, 16.0])
+                .style(skin::btn(s, BtnKind::Primary)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     fn posts_empty(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
-        if p.cfg.sites.iter().all(|x| x.accounts.is_empty()) {
+        if p.cfg.sites.is_empty() {
             return card_box(
                 s,
                 column![
-                    t(&s, "No accounts yet."),
-                    muted(&s, "Add a site and the profiles to watch; new posts are downloaded and shown here with thumbnails."),
-                    button(btn_label(&s, "Set up a site").size(13))
+                    t(&s, "No sites configured yet."),
+                    button(btn_label(&s, "Add a site").size(13))
                         .on_press(send(PostsMsg::OpenSettings))
                         .padding([8.0, 14.0])
                         .style(skin::btn(s, BtnKind::Primary)),
                 ]
                 .spacing(10),
             );
+        }
+        if p.cfg.sites.iter().all(|x| x.accounts.is_empty()) {
+            return muted(&s, "No accounts yet. Add a username below.").into();
         }
         let text = match p.section {
             Section::Unviewed => "You're all caught up.",
@@ -292,7 +338,7 @@ impl App {
                 card_btn(s, "Folder", PostsMsg::Reveal(id.clone()), BtnKind::Ghost),
                 card_btn(s, "Delete", PostsMsg::Delete(id.clone()), BtnKind::Danger),
             ],
-            PostState::Remote => row![star, card_btn(s, "Download", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
+            PostState::Remote => row![star, card_btn(s, "Save", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
             PostState::Failed => row![star, card_btn(s, "Retry", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
             _ => row![star, page],
         }
@@ -307,7 +353,6 @@ impl App {
 
     pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
-        let c = &p.cfg;
         let mut add = row![self.section_title(s, "ADD SITE")].spacing(10).align_y(Alignment::Center);
         for (label, preset) in [("TikTok", Preset::Tiktok), ("Blank", Preset::Blank)] {
             add = add.push(
@@ -317,38 +362,31 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
+        if let Some((name, at)) = &p.added {
+            if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
+                add = add.push(t(&s, format!("{name} has been added!")).size(13).color(s.live));
+            }
+        }
         add = add.push(muted(&s, p.status_text(self.now).unwrap_or("")));
 
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
-        if c.sites.is_empty() {
+        let new_draft = p.drafts.get(&NEW_SITE);
+        if p.cfg.sites.is_empty() && new_draft.is_none() {
             col = col.push(muted(&s, "Pick a preset to start; every field stays editable afterwards."));
         }
-        for site in &c.sites {
-            if let Some(ui) = p.ui.get(&site.id) {
-                col = col.push(self.post_site_editor(s, site, ui));
+        if let Some(d) = new_draft {
+            col = col.push(self.post_site_editor(s, NEW_SITE, None, d));
+        }
+        for site in &p.cfg.sites {
+            if let Some(d) = p.drafts.get(&site.id) {
+                col = col.push(self.post_site_editor(s, site.id, Some(site), d));
             }
         }
-
-        let topic_bad = c.notify_ntfy && !crate::policy::notify::topic_valid(&c.ntfy_topic);
-        let general = column![
-            self.section_title(s, "GENERAL"),
-            flag("Pause checking", c.paused, PostsMsg::Paused),
-            flag("Download new posts automatically", c.auto_download, PostsMsg::AutoDownload),
-            flag("Download existing posts when an account is first checked", c.backfill, PostsMsg::Backfill),
-            flag("Mark a post viewed when it is opened", c.mark_on_open, PostsMsg::MarkOnOpen),
-            muted(&s, "Notifications are sent when a check finds new posts; an account's first check stays silent."),
-            flag("Desktop notification", c.notify_desktop, PostsMsg::NotifyDesktop),
-            flag("ntfy notification", c.notify_ntfy, PostsMsg::NotifyNtfy),
-            field(s, "ntfy topic", "topic name", &c.ntfy_topic, topic_bad, PostsMsg::NtfyTopic),
-        ]
-        .spacing(8);
-        col = col.push(card_box(s, general));
-
         column![add, scrollable(col).height(Length::Fill)].spacing(12).height(Length::Fill).into()
     }
 
-    fn post_site_editor<'a>(&'a self, s: Skin, site: &'a PostSite, ui: &'a SiteUi) -> Element<'a, Msg> {
-        let id = site.id;
+    /// The settings card of one site; `saved` is `None` for the unsaved blank site.
+    fn post_site_editor<'a>(&'a self, s: Skin, id: posts::SiteId, saved: Option<&'a PostSite>, d: &'a SiteDraft) -> Element<'a, Msg> {
         let edit = move |f: fn(String) -> SiteField| move |v: String| send(PostsMsg::Site(id, f(v)));
         let input = |label: &'static str, hint: &str, value: &str, f: fn(String) -> SiteField, invalid: bool| -> Element<'a, Msg> {
             column![
@@ -359,36 +397,32 @@ impl App {
             .into()
         };
         let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
-        let interval_bad = !ui.interval.trim().is_empty() && !ui.interval.trim().parse::<u64>().is_ok_and(|n| n >= posts::MIN_INTERVAL_SECS);
-
-        let remove: Element<'a, Msg> = if self.posts.confirm_remove == Some(id) {
-            row![
-                muted(&s, "Remove this site and its posts?"),
-                button(btn_label(&s, "Remove").size(12)).on_press(send(PostsMsg::ConfirmRemoveSite(id))).padding([4.0, 10.0]).style(skin::btn(s, BtnKind::Danger)),
-                button(btn_label(&s, "Cancel").size(12)).on_press(send(PostsMsg::CancelRemoveSite)).padding([4.0, 10.0]).style(skin::btn(s, BtnKind::Ghost)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
-        } else {
-            button(btn_label(&s, "Remove site").size(12))
-                .on_press(send(PostsMsg::RemoveSite(id)))
-                .padding([4.0, 10.0])
-                .style(skin::btn(s, BtnKind::Danger))
-                .into()
+        let toggle = |label: &'static str, on: bool, f: fn(bool) -> SiteField| -> Element<'a, Msg> {
+            toggler(on).label(label).on_toggle(move |v| send(PostsMsg::Site(id, f(v)))).text_size(12).into()
         };
+        let bad_number = |text: &str, min: u64| !text.trim().is_empty() && !text.trim().parse::<u64>().is_ok_and(|n| n >= min);
+        let topic_bad = d.notify_ntfy && !crate::policy::notify::topic_valid(&d.ntfy_topic);
+        let base = saved.cloned().unwrap_or_default();
+        let dirty = saved.is_none() || d.differs_from(&base);
+        let valid = d.valid();
 
         let identity = row![
-            cell(input("Site name (example: TikTok)", "", &site.name, SiteField::Name, site.name.trim().is_empty()), Length::FillPortion(1)),
-            cell(input("Check every (seconds)", &posts::DEFAULT_INTERVAL_SECS.to_string(), &ui.interval, SiteField::Interval, interval_bad), Length::FillPortion(1)),
-            cell(input("Path to yt-dlp executable", crate::api::DEFAULT_EXE, &site.exe_path, SiteField::Exe, false), Length::FillPortion(1)),
+            cell(input("Site name (example: TikTok)", "", &d.name, SiteField::Name, d.name.trim().is_empty()), Length::FillPortion(1)),
+            cell(
+                input("Check every (seconds)", &posts::DEFAULT_INTERVAL_SECS.to_string(), &d.interval, SiteField::Interval, bad_number(&d.interval, posts::MIN_INTERVAL_SECS)),
+                Length::FillPortion(1),
+            ),
+            cell(input("Path to yt-dlp executable", crate::api::DEFAULT_EXE, &d.exe, SiteField::Exe, false), Length::FillPortion(1)),
         ]
         .spacing(8);
 
-        let out_dir = site.output_folder(&self.settings.default_output_dir).to_string_lossy().into_owned();
+        let out_dir = PostSite { output_dir: d.output_dir.clone(), ..PostSite::default() }.output_folder(&self.settings.default_output_dir);
         let folder = row![
-            cell(input("Profile URL template", "https://example.com/@{username}", &site.url_template, SiteField::UrlTemplate, false), Length::FillPortion(1)),
-            cell(input("Download folder (blank = global/posts)", &out_dir, &site.output_dir, SiteField::OutDir, false), Length::FillPortion(1)),
+            cell(input("Profile URL template", "https://example.com/@{username}", &d.url_template, SiteField::UrlTemplate, false), Length::FillPortion(1)),
+            cell(
+                input("Download folder (blank = global/posts)", &out_dir.to_string_lossy(), &d.output_dir, SiteField::OutDir, false),
+                Length::FillPortion(1),
+            ),
             column![
                 muted(&s, " "),
                 row![
@@ -400,6 +434,25 @@ impl App {
             .spacing(2),
         ]
         .spacing(8);
+
+        let cleanup = row![
+            cell(
+                input("Delete unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
+                Length::FillPortion(1),
+            ),
+            cell(input("ntfy topic", "topic name", &d.ntfy_topic, SiteField::NtfyTopic, topic_bad), Length::FillPortion(1)),
+        ]
+        .spacing(8);
+
+        let toggles = column![
+            toggle("Pause checking", d.paused, SiteField::Paused),
+            toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
+            toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
+            toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),
+            toggle("Desktop notification", d.notify_desktop, SiteField::NotifyDesktop),
+            toggle("ntfy notification", d.notify_ntfy, SiteField::NotifyNtfy),
+        ]
+        .spacing(6);
 
         let args = |label: &'static str, hint: &'static str, content: &'a text_editor::Content, f: fn(Action) -> SiteField| -> Element<'a, Msg> {
             column![
@@ -417,49 +470,42 @@ impl App {
             .into()
         };
 
-        let mut accounts = Column::new().spacing(6).push(muted(&s, "Accounts: enter a username, or paste a full profile URL."));
-        for a in &site.accounts {
-            let (rm, tg) = (a.name.clone(), a.name.clone());
-            accounts = accounts.push(
-                row![
-                    t(&s, format!("@{}", a.name)).size(13).width(150),
-                    container(muted(&s, clip(&a.url, 70))).width(Length::Fill).clip(true),
-                    toggler(a.enabled).on_toggle(move |v| send(PostsMsg::ToggleAccount(id, tg.clone(), v))),
-                    button(btn_label(&s, "Remove").size(12))
-                        .on_press(send(PostsMsg::RemoveAccount(id, rm)))
-                        .padding([4.0, 10.0])
-                        .style(skin::btn(s, BtnKind::Danger)),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            );
+        let action = |label: &'static str, msg: Option<PostsMsg>, kind: BtnKind| -> Element<'a, Msg> {
+            button(btn_label(&s, label).size(13)).on_press_maybe(msg.map(send)).padding([5.0, 12.0]).style(skin::btn(s, kind)).into()
+        };
+        let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)].spacing(10).align_y(Alignment::Center);
+        if saved.is_some() {
+            if dirty {
+                actions = actions.push(chip(s, "unsaved changes", s.warn));
+            }
+            actions = actions
+                .push(action("Save changes", (dirty && valid).then_some(PostsMsg::SaveSite(id)), BtnKind::Primary))
+                .push(action("Revert", dirty.then_some(PostsMsg::RevertSite(id)), BtnKind::Ghost))
+                .push(action("Defaults", Some(PostsMsg::DefaultsSite(id)), BtnKind::Ghost));
+            if self.posts.confirm_remove == Some(id) {
+                actions = actions
+                    .push(warn_text(&s, "Remove site and its posts?"))
+                    .push(action("Confirm", Some(PostsMsg::ConfirmRemoveSite(id)), BtnKind::Danger))
+                    .push(action("Cancel", Some(PostsMsg::CancelRemoveSite), BtnKind::Ghost));
+            } else {
+                actions = actions.push(action("Remove site", Some(PostsMsg::RemoveSite(id)), BtnKind::Danger));
+            }
+        } else {
+            actions = actions
+                .push(action("Add site", valid.then_some(PostsMsg::SaveSite(id)), BtnKind::Primary))
+                .push(action("Discard", Some(PostsMsg::RemoveSite(id)), BtnKind::Ghost));
         }
-        accounts = accounts.push(
-            row![
-                text_input("Username or profile URL", &ui.new_account)
-                    .on_input(edit(SiteField::NewAccount))
-                    .on_submit(send(PostsMsg::AddAccount(id)))
-                    .padding(5)
-                    .size(13)
-                    .style(skin::input(s)),
-                button(btn_label(&s, "Add").size(13))
-                    .on_press_maybe((!ui.new_account.trim().is_empty()).then(|| send(PostsMsg::AddAccount(id))))
-                    .padding([5.0, 16.0])
-                    .style(skin::btn(s, BtnKind::Primary)),
-            ]
-            .spacing(8),
-        );
 
-        let header = row![self.section_title(s, "SITE"), Space::new().width(Length::Fill), remove].align_y(Alignment::Center);
         card_box(
             s,
             column![
-                header,
                 identity,
                 folder,
-                args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &ui.checker, SiteField::Checker),
-                args("Download arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &ui.download, SiteField::Download),
-                accounts,
+                cleanup,
+                toggles,
+                args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker),
+                args("Download arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download),
+                actions,
             ]
             .spacing(10),
         )
