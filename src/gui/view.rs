@@ -431,8 +431,8 @@ impl App {
         };
         let mut title = row![
             switch("Livestreams".to_string(), MonitorTab::Livestreams),
-            switch(self.posts_tab_label(), MonitorTab::Posts),
             switch("Vods".to_string(), MonitorTab::Vods),
+            switch(self.posts_tab_label(), MonitorTab::Posts),
             Space::new().width(Length::Fill)
         ]
             .spacing(8)
@@ -470,7 +470,6 @@ impl App {
                 container(
                     column![
                         t(&s, "No sites configured yet."),
-                        muted(&s, "A site holds the yt-dlp path plus the checker and recorder commands for a group of streamers."),
                         button(btn_label(&s, "Add a site").size(13))
                             .on_press(Msg::OpenAddSite)
                             .padding([8.0, 14.0])
@@ -1617,8 +1616,8 @@ impl App {
         };
         let switcher = row![
             switch("Livestreams", SettingsTab::Sites),
-            switch("Posts", SettingsTab::Posts),
             switch("Vods", SettingsTab::Vods),
+            switch("Posts", SettingsTab::Posts),
             switch("General", SettingsTab::General)
         ]
         .spacing(8);

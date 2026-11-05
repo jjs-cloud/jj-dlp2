@@ -43,6 +43,7 @@ pub struct SiteDraft {
     pub auto_download: bool,
     pub backfill: bool,
     pub mark_on_open: bool,
+    pub notify: bool,
     pub notify_desktop: bool,
     pub notify_ntfy: bool,
     pub ntfy_topic: String,
@@ -63,6 +64,7 @@ impl SiteDraft {
             auto_download: site.auto_download,
             backfill: site.backfill,
             mark_on_open: site.mark_on_open,
+            notify: site.notify,
             notify_desktop: site.notify_desktop,
             notify_ntfy: site.notify_ntfy,
             ntfy_topic: site.ntfy_topic.clone(),
@@ -85,7 +87,7 @@ impl SiteDraft {
             "" => Some(None),
             t => t.parse::<u64>().ok().filter(|n| *n >= min).map(Some),
         };
-        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || (self.notify_ntfy && !crate::policy::notify::topic_valid(&self.ntfy_topic)) {
+        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || (self.notify && self.notify_ntfy && !crate::policy::notify::topic_valid(&self.ntfy_topic)) {
             return None;
         }
         Some(PostSite {
@@ -101,6 +103,7 @@ impl SiteDraft {
             auto_download: self.auto_download,
             backfill: self.backfill,
             mark_on_open: self.mark_on_open,
+            notify: self.notify,
             notify_desktop: self.notify_desktop,
             notify_ntfy: self.notify_ntfy,
             ntfy_topic: self.ntfy_topic.clone(),
@@ -294,6 +297,7 @@ pub enum SiteField {
     AutoDownload(bool),
     Backfill(bool),
     MarkOnOpen(bool),
+    Notify(bool),
     NotifyDesktop(bool),
     NotifyNtfy(bool),
     NtfyTopic(String),
@@ -477,7 +481,7 @@ impl App {
     }
 
     fn posts_notify(&self, site_id: SiteId, account: &str, added: &[Post]) -> Option<Task<Msg>> {
-        let site = self.posts.cfg.site(site_id)?;
+        let site = self.posts.cfg.site(site_id).filter(|s| s.notify)?;
         let targets = notify::Targets {
             desktop_timeout_secs: site.notify_desktop.then_some(DEFAULT_NOTIFY_TIMEOUT_SECS),
             ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic)).then(|| site.ntfy_topic.trim().to_string()),
@@ -692,6 +696,7 @@ impl App {
             SiteField::AutoDownload(v) => d.auto_download = v,
             SiteField::Backfill(v) => d.backfill = v,
             SiteField::MarkOnOpen(v) => d.mark_on_open = v,
+            SiteField::Notify(v) => d.notify = v,
             SiteField::NotifyDesktop(v) => d.notify_desktop = v,
             SiteField::NotifyNtfy(v) => d.notify_ntfy = v,
             SiteField::NtfyTopic(v) => d.ntfy_topic = v,

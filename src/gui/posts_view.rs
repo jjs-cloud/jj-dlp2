@@ -402,8 +402,11 @@ impl App {
         let toggle = |label: &'static str, on: bool, f: fn(bool) -> SiteField| -> Element<'a, Msg> {
             toggler(on).label(label).on_toggle(move |v| send(PostsMsg::Site(id, f(v)))).text_size(12).into()
         };
+        let sub_toggle = |label: &'static str, on: bool, f: fn(bool) -> SiteField| -> Element<'a, Msg> {
+            toggler(on && d.notify).label(label).on_toggle_maybe(d.notify.then(|| move |v: bool| send(PostsMsg::Site(id, f(v))))).text_size(12).into()
+        };
         let bad_number = |text: &str, min: u64| !text.trim().is_empty() && !text.trim().parse::<u64>().is_ok_and(|n| n >= min);
-        let topic_bad = d.notify_ntfy && !crate::policy::notify::topic_valid(&d.ntfy_topic);
+        let topic_bad = d.notify && d.notify_ntfy && !crate::policy::notify::topic_valid(&d.ntfy_topic);
         let base = saved.cloned().unwrap_or_default();
         let dirty = saved.is_none() || d.differs_from(&base);
         let valid = d.valid();
@@ -442,7 +445,9 @@ impl App {
                 input("Delete unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
                 Length::FillPortion(1),
             ),
-            cell(column![muted(&s, " "), toggle("Mobile (ntfy)", d.notify_ntfy, SiteField::NotifyNtfy)].spacing(2).into(), Length::FillPortion(1)),
+            cell(column![muted(&s, " "), toggle("Notifications", d.notify, SiteField::Notify)].spacing(2).into(), Length::Shrink),
+            cell(column![muted(&s, " "), sub_toggle("Desktop", d.notify_desktop, SiteField::NotifyDesktop)].spacing(2).into(), Length::Shrink),
+            cell(column![muted(&s, " "), sub_toggle("Mobile (ntfy)", d.notify_ntfy, SiteField::NotifyNtfy)].spacing(2).into(), Length::Shrink),
             cell(input("NTFY topic (example: j73hd92xl)", "", &d.ntfy_topic, SiteField::NtfyTopic, topic_bad), Length::FillPortion(1)),
         ]
         .spacing(8);
@@ -452,7 +457,6 @@ impl App {
             toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
             toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
             toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),
-            toggle("Desktop notification", d.notify_desktop, SiteField::NotifyDesktop),
         ]
         .spacing(6);
 
