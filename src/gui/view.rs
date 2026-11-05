@@ -19,7 +19,7 @@ use iced_aw::time_picker::{Period, Time};
 use iced_aw::{DatePicker, TimePicker};
 
 /// Seconds the "has been added!" message stays up.
-const SITE_ADDED_SECS: u64 = 4;
+const SITE_ADDED_SECS: u64 = 15;
 
 const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -1657,7 +1657,7 @@ impl App {
         }
         if let Some((name, at)) = &self.site_added {
             if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
-                add = add.push(t(&s, format!("{name} has been added!")).size(13).color(s.live));
+                add = add.push(t(&s, format!("{name} has been added! Switch to the Monitor tab to add a username.")).size(13).color(s.live));
             }
         }
         let new_draft = self.drafts.get(&NEW_SITE_ID);

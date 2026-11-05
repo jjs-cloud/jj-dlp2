@@ -12,7 +12,7 @@ use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
 
 const SIDEBAR_W: f32 = 210.0;
 /// Seconds the "has been added!" message stays up.
-const SITE_ADDED_SECS: u64 = 4;
+const SITE_ADDED_SECS: u64 = 15;
 const GAP: f32 = 10.0;
 const CARD_PAD: f32 = 8.0;
 /// Two 13px lines at the default 1.3 line height plus 8px padding top and bottom.
@@ -146,7 +146,7 @@ impl App {
                     .style(skin::btn(s, BtnKind::Danger)),
             );
         }
-        container(column![scrollable(nav).height(Length::Fill), bottom.push(controls)].spacing(10))
+        container(column![scrollable(container(nav).padding(iced::Padding { right: 10.0, ..Default::default() })).height(Length::Fill), bottom.push(controls)].spacing(10))
             .padding(12)
             .width(SIDEBAR_W)
             .height(Length::Fill)
@@ -221,6 +221,8 @@ impl App {
         let choices: Vec<SiteChoice> = p.cfg.sites.iter().map(|x| SiteChoice { id: x.id, name: x.name.clone() }).collect();
         let selected = p.add_target().and_then(|id| choices.iter().find(|c| c.id == id).cloned());
         let can_add = selected.is_some() && !p.add_name.trim().is_empty();
+        let pulsing = selected.is_some() && p.cfg.sites.iter().all(|x| x.accounts.is_empty());
+        let (calm, pulse) = (skin::input(s), skin::input_pulse(s, skin::pulse(self.phase)));
         row![
             pick_list(choices, selected, |c: SiteChoice| send(PostsMsg::PickAddSite(c.id))).placeholder("Site").padding(6).text_size(13).width(150),
             text_input("Username", &p.add_name)
@@ -229,7 +231,7 @@ impl App {
                 .padding(6)
                 .size(13)
                 .width(Length::Fill)
-                .style(skin::input(s)),
+                .style(move |th, st| if pulsing { pulse(th, st) } else { calm(th, st) }),
             button(btn_label(&s, "Add").size(13))
                 .on_press_maybe(can_add.then(|| send(PostsMsg::AddAccount)))
                 .padding([6.0, 16.0])
@@ -354,7 +356,7 @@ impl App {
     pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
         let mut add = row![self.section_title(s, "ADD SITE")].spacing(10).align_y(Alignment::Center);
-        for (label, preset) in [("TikTok", Preset::Tiktok), ("Blank", Preset::Blank)] {
+        for (label, preset) in [("TikTok", Preset::Tiktok), ("Youtube Shorts", Preset::YoutubeShorts), ("Blank", Preset::Blank)] {
             add = add.push(
                 button(t(&s, label).size(13))
                     .on_press(send(PostsMsg::AddSite(preset)))
@@ -364,7 +366,7 @@ impl App {
         }
         if let Some((name, at)) = &p.added {
             if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
-                add = add.push(t(&s, format!("{name} has been added!")).size(13).color(s.live));
+                add = add.push(t(&s, format!("{name} has been added! Switch to the Monitor tab to add a username.")).size(13).color(s.live));
             }
         }
         add = add.push(muted(&s, p.status_text(self.now).unwrap_or("")));
@@ -382,7 +384,7 @@ impl App {
                 col = col.push(self.post_site_editor(s, site.id, Some(site), d));
             }
         }
-        column![add, scrollable(col).height(Length::Fill)].spacing(12).height(Length::Fill).into()
+        column![add, scrollable(col).id(super::posts_scroll_id()).height(Length::Fill)].spacing(12).height(Length::Fill).into()
     }
 
     /// The settings card of one site; `saved` is `None` for the unsaved blank site.
@@ -418,7 +420,7 @@ impl App {
 
         let out_dir = PostSite { output_dir: d.output_dir.clone(), ..PostSite::default() }.output_folder(&self.settings.default_output_dir);
         let folder = row![
-            cell(input("Profile URL template", "https://example.com/@{username}", &d.url_template, SiteField::UrlTemplate, false), Length::FillPortion(1)),
+            cell(input("Profile URL template", "", &d.url_template, SiteField::UrlTemplate, d.url_template.trim().is_empty()), Length::FillPortion(1)),
             cell(
                 input("Download folder (blank = global/posts)", &out_dir.to_string_lossy(), &d.output_dir, SiteField::OutDir, false),
                 Length::FillPortion(1),
@@ -440,7 +442,8 @@ impl App {
                 input("Delete unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
                 Length::FillPortion(1),
             ),
-            cell(input("ntfy topic", "topic name", &d.ntfy_topic, SiteField::NtfyTopic, topic_bad), Length::FillPortion(1)),
+            cell(column![muted(&s, " "), toggle("Mobile (ntfy)", d.notify_ntfy, SiteField::NotifyNtfy)].spacing(2).into(), Length::FillPortion(1)),
+            cell(input("NTFY topic (example: j73hd92xl)", "", &d.ntfy_topic, SiteField::NtfyTopic, topic_bad), Length::FillPortion(1)),
         ]
         .spacing(8);
 
@@ -450,7 +453,6 @@ impl App {
             toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
             toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),
             toggle("Desktop notification", d.notify_desktop, SiteField::NotifyDesktop),
-            toggle("ntfy notification", d.notify_ntfy, SiteField::NotifyNtfy),
         ]
         .spacing(6);
 
@@ -504,7 +506,7 @@ impl App {
                 cleanup,
                 toggles,
                 args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker),
-                args("Download arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download),
+                args("Downloader arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download),
                 actions,
             ]
             .spacing(10),

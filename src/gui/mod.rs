@@ -694,6 +694,11 @@ pub(crate) fn username_input_id(id: SiteId) -> iced::widget::Id {
     iced::widget::Id::from(format!("streamer-username-{:?}", id))
 }
 
+/// Scrollable id of the Posts settings site list.
+pub(crate) fn posts_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("posts-sites-scroll")
+}
+
 /// Scrollable id of the Sites settings list.
 pub(crate) fn sites_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("sites-scroll")

@@ -17,6 +17,7 @@ pub const MIN_INTERVAL_SECS: u64 = 15;
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
 /// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
 pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
 const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
@@ -36,6 +37,7 @@ fn yes() -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
     Tiktok,
+    YoutubeShorts,
     Blank,
 }
 
@@ -114,6 +116,11 @@ impl PostSite {
                 checker_args: TIKTOK_CHECKER_ARGS.into(),
                 download_args: TIKTOK_DOWNLOAD_ARGS.into(),
                 url_template: TIKTOK_URL_TEMPLATE.into(),
+                ..Default::default()
+            },
+            Preset::YoutubeShorts => PostSite {
+                name: "Youtube Shorts".into(),
+                url_template: YOUTUBE_SHORTS_URL_TEMPLATE.into(),
                 ..Default::default()
             },
             Preset::Blank => PostSite::default(),

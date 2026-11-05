@@ -21,6 +21,8 @@ const FIRST_CHECK_DELAY: Duration = Duration::from_secs(3);
 /// Time between auto-delete sweeps.
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 const SECS_PER_DAY: u64 = 86_400;
+/// Time a post stays listed after it is opened.
+const VIEW_DELAY: Duration = Duration::from_secs(2);
 /// Draft key for the unsaved blank site; real site ids start at 1.
 pub const NEW_SITE: SiteId = 0;
 
@@ -69,7 +71,11 @@ impl SiteDraft {
 
     /// The template for a site name: TikTok's, else blank; the name is kept.
     pub fn from_defaults(name: &str) -> Self {
-        let preset = if name.trim().eq_ignore_ascii_case("tiktok") { Preset::Tiktok } else { Preset::Blank };
+        let preset = match name.trim().to_ascii_lowercase().as_str() {
+            "tiktok" => Preset::Tiktok,
+            "youtube shorts" => Preset::YoutubeShorts,
+            _ => Preset::Blank,
+        };
         SiteDraft::from_site(&PostSite { name: name.to_string(), ..PostSite::from_preset(preset) })
     }
 
@@ -79,7 +85,7 @@ impl SiteDraft {
             "" => Some(None),
             t => t.parse::<u64>().ok().filter(|n| *n >= min).map(Some),
         };
-        if self.name.trim().is_empty() || (self.notify_ntfy && !crate::policy::notify::topic_valid(&self.ntfy_topic)) {
+        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || (self.notify_ntfy && !crate::policy::notify::topic_valid(&self.ntfy_topic)) {
             return None;
         }
         Some(PostSite {
@@ -130,6 +136,8 @@ pub struct PostsState {
     pub checking: bool,
     next_check: HashMap<SiteId, Instant>,
     next_sweep: Instant,
+    pending_jump: Option<String>,
+    pending_view: Vec<(String, Instant)>,
     downloads: usize,
     status: Option<(String, u64)>,
 }
@@ -144,6 +152,8 @@ impl PostsState {
             add_name: String::new(),
             added: None,
             next_sweep: soon,
+            pending_jump: None,
+            pending_view: Vec::new(),
             next_check: cfg.sites.iter().map(|s| (s.id, soon)).collect(),
             cfg,
             posts: posts::load_library(),
@@ -339,6 +349,17 @@ impl App {
     pub(super) fn posts_tick(&mut self) -> Task<Msg> {
         let mut tasks = Vec::new();
         let now = Instant::now();
+        if let Some(name) = self.posts.pending_jump.take() {
+            tasks.extend(self.posts_jump(&name));
+        }
+        if self.posts.pending_view.iter().any(|(_, at)| now >= *at) {
+            let (due, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.posts.pending_view).into_iter().partition(|(_, at)| now >= *at);
+            self.posts.pending_view = wait;
+            for (id, _) in due {
+                self.posts.set_viewed(&id, true);
+            }
+            self.posts.save_lib();
+        }
         if now >= self.posts.next_sweep {
             self.posts.next_sweep = now + SWEEP_EVERY;
             self.posts_sweep();
@@ -590,7 +611,7 @@ impl App {
                 let name = site.name.clone();
                 match self.posts.cfg.add_site(site) {
                     Some(id) => self.posts_site_added(id, name),
-                    None => self.posts.say(format!("{name} is already added")),
+                    None => return self.posts_jump(&name).unwrap_or_else(Task::none),
                 }
             }
             PostsMsg::SaveSite(id) => self.posts_save_site(id),
@@ -685,7 +706,16 @@ impl App {
         }
         self.posts.next_check.insert(id, Instant::now());
         self.posts.save_cfg();
+        self.posts.pending_jump = Some(name.clone());
         self.posts.added = Some((name, now_secs()));
+    }
+
+    /// Scrolls the Posts site list to the named site, if it exists.
+    fn posts_jump(&self, name: &str) -> Option<Task<Msg>> {
+        let sites = &self.posts.cfg.sites;
+        let idx = sites.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
+        let y = if sites.len() > 1 { idx as f32 / (sites.len() - 1) as f32 } else { 0.0 };
+        Some(iced::widget::operation::snap_to(super::posts_scroll_id(), iced::widget::scrollable::RelativeOffset { x: 0.0, y }))
     }
 
     /// Saves a site's draft: adds the unsaved blank site, or updates an existing one.
@@ -761,10 +791,7 @@ impl App {
         };
         let mark = self.posts.cfg.site(post.site_id).is_none_or(|s| s.mark_on_open);
         match result {
-            Ok(()) if mark => {
-                self.posts.set_viewed(id, true);
-                self.posts.save_lib();
-            }
+            Ok(()) if mark => self.posts.pending_view.push((id.to_string(), Instant::now() + VIEW_DELAY)),
             Ok(()) => {}
             Err(e) => self.posts.say(format!("Could not open the post: {e}")),
         }

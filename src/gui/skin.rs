@@ -368,6 +368,19 @@ pub fn input(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Styl
     input_required(s, false)
 }
 
+/// Input style whose border pulses with `ph` (0..1) until focused.
+pub fn input_pulse(s: Skin, ph: f32) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
+    let base = input(s);
+    move |th, st| {
+        let mut style = base(th, st);
+        if !matches!(st, text_input::Status::Focused { .. }) {
+            style.border.color = with_alpha(s.accent, 0.3 + 0.7 * ph);
+            style.border.width = 2.0;
+        }
+        style
+    }
+}
+
 /// Input style that shows a red border while `invalid` is true.
 pub fn input_required(s: Skin, invalid: bool) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
