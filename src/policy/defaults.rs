@@ -109,6 +109,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         split_enabled: false,
         split_minutes: None,
         auto_suffix: true,
+        paused: false,
     }
 }
 

@@ -162,6 +162,9 @@ pub struct Site {
     pub split_minutes: Option<u64>,
     /// Name a recording that restarts mid-stream `_partN` and rename the earlier file to match.
     pub auto_suffix: bool,
+    /// Skip checks for this site's streamers; recordings already running continue.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 /// `text` trimmed, or `fallback` when it is blank.
@@ -508,6 +511,7 @@ mod tests {
             split_enabled,
             split_minutes,
             auto_suffix: true,
+            paused: false,
         }
     }
 

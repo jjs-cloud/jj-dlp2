@@ -658,6 +658,12 @@ impl App {
                     site.accounts.retain(|a| a.name != name);
                 }
                 self.posts.errors.remove(&(id, name.clone()));
+                let mine = |p: &Post| p.site_id == id && p.account.eq_ignore_ascii_case(&name);
+                for p in self.posts.posts.iter().filter(|p| mine(p)) {
+                    let _ = std::fs::remove_file(p.thumb_path());
+                }
+                self.posts.posts.retain(|p| !mine(p));
+                self.posts.save_lib();
                 if self.posts.account.as_ref() == Some(&(id, name)) {
                     self.posts.account = None;
                 }

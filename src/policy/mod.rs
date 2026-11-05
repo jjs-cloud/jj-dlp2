@@ -81,6 +81,7 @@ pub struct NewSite {
     pub split_enabled: bool,
     pub split_minutes: Option<u64>,
     pub auto_suffix: bool,
+    pub paused: bool,
 }
 
 impl NewSite {
@@ -124,6 +125,7 @@ impl NewSite {
             split_enabled: self.split_enabled,
             split_minutes: self.split_minutes,
             auto_suffix: self.auto_suffix,
+            paused: self.paused,
         }
     }
 }
@@ -1428,6 +1430,7 @@ mod tests {
             split_enabled: false,
             split_minutes: None,
             auto_suffix: true,
+            paused: false,
         }
     }
 
@@ -1520,6 +1523,7 @@ mod e2e {
                 split_enabled: false,
                 split_minutes: None,
                 auto_suffix: true,
+                paused: false,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };

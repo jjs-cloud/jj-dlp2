@@ -650,6 +650,7 @@ mod e2e {
                 split_enabled: false,
                 split_minutes: None,
                 auto_suffix: true,
+                paused: false,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -818,6 +819,7 @@ mod e2e {
                 split_enabled: false,
                 split_minutes: None,
                 auto_suffix: true,
+                paused: false,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };

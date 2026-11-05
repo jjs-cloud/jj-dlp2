@@ -32,6 +32,9 @@ pub(super) fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.text)
 }
 
+/// Width of the "Add streamer" button; "Remove site" is centered over it.
+const STREAMER_BTN_W: f32 = 130.0;
+
 /// Button label that inherits the button style's text colour.
 pub(super) fn btn_label<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font)
@@ -1076,6 +1079,7 @@ impl App {
     }
 
     fn site_block<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
+        let has_streamers = self.settings.streamers.iter().any(|x| x.site_id == site.id);
         let check = match self.checks.get(&site.id) {
             Some(c) => {
                 let color = if c.ok { s.live } else { s.danger };
@@ -1089,6 +1093,7 @@ impl App {
                 .spacing(6)
                 .align_y(Alignment::Center)
             }
+            None if !has_streamers => Row::new(),
             None => row![muted(&s, "waiting for first check")],
         };
         let mut head: Row<'_, Msg> = Row::new().spacing(10).align_y(Alignment::Center).push(
@@ -1099,6 +1104,9 @@ impl App {
         );
         if site.log_checker_stdout || site.log_checker_stderr {
             head = head.push(chip(s, "LOGGING", s.muted));
+        }
+        if site.paused {
+            head = head.push(chip(s, "PAUSED", s.warn));
         }
         let head = head.push(Space::new().width(Length::Fill)).push(check);
 
@@ -1113,7 +1121,21 @@ impl App {
             .filter(|x| x.site_id == site.id)
             .collect();
         if streamers.is_empty() {
-            top = top.push(muted(&s, "No streamers yet; add one below."));
+            top = top.push(
+                row![
+                    muted(&s, "No streamers yet; add one below."),
+                    Space::new().width(Length::Fill),
+                    container(
+                        button(btn_label(&s, "Remove site").size(11))
+                            .on_press(Msg::ConfirmRemoveSite(site.id))
+                            .padding([0.0, 10.0])
+                            .style(skin::btn(s, BtnKind::Danger)),
+                    )
+                    .width(STREAMER_BTN_W)
+                    .align_x(iced::alignment::Horizontal::Center),
+                ]
+                .align_y(Alignment::Center),
+            );
         }
         for st in streamers {
             top = top.push(self.streamer_row(s, st));
@@ -1134,9 +1156,10 @@ impl App {
                 .padding(8)
                 .width(Length::Fill)
                 .style(skin::input(s)),
-            button(btn_label(&s, "Add streamer").size(13))
+            button(btn_label(&s, "Add streamer").size(13).width(Length::Fill).align_x(Alignment::Center))
                 .on_press(Msg::AddStreamer(id))
                 .padding([8.0, 14.0])
+                .width(STREAMER_BTN_W)
                 .style(skin::btn(s, BtnKind::Primary)),
         ]
         .spacing(8);
@@ -1888,13 +1911,28 @@ impl App {
 
         let base = layout::base_dir(&d.output, &self.settings.default_output_dir);
         let effective = layout::preview(base, d.folder_layout, &d.name, None).to_string();
+        let global = &self.settings.default_output_dir;
+        let global_hint = std::path::absolute(global.trim()).map_or_else(|_| global.clone(), |p| p.display().to_string());
         let output_row = row![
+            cell(labeled("Output folder", field(&global_hint, &d.output, DraftField::Output)), Length::FillPortion(1)),
             cell(
-                labeled(
-                    "Output folder (blank = global)",
-                    field("Use the global output folder", &d.output, DraftField::Output)
-                ),
-                Length::FillPortion(1)
+                column![
+                    muted(&s, " "),
+                    row![
+                        button(btn_label(&s, "Browse").size(12))
+                            .on_press(Msg::BrowseSiteOutput(id))
+                            .padding([6.0, 12.0])
+                            .style(skin::btn(s, BtnKind::Ghost)),
+                        button(btn_label(&s, "Open").size(12))
+                            .on_press(Msg::OpenSiteOutput(id))
+                            .padding([6.0, 12.0])
+                            .style(skin::btn(s, BtnKind::Ghost)),
+                    ]
+                    .spacing(6),
+                ]
+                .spacing(2)
+                .into(),
+                Length::Shrink
             ),
             cell(
                 labeled(
@@ -2177,6 +2215,7 @@ impl App {
         ]
         .spacing(6);
         let mut actions: Row<'a, Msg> = row![
+            log("Pause checking", d.paused, DraftField::Paused),
             log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
             log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
             button(t(&s, "Open logs folder").size(12))

@@ -53,7 +53,7 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
     loop {
         let snap = rx.borrow_and_update().clone();
         let started = Instant::now();
-        if !snap.urls.is_empty() {
+        if !snap.urls.is_empty() && !snap.site.paused {
             let result = run_check(&snap, &internal).await;
             let msg = Internal::CheckResult { site_id: snap.site.id, at: now_secs(), result };
             if internal.send(msg).is_err() {

@@ -239,6 +239,15 @@ impl Default for PostsConfig {
 }
 
 impl PostsConfig {
+    /// The config of a first launch: one site per named preset.
+    fn first_launch() -> Self {
+        let mut cfg = PostsConfig::default();
+        for preset in [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods] {
+            cfg.add_site(PostSite::from_preset(preset));
+        }
+        cfg
+    }
+
     pub fn site(&self, id: SiteId) -> Option<&PostSite> {
         self.sites.iter().find(|s| s.id == id)
     }
@@ -377,7 +386,11 @@ fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
 }
 
 pub fn load_config() -> PostsConfig {
-    read_json(&path_in_config("posts.json"))
+    let path = path_in_config("posts.json");
+    if !path.exists() {
+        return PostsConfig::first_launch();
+    }
+    read_json(&path)
 }
 
 pub fn save_config(cfg: &PostsConfig) {
@@ -596,6 +609,12 @@ mod tests {
         assert_eq!(a.url, "https://www.twitch.tv/Emiru/videos?filter=archives");
         let b = site.account_from_input("https://www.twitch.tv/ash/videos?filter=archives").unwrap();
         assert_eq!(b.name, "ash");
+    }
+
+    #[test]
+    fn first_launch_has_every_named_site() {
+        let names: Vec<String> = PostsConfig::first_launch().sites.into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["TikTok", "Youtube Shorts", "Twitch Vods"]);
     }
 
     #[test]

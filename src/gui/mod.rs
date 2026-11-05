@@ -149,6 +149,7 @@ pub struct SiteDraft {
     pub split_enabled: bool,
     pub split_minutes: String,
     pub auto_suffix: bool,
+    pub paused: bool,
 }
 
 impl SiteDraft {
@@ -191,6 +192,7 @@ impl SiteDraft {
             split_enabled: s.split_enabled,
             split_minutes: opt_text(s.split_minutes),
             auto_suffix: s.auto_suffix,
+            paused: s.paused,
         }
     }
 
@@ -235,6 +237,7 @@ impl SiteDraft {
             split_enabled: n.split_enabled,
             split_minutes: opt_text(n.split_minutes),
             auto_suffix: n.auto_suffix,
+            paused: n.paused,
         }
     }
 
@@ -367,6 +370,7 @@ impl SiteDraft {
             split_enabled: self.split_enabled,
             split_minutes: self.split_minutes()?,
             auto_suffix: self.auto_suffix,
+            paused: self.paused,
         })
     }
 }
@@ -406,6 +410,7 @@ pub enum DraftField {
     Recorder(String),
     UrlTemplate(String),
     Output(String),
+    Paused(bool),
     FolderLayout(FolderLayout),
     LogStdout(bool),
     LogStderr(bool),
@@ -618,6 +623,9 @@ pub enum Msg {
     AddSite(Preset),
     RemoveSite(SiteId),
     ConfirmRemoveSite(SiteId),
+    BrowseSiteOutput(SiteId),
+    SiteOutputChosen(SiteId, Option<std::path::PathBuf>),
+    OpenSiteOutput(SiteId),
     CancelRemoveSite,
     Draft(SiteId, DraftField),
     SaveSite(SiteId),
@@ -1037,6 +1045,32 @@ impl App {
                 self.client.send(PolicyCommand::RemoveSite(id));
             }
             Msg::CancelRemoveSite => self.confirm_remove_site = None,
+            Msg::BrowseSiteOutput(id) => {
+                let global = &self.settings.default_output_dir;
+                let start = std::path::PathBuf::from(self.drafts.get(&id).map_or(global.trim(), |d| crate::policy::layout::base_dir(&d.output, global)));
+                return Task::perform(
+                    async move {
+                        let mut dlg = rfd::AsyncFileDialog::new().set_title("Output folder");
+                        if start.is_dir() {
+                            dlg = dlg.set_directory(start);
+                        }
+                        dlg.pick_folder().await.map(|h| h.path().to_path_buf())
+                    },
+                    move |p| Msg::SiteOutputChosen(id, p),
+                );
+            }
+            Msg::SiteOutputChosen(id, Some(dir)) => {
+                if let Some(d) = self.drafts.get_mut(&id) {
+                    d.output = dir.to_string_lossy().into_owned();
+                }
+            }
+            Msg::SiteOutputChosen(_, None) => {}
+            Msg::OpenSiteOutput(id) => {
+                let global = &self.settings.default_output_dir;
+                let dir = std::path::PathBuf::from(self.drafts.get(&id).map_or(global.trim(), |d| crate::policy::layout::base_dir(&d.output, global)));
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = open::that_detached(dir);
+            }
             Msg::Draft(id, field) => {
                 if let Some(d) = self.drafts.get_mut(&id) {
                     match field {
@@ -1059,6 +1093,7 @@ impl App {
                         DraftField::Recorder(v) => d.recorder = v,
                         DraftField::UrlTemplate(v) => d.url_template = v,
                         DraftField::Output(v) => d.output = v,
+                        DraftField::Paused(v) => d.paused = v,
                         DraftField::FolderLayout(v) => d.folder_layout = v,
                         DraftField::LogStdout(v) => d.log_stdout = v,
                         DraftField::LogStderr(v) => d.log_stderr = v,
