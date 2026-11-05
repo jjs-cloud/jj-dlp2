@@ -448,9 +448,7 @@ impl App {
                 if self.posts.posts.iter().any(|p| p.id == post.id) {
                     continue;
                 }
-                if first && !backfill {
-                    post.viewed = true;
-                } else if auto {
+                if auto && (!first || backfill) {
                     post.state = PostState::Queued;
                 }
                 added.push(post);
