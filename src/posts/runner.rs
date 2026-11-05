@@ -10,6 +10,7 @@ use tokio::process::Command;
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(180);
 const INFO_TIMEOUT: Duration = Duration::from_secs(90);
+const M3U8_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
 const THUMB_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const THUMB_BOX: (u32, u32) = (360, 640);
@@ -229,6 +230,27 @@ pub async fn download(site: PostSite, post: Post, global_dir: String) -> Downloa
     };
     let has_thumb = post.has_thumb || frame_thumbnail(&path, &post.id).await;
     DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb }
+}
+
+/// The stream playlist URL yt-dlp reports for a post.
+pub async fn resolve_m3u8(site: PostSite, url: String) -> Result<String, String> {
+    let out = run(site.exe_or_default(), &m3u8_cmd(&site, &url), M3U8_TIMEOUT).await?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if let Some(line) = stdout.lines().map(str::trim).find(|l| l.starts_with("http")) {
+        return Ok(line.to_string());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {} and no URL", out.status)))
+}
+
+/// Plays a stream URL in `player`, or through a temporary .m3u8 file when `player` is blank.
+pub fn play_stream(player: &str, url: &str, id: &str) -> Result<(), String> {
+    if !player.trim().is_empty() {
+        return open::with_detached(url, resolve_exe(player)).map_err(|e| e.to_string());
+    }
+    let file = std::env::temp_dir().join(Path::new(&thumb_name(id)).with_extension("m3u8"));
+    std::fs::write(&file, format!("#EXTM3U\n{url}\n")).map_err(|e| e.to_string())?;
+    open::that_detached(file).map_err(|e| e.to_string())
 }
 
 /// Sends a notification off the async threads and returns the log lines for failures.

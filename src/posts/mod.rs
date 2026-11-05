@@ -17,6 +17,9 @@ pub const MIN_INTERVAL_SECS: u64 = 15;
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
 /// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
 pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+/// Arguments used when a site's own are blank; `{url}` is the post URL and the printed line is the stream playlist.
+pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
+const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
 const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
@@ -38,6 +41,7 @@ fn yes() -> bool {
 pub enum Preset {
     Tiktok,
     YoutubeShorts,
+    TwitchVods,
     Blank,
 }
 
@@ -79,6 +83,12 @@ pub struct PostSite {
     pub notify_desktop: bool,
     pub notify_ntfy: bool,
     pub ntfy_topic: String,
+    /// Play posts that are not downloaded from their stream playlist instead of opening the site.
+    pub open_m3u8: bool,
+    /// Blank uses `DEFAULT_M3U8_ARGS`.
+    pub m3u8_args: String,
+    /// Program that plays the playlist; blank opens it with the system default.
+    pub player_path: String,
     /// Unstarred posts older than this many days are deleted; `None` keeps them.
     pub auto_delete_days: Option<u64>,
     pub accounts: Vec<Account>,
@@ -103,6 +113,9 @@ impl Default for PostSite {
             notify_desktop: true,
             notify_ntfy: false,
             ntfy_topic: String::new(),
+            open_m3u8: false,
+            m3u8_args: String::new(),
+            player_path: String::new(),
             auto_delete_days: Some(DEFAULT_AUTO_DELETE_DAYS),
             accounts: Vec::new(),
         }
@@ -125,6 +138,15 @@ impl PostSite {
                 url_template: YOUTUBE_SHORTS_URL_TEMPLATE.into(),
                 ..Default::default()
             },
+            Preset::TwitchVods => PostSite {
+                name: "Twitch Vods".into(),
+                url_template: TWITCH_VODS_URL_TEMPLATE.into(),
+                auto_download: false,
+                backfill: false,
+                open_m3u8: true,
+                auto_delete_days: None,
+                ..Default::default()
+            },
             Preset::Blank => PostSite::default(),
         }
     }
@@ -142,6 +164,11 @@ impl PostSite {
     pub fn download_or_default(&self) -> &str {
         let t = self.download_args.trim();
         if t.is_empty() { DEFAULT_DOWNLOAD_ARGS } else { t }
+    }
+
+    pub fn m3u8_or_default(&self) -> &str {
+        let t = self.m3u8_args.trim();
+        if t.is_empty() { DEFAULT_M3U8_ARGS } else { t }
     }
 
     /// Seconds between checks, never below the minimum.
@@ -173,8 +200,12 @@ impl PostSite {
     pub fn account_from_input(&self, input: &str) -> Option<Account> {
         let input = input.trim();
         let (name, url) = if input.starts_with("http://") || input.starts_with("https://") {
-            let path = input.split(['?', '#']).next().unwrap_or(input);
-            let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+            let path = input.split(['?', '#']).next().unwrap_or(input).trim_end_matches('/');
+            let mut segs = path.rsplit('/');
+            let mut last = segs.next().unwrap_or("");
+            if last.eq_ignore_ascii_case("videos") {
+                last = segs.next().filter(|p| !p.is_empty() && !p.contains(['.', ':'])).unwrap_or(last);
+            }
             (last.trim_start_matches('@').to_string(), input.to_string())
         } else {
             let tmpl = self.url_template.trim();
@@ -475,6 +506,11 @@ pub fn download_cmd(site: &PostSite, url: &str, dir: &str) -> Vec<String> {
     expand(site.download_or_default(), url, dir)
 }
 
+/// Arguments that print the stream playlist URL of one post.
+pub fn m3u8_cmd(site: &PostSite, url: &str) -> Vec<String> {
+    expand(site.m3u8_or_default(), url, "")
+}
+
 /// The notification for new posts of one account.
 pub fn new_posts_message(account: &str, posts: &[Post]) -> notify::Message {
     let first = posts.first().map(|p| p.title.as_str()).filter(|t| !t.is_empty()).unwrap_or("New post");
@@ -549,6 +585,22 @@ mod tests {
         site.checker_args = "--dump-json".into();
         assert_eq!(checker_cmd(&site, "u"), vec!["--dump-json", "u"]);
         assert_eq!(site.user_agent(), None);
+    }
+
+    #[test]
+    fn twitch_vods_preset_is_manual_and_streams() {
+        let site = PostSite::from_preset(Preset::TwitchVods);
+        assert!(!site.auto_download && !site.backfill && site.open_m3u8 && site.auto_delete_days.is_none());
+        assert!(!tiktok().open_m3u8 && !PostSite::from_preset(Preset::Blank).open_m3u8);
+        let a = site.account_from_input("Emiru").unwrap();
+        assert_eq!(a.url, "https://www.twitch.tv/Emiru/videos?filter=archives");
+        let b = site.account_from_input("https://www.twitch.tv/ash/videos?filter=archives").unwrap();
+        assert_eq!(b.name, "ash");
+    }
+
+    #[test]
+    fn m3u8_command_fills_the_url() {
+        assert_eq!(m3u8_cmd(&tiktok(), "https://x/v/1"), vec!["--no-warnings", "--no-playlist", "--get-url", "https://x/v/1"]);
     }
 
     #[test]

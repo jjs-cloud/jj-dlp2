@@ -356,7 +356,7 @@ impl App {
     pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
         let mut add = row![self.section_title(s, "ADD SITE")].spacing(10).align_y(Alignment::Center);
-        for (label, preset) in [("TikTok", Preset::Tiktok), ("Youtube Shorts", Preset::YoutubeShorts), ("Blank", Preset::Blank)] {
+        for (label, preset) in [("TikTok", Preset::Tiktok), ("Youtube Shorts", Preset::YoutubeShorts), ("Twitch Vods", Preset::TwitchVods), ("Blank", Preset::Blank)] {
             add = add.push(
                 button(t(&s, label).size(13))
                     .on_press(send(PostsMsg::AddSite(preset)))
@@ -457,8 +457,15 @@ impl App {
             toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
             toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
             toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),
+            toggle("Open m3u8 instead of site", d.open_m3u8, SiteField::OpenM3u8),
         ]
         .spacing(6);
+
+        let stream = row![
+            cell(input("m3u8 arguments ({url} = post URL)", posts::DEFAULT_M3U8_ARGS, &d.m3u8, SiteField::M3u8Args, false), Length::FillPortion(2)),
+            cell(input("Player for m3u8 (blank = system default)", "", &d.player, SiteField::Player, false), Length::FillPortion(1)),
+        ]
+        .spacing(8);
 
         let args = |label: &'static str, hint: &'static str, content: &'a text_editor::Content, f: fn(Action) -> SiteField| -> Element<'a, Msg> {
             column![
@@ -509,6 +516,7 @@ impl App {
                 folder,
                 cleanup,
                 toggles,
+                stream,
                 args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker),
                 args("Downloader arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download),
                 actions,

@@ -47,6 +47,9 @@ pub struct SiteDraft {
     pub notify_desktop: bool,
     pub notify_ntfy: bool,
     pub ntfy_topic: String,
+    pub open_m3u8: bool,
+    pub m3u8: String,
+    pub player: String,
 }
 
 impl SiteDraft {
@@ -68,14 +71,18 @@ impl SiteDraft {
             notify_desktop: site.notify_desktop,
             notify_ntfy: site.notify_ntfy,
             ntfy_topic: site.ntfy_topic.clone(),
+            open_m3u8: site.open_m3u8,
+            m3u8: site.m3u8_args.clone(),
+            player: site.player_path.clone(),
         }
     }
 
-    /// The template for a site name: TikTok's, else blank; the name is kept.
+    /// The template for a site name: its preset's, else blank; the name is kept.
     pub fn from_defaults(name: &str) -> Self {
         let preset = match name.trim().to_ascii_lowercase().as_str() {
             "tiktok" => Preset::Tiktok,
             "youtube shorts" => Preset::YoutubeShorts,
+            "twitch vods" => Preset::TwitchVods,
             _ => Preset::Blank,
         };
         SiteDraft::from_site(&PostSite { name: name.to_string(), ..PostSite::from_preset(preset) })
@@ -107,6 +114,9 @@ impl SiteDraft {
             notify_desktop: self.notify_desktop,
             notify_ntfy: self.notify_ntfy,
             ntfy_topic: self.ntfy_topic.clone(),
+            open_m3u8: self.open_m3u8,
+            m3u8_args: self.m3u8.clone(),
+            player_path: self.player.clone(),
             ..base.clone()
         })
     }
@@ -301,6 +311,9 @@ pub enum SiteField {
     NotifyDesktop(bool),
     NotifyNtfy(bool),
     NtfyTopic(String),
+    OpenM3u8(bool),
+    M3u8Args(String),
+    Player(String),
 }
 
 #[derive(Debug, Clone)]
@@ -316,6 +329,7 @@ pub enum PostsMsg {
     Paused(bool),
     Play(String),
     OpenPage(String),
+    M3u8Ready(String, Result<String, String>),
     ToggleViewed(String),
     ToggleStar(String),
     Download(String),
@@ -556,7 +570,12 @@ impl App {
                 }
                 self.posts.save_cfg();
             }
-            PostsMsg::Play(id) => self.posts_play(&id),
+            PostsMsg::Play(id) => return self.posts_play(&id),
+            PostsMsg::M3u8Ready(id, Ok(url)) => self.posts_open_stream(&id, &url),
+            PostsMsg::M3u8Ready(_, Err(e)) => {
+                self.posts.say(format!("Could not get the stream link: {e}"));
+                self.push_log(format!("Posts: stream link failed: {e}"));
+            }
             PostsMsg::OpenPage(id) => {
                 if let Some(url) = self.posts.posts.iter().find(|p| p.id == id).map(|p| p.url.clone()) {
                     let _ = open::that_detached(url);
@@ -698,6 +717,9 @@ impl App {
             SiteField::NotifyDesktop(v) => d.notify_desktop = v,
             SiteField::NotifyNtfy(v) => d.notify_ntfy = v,
             SiteField::NtfyTopic(v) => d.ntfy_topic = v,
+            SiteField::OpenM3u8(v) => d.open_m3u8 = v,
+            SiteField::M3u8Args(v) => d.m3u8 = v,
+            SiteField::Player(v) => d.player = v,
             SiteField::Checker(_) | SiteField::Download(_) => {}
         }
     }
@@ -784,10 +806,17 @@ impl App {
         self.posts.save_lib();
     }
 
-    /// Opens the downloaded file, or the post page when there is none, and marks it viewed.
-    fn posts_play(&mut self, id: &str) {
-        let Some(post) = self.posts.posts.iter().find(|p| p.id == id).cloned() else { return };
+    /// Opens the downloaded file, else the stream or the post page, and marks it viewed.
+    fn posts_play(&mut self, id: &str) -> Task<Msg> {
+        let Some(post) = self.posts.posts.iter().find(|p| p.id == id).cloned() else { return Task::none() };
         let file = post.file.as_deref().filter(|f| post.state == PostState::Ready && Path::new(f).is_file());
+        if file.is_none() {
+            if let Some(site) = self.posts.cfg.site(post.site_id).filter(|s| s.open_m3u8).cloned() {
+                self.posts.say("Getting the stream link…");
+                let id = post.id.clone();
+                return Task::perform(runner::resolve_m3u8(site, post.url.clone()), move |r| Msg::Posts(PostsMsg::M3u8Ready(id.clone(), r)));
+            }
+        }
         let result = match file {
             Some(f) => ops::open_file(Path::new(f)),
             None => open::that_detached(&post.url).map_err(|e| e.to_string()),
@@ -797,6 +826,20 @@ impl App {
             Ok(()) if mark => self.posts.pending_view.push((id.to_string(), Instant::now() + VIEW_DELAY)),
             Ok(()) => {}
             Err(e) => self.posts.say(format!("Could not open the post: {e}")),
+        }
+        Task::none()
+    }
+
+    /// Plays a resolved stream URL in the site's player and marks the post viewed.
+    fn posts_open_stream(&mut self, id: &str, url: &str) {
+        let Some(site_id) = self.posts.posts.iter().find(|p| p.id == id).map(|p| p.site_id) else { return };
+        let site = self.posts.cfg.site(site_id);
+        let player = site.map(|s| s.player_path.clone()).unwrap_or_default();
+        let mark = site.is_none_or(|s| s.mark_on_open);
+        match runner::play_stream(&player, url, id) {
+            Ok(()) if mark => self.posts.pending_view.push((id.to_string(), Instant::now() + VIEW_DELAY)),
+            Ok(()) => {}
+            Err(e) => self.posts.say(format!("Could not play the stream: {e}")),
         }
     }
 

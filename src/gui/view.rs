@@ -431,7 +431,6 @@ impl App {
         };
         let mut title = row![
             switch("Livestreams".to_string(), MonitorTab::Livestreams),
-            switch("Vods".to_string(), MonitorTab::Vods),
             switch(self.posts_tab_label(), MonitorTab::Posts),
             Space::new().width(Length::Fill)
         ]
@@ -454,9 +453,6 @@ impl App {
         }
         if self.monitor_tab == MonitorTab::Posts {
             return column![title, self.posts_view(s)].spacing(12).height(Length::Fill).into();
-        }
-        if self.monitor_tab == MonitorTab::Vods {
-            return column![title, muted(&s, "Coming soon!")].spacing(12).height(Length::Fill).into();
         }
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
@@ -1616,7 +1612,6 @@ impl App {
         };
         let switcher = row![
             switch("Livestreams", SettingsTab::Sites),
-            switch("Vods", SettingsTab::Vods),
             switch("Posts", SettingsTab::Posts),
             switch("General", SettingsTab::General)
         ]
@@ -1624,7 +1619,6 @@ impl App {
         let body = match self.settings_tab {
             SettingsTab::Sites => self.settings_sites(s),
             SettingsTab::Posts => self.posts_settings(s),
-            SettingsTab::Vods => muted(&s, "Coming soon!").into(),
             SettingsTab::General => self.settings_general(s),
         };
         column![switcher, body].spacing(12).height(Length::Fill).into()

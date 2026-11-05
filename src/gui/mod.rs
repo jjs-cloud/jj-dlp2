@@ -84,7 +84,6 @@ pub enum Tab {
 pub enum SettingsTab {
     Sites,
     Posts,
-    Vods,
     General,
 }
 
@@ -93,7 +92,6 @@ pub enum SettingsTab {
 pub enum MonitorTab {
     Livestreams,
     Posts,
-    Vods,
 }
 
 /// Where the update banner is in its flow.
