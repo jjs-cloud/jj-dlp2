@@ -2,7 +2,7 @@
 
 use crate::api::{Settings, SiteId, StreamerId};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Contents of live.json.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -36,7 +36,7 @@ pub struct LiveTracker {
     gql_checked_at: Option<u64>,
     parts: HashMap<StreamerId, PartRecord>,
     seen_check: HashMap<StreamerId, u64>,
-    site_ok: HashMap<SiteId, bool>,
+    check_failed: HashSet<StreamerId>,
     dirty: bool,
     span_changed: bool,
     last_live_changed: bool,
@@ -68,6 +68,7 @@ impl LiveTracker {
         self.spans.retain(|id, _| keep(*id));
         self.last_live.retain(|id, _| keep(*id));
         self.parts.retain(|id, _| keep(*id));
+        self.check_failed.retain(|id| keep(*id));
         if self.spans.len() != spans {
             self.dirty = true;
             self.span_changed = true;
@@ -78,13 +79,17 @@ impl LiveTracker {
         }
     }
 
-    /// Records whether a site's latest check succeeded; failed checks can't prove a stream ended.
-    pub fn site_checked(&mut self, site: SiteId, ok: bool) {
-        self.site_ok.insert(site, ok);
+    /// Records whether a streamer's latest check succeeded; failed checks can't prove a stream ended.
+    pub fn streamer_checked(&mut self, id: StreamerId, ok: bool) {
+        if ok {
+            self.check_failed.remove(&id);
+        } else {
+            self.check_failed.insert(id);
+        }
     }
 
     /// Applies one check's result for a streamer; repeats of the same check are ignored. Returns true when a live span began.
-    pub fn status(&mut self, id: StreamerId, site: SiteId, checked: u64, live: bool, end_after_secs: u64) -> bool {
+    pub fn status(&mut self, id: StreamerId, checked: u64, live: bool, end_after_secs: u64) -> bool {
         if self.seen_check.insert(id, checked) == Some(checked) {
             return false;
         }
@@ -101,7 +106,7 @@ impl LiveTracker {
                 self.dirty = true;
                 self.last_live_changed = true;
             }
-        } else if self.site_ok.get(&site).copied().unwrap_or(true) && self.spans.contains_key(&id) {
+        } else if !self.check_failed.contains(&id) && self.spans.contains_key(&id) {
             let last = self.last_live.get(&id).copied().unwrap_or(0);
             if checked.saturating_sub(last) >= end_after_secs {
                 self.spans.remove(&id);
@@ -223,8 +228,8 @@ mod tests {
     #[test]
     fn first_live_sighting_starts_the_span() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.status(1, 1, 160, true, END);
+        t.status(1, 100, true, END);
+        t.status(1, 160, true, END);
         assert_eq!(t.live_since().get(&1), Some(&100));
         assert_eq!(t.last_live().get(&1), Some(&160));
     }
@@ -232,46 +237,59 @@ mod tests {
     #[test]
     fn repeated_check_is_ignored() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.status(1, 1, 100, false, END);
+        t.status(1, 100, true, END);
+        t.status(1, 100, false, END);
         assert_eq!(t.live_since().get(&1), Some(&100));
     }
 
     #[test]
     fn short_offline_gap_keeps_the_span() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.status(1, 1, 160, false, END);
-        t.status(1, 1, 220, true, END);
+        t.status(1, 100, true, END);
+        t.status(1, 160, false, END);
+        t.status(1, 220, true, END);
         assert_eq!(t.live_since().get(&1), Some(&100));
     }
 
     #[test]
     fn long_offline_gap_ends_the_span() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.status(1, 1, 160, false, END);
-        t.status(1, 1, 100 + END, false, END);
+        t.status(1, 100, true, END);
+        t.status(1, 160, false, END);
+        t.status(1, 100 + END, false, END);
         assert!(t.live_since().is_empty());
-        t.status(1, 1, 100 + END + 60, true, END);
+        t.status(1, 100 + END + 60, true, END);
         assert_eq!(t.live_since().get(&1), Some(&(100 + END + 60)));
+    }
+
+    #[test]
+    fn failed_check_only_blocks_its_own_streamer() {
+        let mut t = LiveTracker::default();
+        t.status(1, 100, true, END);
+        t.status(2, 100, true, END);
+        t.streamer_checked(1, false);
+        t.streamer_checked(2, true);
+        t.status(1, 100 + END + 600, false, END);
+        t.status(2, 100 + END + 600, false, END);
+        assert!(t.live_since().contains_key(&1));
+        assert!(!t.live_since().contains_key(&2));
     }
 
     #[test]
     fn failed_check_cannot_end_the_span() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.site_checked(1, false);
-        t.status(1, 1, 100 + END + 600, false, END);
+        t.status(1, 100, true, END);
+        t.streamer_checked(1, false);
+        t.status(1, 100 + END + 600, false, END);
         assert_eq!(t.live_since().get(&1), Some(&100));
     }
 
     #[test]
     fn last_live_outlives_the_span() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.status(1, 1, 160, true, END);
-        t.status(1, 1, 160 + END, false, END);
+        t.status(1, 100, true, END);
+        t.status(1, 160, true, END);
+        t.status(1, 160 + END, false, END);
         assert!(t.live_since().is_empty());
         assert_eq!(t.last_live().get(&1), Some(&160));
     }
@@ -279,7 +297,7 @@ mod tests {
     #[test]
     fn backfill_only_fills_missing_entries() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 500, true, END);
+        t.status(1, 500, true, END);
         t.take_dirty();
         t.take_last_live_changed();
         let added = t.backfill(HashMap::from([(1, 100), (2, 200)]));
@@ -295,7 +313,7 @@ mod tests {
     fn live_sighting_overrides_a_backfilled_time() {
         let mut t = LiveTracker::default();
         t.backfill(HashMap::from([(1, 100)]));
-        t.status(1, 1, 500, true, END);
+        t.status(1, 500, true, END);
         assert_eq!(t.last_live().get(&1), Some(&500));
     }
 
@@ -311,18 +329,18 @@ mod tests {
     #[test]
     fn part_record_lives_and_dies_with_its_span() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
+        t.status(1, 100, true, END);
         t.set_part(1, PartRecord { span: 100, part: 2, file: None });
         assert_eq!(t.part(1).map(|p| p.part), Some(2));
-        t.status(1, 1, 160, false, END);
-        t.status(1, 1, 100 + END, false, END);
+        t.status(1, 160, false, END);
+        t.status(1, 100 + END, false, END);
         assert!(t.part(1).is_none());
     }
 
     #[test]
     fn part_record_from_an_older_span_is_ignored() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 500, true, END);
+        t.status(1, 500, true, END);
         t.set_part(1, PartRecord { span: 100, part: 3, file: None });
         assert!(t.part(1).is_none());
     }
@@ -330,8 +348,8 @@ mod tests {
     #[test]
     fn retain_drops_streamers_and_flags_changes() {
         let mut t = LiveTracker::default();
-        t.status(1, 1, 100, true, END);
-        t.status(2, 1, 100, true, END);
+        t.status(1, 100, true, END);
+        t.status(2, 100, true, END);
         t.take_dirty();
         t.take_span_changed();
         t.take_last_live_changed();

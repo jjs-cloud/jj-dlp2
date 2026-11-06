@@ -32,10 +32,6 @@ pub const MAX_ATTEMPTS: u8 = 3;
 
 pub type SiteId = u64;
 
-fn yes() -> bool {
-    true
-}
-
 /// Starting points offered by the Add site row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
@@ -50,10 +46,8 @@ pub enum Preset {
 pub struct Account {
     pub name: String,
     pub url: String,
-    #[serde(default = "yes")]
     pub enabled: bool,
     /// True once a check of this account has succeeded.
-    #[serde(default)]
     pub baselined: bool,
 }
 

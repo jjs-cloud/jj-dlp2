@@ -163,7 +163,6 @@ pub struct Site {
     /// Name a recording that restarts mid-stream `_partN` and rename the earlier file to match.
     pub auto_suffix: bool,
     /// Skip checks for this site's streamers; recordings already running continue.
-    #[serde(default)]
     pub paused: bool,
 }
 
@@ -382,6 +381,8 @@ pub struct StreamerStatus {
     pub recording: bool,
     /// Unix seconds of the last check that covered this streamer.
     pub last_checked: Option<u64>,
+    /// The latest check could not be trusted for this streamer, so it can't prove the stream ended.
+    pub check_failed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

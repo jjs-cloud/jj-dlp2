@@ -82,6 +82,11 @@ pub fn find_problem(lines: &[String]) -> Option<Problem> {
     }
 }
 
+/// Every unexpected ERROR line in `lines`, each with its fix when known.
+pub fn error_problems(lines: &[String]) -> Vec<Problem> {
+    lines.iter().map(|l| l.trim()).filter(|l| is_error(l) && !is_benign(l)).map(|l| Problem { line: l.to_string(), hint: hint(l) }).collect()
+}
+
 /// Problem for a finished checker run: ERROR lines first, else a generic one if it failed silently.
 pub fn check_problem(lines: &[String], success: bool, code: Option<i32>, has_entries: bool) -> Option<Problem> {
     if lines.iter().any(|l| is_error(l)) {
@@ -168,5 +173,14 @@ mod tests {
         assert!(note("Extracted 0 cookies from firefox").unwrap().contains("firefox"));
         assert!(note("Extracted 12 cookies from firefox").is_none());
         assert!(note("Extracting cookies from firefox").is_none());
+    }
+
+    #[test]
+    fn error_problems_skip_offline_and_keep_each_line() {
+        let l = lines(&[OFFLINE, COOKIES, "WARNING: x", "ERROR: [twitch:stream] typo: typo does not exist"]);
+        let p = error_problems(&l);
+        assert_eq!(p.len(), 2);
+        assert!(p[0].hint.is_some());
+        assert!(p[1].hint.is_none());
     }
 }

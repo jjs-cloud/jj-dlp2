@@ -70,11 +70,33 @@ pub fn start(control: Control) -> EngineParts {
     EngineParts { client: EngineClient::new(cmd_tx), events: ev_rx, thread }
 }
 
+/// Streamers whose check can't be trusted: all of them after a site-wide failure, else those an error line names.
+fn failed_checks(report: &CheckReport, streamers: &[Streamer]) -> HashSet<StreamerId> {
+    let all = || streamers.iter().map(|s| s.id).collect();
+    if report.problem.is_some() && report.errors.is_empty() {
+        return all();
+    }
+    let mut failed = HashSet::new();
+    for e in &report.errors {
+        let named: Vec<StreamerId> = match e.hint {
+            Some(_) => Vec::new(),
+            None => streamers.iter().filter(|s| checker::error_names(&e.line, &s.url)).map(|s| s.id).collect(),
+        };
+        if named.is_empty() {
+            return all();
+        }
+        failed.extend(named);
+    }
+    failed
+}
+
 #[derive(Default)]
 struct StreamState {
     live: bool,
     last_checked: Option<u64>,
     entry: Option<LiveEntry>,
+    /// The latest check could not be trusted for this streamer.
+    check_failed: bool,
 }
 
 /// Recording health of one streamer during the current live session.
@@ -344,6 +366,7 @@ impl Engine {
         self.report_check(site_id, at, problem);
         let streamers: Vec<Streamer> =
             self.settings.streamers.iter().filter(|s| s.site_id == site_id).cloned().collect();
+        let failed = failed_checks(&report, &streamers);
         let single = streamers.len() == 1;
         let mut matched = vec![false; report.entries.len()];
         for s in &streamers {
@@ -356,6 +379,7 @@ impl Engine {
             state.live = found.is_some();
             state.entry = found.map(|i| report.entries[i].clone());
             state.last_checked = Some(at);
+            state.check_failed = failed.contains(&s.id);
             if state.live && !was_live {
                 self.log(format!("{} is live", s.name));
             }
@@ -512,6 +536,7 @@ impl Engine {
                 live: st.is_some_and(|s| s.live),
                 recording: self.recording(id),
                 last_checked: st.and_then(|s| s.last_checked),
+                check_failed: st.is_some_and(|s| s.check_failed),
             },
         });
     }

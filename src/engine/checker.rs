@@ -36,6 +36,8 @@ impl LiveEntry {
 pub struct CheckReport {
     pub entries: Vec<LiveEntry>,
     pub problem: Option<diagnose::Problem>,
+    /// Each unexpected ERROR line on its own; empty when the run failed without one.
+    pub errors: Vec<diagnose::Problem>,
 }
 
 pub struct SiteWorker {
@@ -72,7 +74,7 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
 async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) -> Result<CheckReport, String> {
     let template = snap.site.checker_or_default();
     let Some(kind) = CheckOutput::detect(template) else {
-        return Ok(CheckReport { entries: Vec::new(), problem: Some(diagnose::missing_output_flag()) });
+        return Ok(CheckReport { entries: Vec::new(), problem: Some(diagnose::missing_output_flag()), errors: Vec::new() });
     };
     let args = template::expand(template, "urls", &snap.urls);
     let exe = exepath::resolve(snap.site.exe_or_default());
@@ -97,7 +99,8 @@ async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) ->
     let stderr: Vec<String> = String::from_utf8_lossy(&output.stderr).lines().map(str::to_string).collect();
     let status = output.status;
     let problem = diagnose::check_problem(&stderr, status.success(), status.code(), !entries.is_empty());
-    Ok(CheckReport { entries, problem })
+    let errors = diagnose::error_problems(&stderr);
+    Ok(CheckReport { entries, problem, errors })
 }
 
 /// Appends this check's command, exit code and the enabled output streams to the site's checker log.
@@ -164,6 +167,14 @@ fn parse_simulate_line(line: &str) -> Option<LiveEntry> {
     })
 }
 
+/// True when an error line names the streamer behind `url`, by its address or its last path segment.
+pub fn error_names(line: &str, url: &str) -> bool {
+    let low = line.to_lowercase();
+    let norm = norm_url(url);
+    let name = norm.split('?').next().unwrap_or("").rsplit('/').next().unwrap_or("").trim_start_matches('@');
+    low.contains(&norm) || (name.len() >= 3 && low.contains(name))
+}
+
 /// Lowercases and strips scheme, `www.`, fragments, trailing slashes and `/live`-style suffixes.
 pub fn norm_url(u: &str) -> String {
     let mut s = u.trim().to_lowercase();
@@ -212,5 +223,14 @@ mod tests {
         let e = parse_json_line(l).unwrap();
         assert!(e.matches("https://www.youtube.com/@foo/live"));
         assert!(parse_json_line(r#"{"id":"x","is_live":false}"#).is_none());
+    }
+
+    #[test]
+    fn errors_name_their_streamer() {
+        let line = "ERROR: [twitch:stream] typo123: typo123 does not exist";
+        assert!(error_names(line, "https://www.twitch.tv/typo123"));
+        assert!(error_names(line, "https://twitch.tv/TYPO123/"));
+        assert!(!error_names(line, "https://www.twitch.tv/emiru"));
+        assert!(error_names("ERROR: Unsupported URL: https://x.test/a?b=1", "https://x.test/a?b=1"));
     }
 }

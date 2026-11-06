@@ -442,13 +442,13 @@ impl Policy {
             self.flush_output();
         }
         match &ev {
-            Event::SiteChecked { id, ok, .. } => self.live.site_checked(*id, *ok),
             Event::StreamerStatus { id, status } => {
                 self.statuses.insert(*id, *status);
-                if let (Some(at), Some((site_id, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
+                self.live.streamer_checked(*id, !status.check_failed);
+                if let (Some(at), Some((_, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
                     let first = self.gate.first_check(*id);
                     let on_launch = self.site_of(*id).is_some_and(|s| s.notify_on_launch);
-                    let started = self.live.status(*id, site_id, at, status.live, secs);
+                    let started = self.live.status(*id, at, status.live, secs);
                     if started {
                         self.gate.take_deferred(*id);
                     }
@@ -1574,7 +1574,7 @@ mod e2e {
     }
 
     fn live_status(p: &mut Policy, recording: bool, checked: u64) {
-        let status = StreamerStatus { live: true, recording, last_checked: Some(checked) };
+        let status = StreamerStatus { live: true, recording, last_checked: Some(checked), check_failed: false };
         p.on_engine_event(Event::StreamerStatus { id: 2, status });
     }
 
