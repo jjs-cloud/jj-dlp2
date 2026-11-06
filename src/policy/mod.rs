@@ -156,6 +156,8 @@ pub enum PolicyCommand {
     CheckForUpdate,
     /// Downloads the available update, then stops the engine and restarts into it.
     InstallUpdate,
+    /// Writes the replacement config over the broken files that were backed up at launch.
+    DiscardBrokenConfig,
     /// Saves the updater settings and re-checks.
     SetUpdateConfig(UpdateConfig),
     /// Stops the engine gracefully, then ends the policy layer.
@@ -317,7 +319,7 @@ impl Policy {
         file_tx: UnboundedSender<FileJob>,
         gql_tx: UnboundedSender<GqlJob>,
     ) -> Self {
-        let settings = settings::load();
+        let settings = settings::load_guarded();
         let live = LiveTracker::load(&settings, now_secs());
         Self {
             settings,
@@ -1339,6 +1341,11 @@ impl Policy {
             }
             PolicyCommand::CheckForUpdate => self.run_check(true),
             PolicyCommand::InstallUpdate => self.install_update(),
+            PolicyCommand::DiscardBrokenConfig => {
+                settings::resume_saving();
+                self.log("replacing the broken config; the old files are kept as .bad copies".to_string());
+                self.commit();
+            }
             PolicyCommand::SetUpdateConfig(cfg) => {
                 if let Err(e) = update::save_config(&cfg) {
                     self.log(format!("failed to save update.json: {e}"));

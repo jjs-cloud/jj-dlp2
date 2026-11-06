@@ -74,16 +74,22 @@ fn path() -> std::path::PathBuf {
     crate::settings::config_dir().join("gui.json")
 }
 
-/// Reads gui.json, defaulting when the file is missing or invalid.
+/// Reads gui.json, defaulting when it is missing; an invalid file is kept as gui.json.bad.
 fn read() -> Prefs {
-    std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    let Ok(text) = std::fs::read_to_string(path()) else { return Prefs::default() };
+    serde_json::from_str(&text).unwrap_or_else(|_| {
+        crate::settings::backup_bad(&path());
+        Prefs::default()
+    })
 }
 
-/// Writes gui.json.
+/// Writes gui.json through a temp file.
 fn try_write(prefs: &Prefs) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(prefs).map_err(std::io::Error::other)?;
     std::fs::create_dir_all(crate::settings::config_dir())?;
-    std::fs::write(path(), json)
+    let tmp = path().with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path())
 }
 
 /// Writes gui.json, ignoring failures.

@@ -257,6 +257,9 @@ impl App {
             Tab::Log => self.log_view(s),
         };
         let mut page = Column::new().spacing(14).push(self.header(s));
+        if let Some(banner) = self.config_banner(s) {
+            page = page.push(banner);
+        }
         if let Some(banner) = self.update_banner(s) {
             page = page.push(banner);
         }
@@ -314,6 +317,37 @@ impl App {
         .width(Length::Fill)
         .style(skin::header(s))
         .into()
+    }
+
+    /// Warns that a config file failed to load and saving is paused; `None` when all loaded.
+    fn config_banner(&self, s: Skin) -> Option<Element<'_, Msg>> {
+        let reasons: Vec<String> = [crate::settings::load_problem(), crate::posts::load_problem()].into_iter().flatten().collect();
+        if reasons.is_empty() {
+            return None;
+        }
+        let left = Column::new()
+            .spacing(4)
+            .push(iced::widget::text("A config file could not be loaded, so changes are not being saved").font(s.font).size(15).color(s.danger))
+            .push(iced::widget::text(reasons.join("; ")).font(s.font).size(12).color(s.warn))
+            .push(muted(&s, "Fix or restore the file from its .bad copy and restart, or start fresh to overwrite it."));
+        let buttons = row![
+            button(t(&s, "Open config folder").size(13))
+                .on_press(Msg::OpenConfigDir)
+                .padding([6.0, 14.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "Start fresh").size(13))
+                .on_press(Msg::StartFresh)
+                .padding([6.0, 14.0])
+                .style(skin::btn(s, BtnKind::Danger)),
+        ]
+        .spacing(8);
+        Some(
+            container(row![left, Space::new().width(Length::Fill), buttons].spacing(12).align_y(Alignment::Center))
+                .padding([10.0, 14.0])
+                .width(Length::Fill)
+                .style(skin::card(s, Some((s.danger, pulse(self.phase)))))
+                .into(),
+        )
     }
 
     /// The "Update available!" banner with its confirm step; `None` when up to date.

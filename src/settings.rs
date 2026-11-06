@@ -5,6 +5,53 @@ use crate::policy::{new_site, Preset};
 use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Holds the reason saving is paused after a config file failed to load.
+pub struct SaveGuard(Mutex<Option<String>>);
+
+impl SaveGuard {
+    pub const fn new() -> Self {
+        SaveGuard(Mutex::new(None))
+    }
+
+    /// Pauses saving, adding `reason` to any reason already held.
+    pub fn block(&self, reason: String) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        *g = Some(match g.take() {
+            Some(old) => format!("{old}; {reason}"),
+            None => reason,
+        });
+    }
+
+    /// The reason saving is paused, if it is.
+    pub fn reason(&self) -> Option<String> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+static GUARD: SaveGuard = SaveGuard::new();
+
+/// Copies `path` to `<path>.bad`; false when there is nothing to copy or the copy failed.
+pub fn backup_bad(path: &Path) -> bool {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".bad");
+    path.is_file() && std::fs::copy(path, PathBuf::from(name)).is_ok()
+}
+
+/// Why the config files could not be loaded, while saving is paused.
+pub fn load_problem() -> Option<String> {
+    GUARD.reason()
+}
+
+/// Lets saving resume once the user has chosen to start fresh.
+pub fn resume_saving() {
+    GUARD.clear();
+}
 
 /// Contents of settings.json.
 #[derive(Serialize, Deserialize)]
@@ -87,6 +134,20 @@ pub fn any_config_exists() -> bool {
     [settings_path(), sites_path(), streamers_path(), state_path()].iter().any(|p| p.exists())
 }
 
+/// Like `load`, but on a failure backs the files up as `.bad` and pauses saving.
+pub fn load_guarded() -> Settings {
+    if !any_config_exists() {
+        return first_launch_settings();
+    }
+    try_load().unwrap_or_else(|e| {
+        for p in [settings_path(), sites_path(), streamers_path(), state_path()] {
+            backup_bad(&p);
+        }
+        GUARD.block(format!("{e}; the old files were kept as .bad copies"));
+        first_launch_settings()
+    })
+}
+
 /// Reads the config files, falling back to defaults if none exist or they are invalid.
 pub fn load() -> Settings {
     if !any_config_exists() {
@@ -108,9 +169,41 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
 
 /// Writes every config file; state.json goes first so ids are never reused after a partial write.
 pub fn save(settings: &Settings) -> std::io::Result<()> {
+    if GUARD.reason().is_some() {
+        return Err(std::io::Error::other("saving is paused until the broken config is replaced"));
+    }
     std::fs::create_dir_all(config_dir())?;
     write_json(&state_path(), &State { next_id: settings.next_id })?;
     write_json(&settings_path(), &Globals { default_output_dir: settings.default_output_dir.clone() })?;
     write_json(&sites_path(), &settings.sites)?;
     write_json(&streamers_path(), &settings.streamers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guard_joins_reasons_and_clears() {
+        let g = SaveGuard::new();
+        assert_eq!(g.reason(), None);
+        g.block("a".into());
+        g.block("b".into());
+        assert_eq!(g.reason().as_deref(), Some("a; b"));
+        g.clear();
+        assert_eq!(g.reason(), None);
+    }
+
+    #[test]
+    fn backup_copies_to_bad_file() {
+        let dir = std::env::temp_dir().join(format!("jjdlp_bad_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("sites.json");
+        assert!(!backup_bad(&f));
+        std::fs::write(&f, "{ nope").unwrap();
+        assert!(backup_bad(&f));
+        assert_eq!(std::fs::read_to_string(dir.join("sites.json.bad")).unwrap(), "{ nope");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

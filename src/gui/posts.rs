@@ -192,11 +192,11 @@ impl PostsState {
         self.status.as_ref().filter(|(_, at)| now.saturating_sub(*at) < STATUS_SECS).map(|(m, _)| m.as_str())
     }
 
-    fn save_cfg(&self) {
+    pub(super) fn save_cfg(&self) {
         posts::save_config(&self.cfg);
     }
 
-    fn save_lib(&self) {
+    pub(super) fn save_lib(&self) {
         posts::save_library(&self.posts);
     }
 

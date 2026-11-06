@@ -660,6 +660,7 @@ pub enum Msg {
     CheckUpdateNow,
     SetUpdateChecks(bool),
     SetIncludeRc(bool),
+    StartFresh,
 }
 
 /// Most output lines kept per recording.
@@ -1259,6 +1260,16 @@ impl App {
             Msg::SetIncludeRc(on) => {
                 self.update_cfg.include_rc = on;
                 self.client.send(PolicyCommand::SetUpdateConfig(self.update_cfg));
+            }
+            Msg::StartFresh => {
+                if crate::settings::load_problem().is_some() {
+                    self.client.send(PolicyCommand::DiscardBrokenConfig);
+                }
+                if crate::posts::load_problem().is_some() {
+                    crate::posts::resume_saving();
+                    self.posts.save_cfg();
+                    self.posts.save_lib();
+                }
             }
         }
         Task::none()
