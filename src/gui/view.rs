@@ -321,7 +321,7 @@ impl App {
 
     /// Warns that a config file failed to load and saving is paused; `None` when all loaded.
     fn config_banner(&self, s: Skin) -> Option<Element<'_, Msg>> {
-        let reasons: Vec<String> = [crate::settings::load_problem(), crate::posts::load_problem()].into_iter().flatten().collect();
+        let reasons: Vec<String> = [crate::settings::load_problem(), crate::policy::posts::load_problem()].into_iter().flatten().collect();
         if reasons.is_empty() {
             return None;
         }
@@ -637,7 +637,7 @@ impl App {
             || p.jumping()
             || self.update.is_some()
             || crate::settings::load_problem().is_some()
-            || crate::posts::load_problem().is_some()
+            || crate::policy::posts::load_problem().is_some()
             || self.monitor_alert()
             || (p.add_target().is_some() && p.cfg.sites.iter().all(|x| x.accounts.is_empty()))
     }

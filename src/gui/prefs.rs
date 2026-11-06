@@ -17,6 +17,9 @@ pub const NAME_CLIP_DEFAULT: f32 = 15.0;
 pub const LOG_LINES_MIN_LIMIT: f32 = 100.0;
 pub const LOG_LINES_MAX_LIMIT: f32 = crate::api::LOG_HISTORY_MAX as f32;
 pub const LOG_LINES_DEFAULT: f32 = 500.0;
+pub const CARD_W_MIN: f32 = 120.0;
+pub const CARD_W_MAX: f32 = 260.0;
+const CARD_W_DEFAULT: f32 = 170.0;
 pub const WIN_DEFAULT_W: f32 = 1180.0;
 pub const WIN_DEFAULT_H: f32 = 845.0;
 const WIN_MIN_W: f32 = 640.0;
@@ -37,6 +40,7 @@ struct Prefs {
     win_h: f32,
     wrap_output: bool,
     files: FilesPrefs,
+    posts: PostsPrefs,
 }
 
 /// Preferences of the Files tab.
@@ -48,6 +52,20 @@ pub struct FilesPrefs {
     pub group: bool,
     pub delete_empty: bool,
     pub move_dir: String,
+}
+
+/// Preferences of the Posts tab.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostsPrefs {
+    pub newest_first: bool,
+    pub card_w: f32,
+}
+
+impl Default for PostsPrefs {
+    fn default() -> Self {
+        PostsPrefs { newest_first: true, card_w: CARD_W_DEFAULT }
+    }
 }
 
 impl Default for FilesPrefs {
@@ -66,6 +84,7 @@ impl Default for Prefs {
             win_h: WIN_DEFAULT_H,
             wrap_output: true,
             files: FilesPrefs::default(),
+            posts: PostsPrefs::default(),
         }
     }
 }
@@ -155,6 +174,19 @@ pub fn load_files() -> FilesPrefs {
 pub fn save_files(files: &FilesPrefs) {
     let mut prefs = read();
     prefs.files = files.clone();
+    write(&prefs);
+}
+
+/// Reads the saved Posts tab preferences, with the card width clamped to the allowed limits.
+pub fn load_posts() -> PostsPrefs {
+    let p = read().posts;
+    PostsPrefs { card_w: p.card_w.clamp(CARD_W_MIN, CARD_W_MAX), ..p }
+}
+
+/// Saves the Posts tab preferences.
+pub fn save_posts(posts: &PostsPrefs) {
+    let mut prefs = read();
+    prefs.posts = posts.clone();
     write(&prefs);
 }
 

@@ -1,10 +1,7 @@
-//! Posts monitor: tracked accounts, the post library and their JSON persistence.
-
-pub mod runner;
+//! Data model of the Posts monitor: sites, accounts and posts, and the yt-dlp command lines built from them.
 
 use crate::api::DEFAULT_EXE;
 use crate::policy::notify;
-use crate::settings::config_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -24,9 +21,6 @@ const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/s
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
 const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
-pub const DEFAULT_CARD_W: f32 = 170.0;
-pub const CARD_W_MIN: f32 = 120.0;
-pub const CARD_W_MAX: f32 = 260.0;
 /// Failed downloads are retried until they have failed this many times.
 pub const MAX_ATTEMPTS: u8 = 3;
 
@@ -222,19 +216,17 @@ impl PostSite {
 #[serde(default)]
 pub struct PostsConfig {
     pub sites: Vec<PostSite>,
-    pub newest_first: bool,
-    pub card_w: f32,
 }
 
 impl Default for PostsConfig {
     fn default() -> Self {
-        PostsConfig { sites: Vec::new(), newest_first: true, card_w: DEFAULT_CARD_W }
+        PostsConfig { sites: Vec::new() }
     }
 }
 
 impl PostsConfig {
     /// The config of a first launch: one site per named preset.
-    fn first_launch() -> Self {
+    pub(super) fn first_launch() -> Self {
         let mut cfg = PostsConfig::default();
         for preset in [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods] {
             cfg.add_site(PostSite::from_preset(preset));
@@ -280,26 +272,6 @@ pub enum PostState {
     Removed,
 }
 
-/// Which slice of the library the main area shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Section {
-    Unviewed,
-    Viewed,
-    Starred,
-    Failed,
-}
-
-impl Section {
-    pub fn label(self) -> &'static str {
-        match self {
-            Section::Unviewed => "Unviewed",
-            Section::Viewed => "Viewed",
-            Section::Starred => "Starred",
-            Section::Failed => "Failed",
-        }
-    }
-}
-
 /// One post found on an account.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -330,113 +302,14 @@ impl Post {
     }
 
     pub fn thumb_path(&self) -> PathBuf {
-        thumbs_dir().join(thumb_name(&self.id))
+        super::store::thumbs_dir().join(thumb_name(&self.id))
     }
-
-    pub fn in_section(&self, section: Section) -> bool {
-        if self.state == PostState::Removed {
-            return false;
-        }
-        match section {
-            Section::Unviewed => !self.viewed,
-            Section::Viewed => self.viewed,
-            Section::Starred => self.starred,
-            Section::Failed => self.state == PostState::Failed,
-        }
-    }
-
-    /// True when the lowercase `query` is blank or appears in the title or account.
-    pub fn matches_query(&self, query: &str) -> bool {
-        query.is_empty() || self.title.to_lowercase().contains(query) || self.account.to_lowercase().contains(query)
-    }
-}
-
-fn path_in_config(name: &str) -> PathBuf {
-    config_dir().join(name)
-}
-
-pub fn thumbs_dir() -> PathBuf {
-    path_in_config("post_thumbs")
 }
 
 /// The thumbnail file name for a post id.
 pub fn thumb_name(id: &str) -> String {
     let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
     format!("{safe}.jpg")
-}
-
-fn write_atomic<T: Serialize>(path: &Path, value: &T) {
-    let _ = std::fs::create_dir_all(config_dir());
-    let tmp = path.with_extension("json.tmp");
-    if let Ok(json) = serde_json::to_string_pretty(value) {
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
-        }
-    }
-}
-
-static GUARD: crate::settings::SaveGuard = crate::settings::SaveGuard::new();
-
-/// Why the posts files could not be loaded, while saving is paused.
-pub fn load_problem() -> Option<String> {
-    GUARD.reason()
-}
-
-/// Lets saving resume once the user has chosen to start fresh.
-pub fn resume_saving() {
-    GUARD.clear();
-}
-
-/// Reads a JSON file; a missing file gives `None`, an invalid one is backed up and pauses saving.
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&text) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            crate::settings::backup_bad(path);
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            GUARD.block(format!("{name} is invalid: {e}; the old file was kept as a .bad copy"));
-            None
-        }
-    }
-}
-
-pub fn load_config() -> PostsConfig {
-    let path = path_in_config("posts.json");
-    if !path.exists() {
-        return PostsConfig::first_launch();
-    }
-    read_json(&path).unwrap_or_else(PostsConfig::first_launch)
-}
-
-pub fn save_config(cfg: &PostsConfig) {
-    if GUARD.reason().is_none() {
-        write_atomic(&path_in_config("posts.json"), cfg);
-    }
-}
-
-/// Loads the library, requeuing interrupted downloads and dropping references to missing files.
-pub fn load_library() -> Vec<Post> {
-    let mut posts: Vec<Post> = read_json(&path_in_config("posts_library.json")).unwrap_or_default();
-    for p in &mut posts {
-        if p.state == PostState::Downloading {
-            p.state = PostState::Queued;
-        }
-        if p.has_thumb && !p.thumb_path().is_file() {
-            p.has_thumb = false;
-        }
-        if p.state == PostState::Ready && !p.file.as_deref().is_some_and(|f| Path::new(f).is_file()) {
-            p.state = PostState::Remote;
-            p.file = None;
-        }
-    }
-    posts
-}
-
-pub fn save_library(posts: &[Post]) {
-    if GUARD.reason().is_none() {
-        write_atomic(&path_in_config("posts_library.json"), &posts);
-    }
 }
 
 /// The fields of one yt-dlp JSON entry that the monitor uses.
@@ -645,14 +518,6 @@ mod tests {
     #[test]
     fn tokenizer_keeps_quoted_values() {
         assert_eq!(tokenize(r#"--a "b c" 'd e' f"#), vec!["--a", "b c", "d e", "f"]);
-    }
-
-    #[test]
-    fn sections_filter_posts() {
-        let mut p = Post { viewed: true, starred: true, ..Default::default() };
-        assert!(p.in_section(Section::Viewed) && p.in_section(Section::Starred) && !p.in_section(Section::Unviewed));
-        p.state = PostState::Removed;
-        assert!(!p.in_section(Section::Viewed));
     }
 
     #[test]

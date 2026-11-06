@@ -1,10 +1,11 @@
 //! Views of the Posts monitor and its settings.
 
-use super::posts::{PostsMsg, SiteDraft, SiteField, NEW_SITE};
+use super::posts::{PostsMsg, Section, SiteDraft, SiteField, NEW_SITE};
+use super::prefs;
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, card_box, chip, clip, fmt_ago, muted, t, warn_text};
 use super::{App, Msg};
-use crate::posts::{self, Post, PostSite, PostState, Preset, Section};
+use crate::policy::posts::{self, Post, PostSite, PostState, Preset};
 use iced::widget::text::Wrapping;
 use iced::widget::text_editor::{self, Action};
 use iced::widget::{Column, Row, Space, button, column, container, pick_list, row, scrollable, slider, stack, text_editor as editor, text_input, toggler};
@@ -163,9 +164,9 @@ impl App {
         bar = bar.push(
             text_input("Search", &p.search).on_input(|v| send(PostsMsg::Search(v))).padding([5.0, 8.0]).width(160).style(skin::input(s)),
         );
-        bar = bar.push(flag("Newest first", p.cfg.newest_first, PostsMsg::NewestFirst));
+        bar = bar.push(flag("Newest first", p.newest_first, PostsMsg::NewestFirst));
         bar = bar.push(
-            slider(posts::CARD_W_MIN..=posts::CARD_W_MAX, p.cfg.card_w, |v| send(PostsMsg::CardWidth(v)))
+            slider(prefs::CARD_W_MIN..=prefs::CARD_W_MAX, p.card_w, |v| send(PostsMsg::CardWidth(v)))
                 .step(10.0_f32)
                 .on_release(send(PostsMsg::CardWidthSave))
                 .width(90),
@@ -188,7 +189,7 @@ impl App {
             let empty = container(self.posts_empty(s)).height(Length::Fill);
             return col.push(empty).push(self.posts_add_bar(s)).height(Length::Fill).into();
         }
-        let w = p.cfg.card_w;
+        let w = p.card_w;
         let avail = (self.win_w - SIDEBAR_W - CHROME_W).max(w);
         let cols = (((avail + GAP) / (w + GAP)).floor() as usize).max(1);
         let shown: Vec<&Post> = visible.iter().take(p.shown).copied().collect();

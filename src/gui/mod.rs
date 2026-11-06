@@ -1277,13 +1277,8 @@ impl App {
                 self.client.send(PolicyCommand::SetUpdateConfig(self.update_cfg));
             }
             Msg::StartFresh => {
-                if crate::settings::load_problem().is_some() {
+                if crate::settings::load_problem().is_some() || crate::policy::posts::load_problem().is_some() {
                     self.client.send(PolicyCommand::DiscardBrokenConfig);
-                }
-                if crate::posts::load_problem().is_some() {
-                    crate::posts::resume_saving();
-                    self.posts.save_cfg();
-                    self.posts.save_lib();
                 }
             }
         }
@@ -1293,6 +1288,7 @@ impl App {
     fn on_event(&mut self, ev: PolicyEvent) {
         match ev {
             PolicyEvent::Settings(s) => self.on_settings(s),
+            PolicyEvent::Posts(e) => self.posts_on_event(e),
             PolicyEvent::Log(line) => self.push_log(line),
             PolicyEvent::LogHistory(lines) => {
                 self.log.extend(lines.into_iter().rev());

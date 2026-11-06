@@ -1,7 +1,10 @@
 //! Background work of the Posts monitor: yt-dlp calls, thumbnails and notifications.
 
-use super::*;
+use super::model::*;
+use super::store::thumbs_dir;
 use crate::api::now_secs;
+use crate::policy::notify;
+use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 use std::io::Read;
 use std::process::Stdio;

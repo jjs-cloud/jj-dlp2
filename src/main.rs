@@ -6,7 +6,6 @@ mod filemgr;
 mod gui;
 mod instance;
 mod policy;
-mod posts;
 mod resets;
 mod settings;
 #[cfg(all(test, unix))]

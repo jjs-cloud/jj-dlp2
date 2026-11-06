@@ -20,6 +20,7 @@ pub mod layout;
 pub mod live;
 pub mod notify;
 mod outpath;
+pub mod posts;
 mod probe;
 mod restarts;
 mod schedule;
@@ -41,6 +42,7 @@ use warnings::WarnTracker;
 
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 const SCHEDULE_CHECK_EVERY: Duration = Duration::from_secs(10);
+const POSTS_TICK_EVERY: Duration = Duration::from_millis(500);
 
 /// Fields supplied when creating a site; the policy layer assigns the id.
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +162,8 @@ pub enum PolicyCommand {
     DiscardBrokenConfig,
     /// Saves the updater settings and re-checks.
     SetUpdateConfig(UpdateConfig),
+    /// An action for the Posts monitor.
+    Posts(posts::PostsCommand),
     /// Stops the engine gracefully, then ends the policy layer.
     Shutdown,
 }
@@ -186,6 +190,8 @@ pub enum PolicyEvent {
     Warnings(HashMap<StreamerId, Warnings>),
     /// New output lines per recording, oldest first; batched, and sent only for sites with output on.
     Output(HashMap<RecorderId, Vec<String>>),
+    /// A state change of the Posts monitor.
+    Posts(posts::PostsEvent),
 }
 
 /// Updater state changes reported to front ends.
@@ -255,8 +261,9 @@ pub fn start() -> PolicyParts {
             let (upd_tx, upd_rx) = mpsc::unbounded_channel();
             let (file_tx, file_rx) = mpsc::unbounded_channel();
             let (gql_tx, gql_rx) = mpsc::unbounded_channel();
-            rt.block_on(Policy::new(client, ev_tx, upd_tx, file_tx, gql_tx).run(
-                cmd_rx, events, done_rx, upd_rx, file_rx, gql_rx,
+            let (posts_tx, posts_rx) = mpsc::unbounded_channel();
+            rt.block_on(Policy::new(client, ev_tx, upd_tx, file_tx, gql_tx, posts_tx).run(
+                cmd_rx, events, done_rx, upd_rx, file_rx, gql_rx, posts_rx,
             ));
             // Stops the runtime without waiting on downloads, then installs any staged update.
             rt.shutdown_background();
@@ -300,6 +307,7 @@ struct Policy {
     rename_on_exit: HashMap<RecorderId, (StreamerId, PathBuf)>,
     /// The part number in the recorder arguments last sent to the engine for each streamer.
     override_part: HashMap<StreamerId, u32>,
+    posts: posts::PostsMonitor,
 }
 
 /// Longest output line, in characters, passed on to front ends.
@@ -320,9 +328,11 @@ impl Policy {
         upd_tx: UnboundedSender<UpdateMsg>,
         file_tx: UnboundedSender<FileJob>,
         gql_tx: UnboundedSender<GqlJob>,
+        posts_tx: UnboundedSender<posts::PostsMsg>,
     ) -> Self {
         let settings = settings::load_guarded();
         let live = LiveTracker::load(&settings, now_secs());
+        let posts = posts::PostsMonitor::new(events.clone(), posts_tx, settings.default_output_dir.clone());
         Self {
             settings,
             live,
@@ -348,6 +358,7 @@ impl Policy {
             retiring: HashSet::new(),
             rename_on_exit: HashMap::new(),
             override_part: HashMap::new(),
+            posts,
         }
     }
 
@@ -359,6 +370,7 @@ impl Policy {
         mut update_msgs: UnboundedReceiver<UpdateMsg>,
         mut file_msgs: UnboundedReceiver<FileJob>,
         mut gql_msgs: UnboundedReceiver<GqlJob>,
+        mut posts_msgs: UnboundedReceiver<posts::PostsMsg>,
     ) {
         let mut cmds_open = true;
         let mut update_tick = tokio::time::interval(UPDATE_CHECK_EVERY);
@@ -369,6 +381,8 @@ impl Policy {
         delay_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut schedule_tick = tokio::time::interval(SCHEDULE_CHECK_EVERY);
         schedule_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut posts_tick = tokio::time::interval(POSTS_TICK_EVERY);
+        posts_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
         self.log(format!("--- session started (v{}) ---", update::CURRENT));
         for line in crate::resets::take_log() {
@@ -378,6 +392,7 @@ impl Policy {
         self.emit_update_config();
         self.emit_live();
         self.emit_last_live();
+        self.posts.emit_snapshot();
         self.start_backfill();
         outpath::clear_sidecars();
         self.sync_overrides();
@@ -407,6 +422,7 @@ impl Policy {
                 _ = update_tick.tick() => self.check_now(),
                 _ = restart_tick.tick() => self.expire_restarts(),
                 _ = schedule_tick.tick() => self.run_schedules(),
+                _ = posts_tick.tick() => self.posts.tick(),
                 _ = delay_tick.tick() => {
                     self.release_due_delays();
                     self.split_tick();
@@ -424,6 +440,11 @@ impl Policy {
                 msg = gql_msgs.recv() => {
                     if let Some(m) = msg {
                         self.on_gql_job(m);
+                    }
+                }
+                msg = posts_msgs.recv() => {
+                    if let Some(m) = msg {
+                        self.posts.on_msg(m);
                     }
                 }
             }
@@ -1238,6 +1259,7 @@ impl Policy {
     fn handle(&mut self, cmd: PolicyCommand) {
         match cmd {
             PolicyCommand::RequestSnapshot => {
+                self.posts.emit_snapshot();
                 self.emit_settings();
                 self.emit_update_config();
                 self.emit_live();
@@ -1317,6 +1339,7 @@ impl Policy {
             PolicyCommand::SetGlobalOutputDir(dir) => {
                 let dir = dir.trim();
                 self.settings.default_output_dir = if dir.is_empty() { settings::default_output_dir() } else { dir.to_string() };
+                self.posts.set_global_dir(&self.settings.default_output_dir);
                 self.commit();
             }
             PolicyCommand::OpenConfigDir => {
@@ -1356,6 +1379,7 @@ impl Policy {
             PolicyCommand::InstallUpdate => self.install_update(),
             PolicyCommand::DiscardBrokenConfig => {
                 settings::resume_saving();
+                self.posts.resume_saving();
                 self.log("replacing the broken config; the old files are kept as .bad copies".to_string());
                 self.commit();
             }
@@ -1367,6 +1391,7 @@ impl Policy {
                 self.emit_update_config();
                 self.run_check(false);
             }
+            PolicyCommand::Posts(cmd) => self.posts.handle(cmd),
             PolicyCommand::Shutdown => self.engine.send(Command::Shutdown),
         }
     }
@@ -1577,7 +1602,8 @@ mod e2e {
         let (upd_tx, _) = mpsc::unbounded_channel();
         let (file_tx, _) = mpsc::unbounded_channel();
         let (gql_tx, _) = mpsc::unbounded_channel();
-        (Policy::new(EngineClient::new(cmd_tx), ev_tx, upd_tx, file_tx, gql_tx), cmd_rx)
+        let (posts_tx, _) = mpsc::unbounded_channel();
+        (Policy::new(EngineClient::new(cmd_tx), ev_tx, upd_tx, file_tx, gql_tx, posts_tx), cmd_rx)
     }
 
     fn one_streamer(p: &mut Policy, options: StreamerOptions, enabled: bool) {
