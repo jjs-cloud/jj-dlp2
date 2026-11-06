@@ -155,13 +155,18 @@ impl Engine {
         sampler::spawn_sampler(self.tracked.clone(), self.events.clone(), self.internal_tx.clone());
         self.sync_workers();
         self.start_preflight(false);
+        let mut cmds_open = true;
         loop {
             tokio::select! {
-                cmd = cmd_rx.recv() => match cmd {
+                cmd = cmd_rx.recv(), if cmds_open => match cmd {
                     Some(c) => self.handle_command(c),
-                    None => self.begin_shutdown(),
+                    None => {
+                        cmds_open = false;
+                        self.begin_shutdown();
+                    }
                 },
                 Some(msg) = internal_rx.recv() => self.handle_internal(msg),
+                else => break,
             }
             if self.shutting_down && self.recorders.is_empty() {
                 break;
@@ -385,7 +390,7 @@ impl Engine {
             }
         }
         // A lone streamer on a site can't be ambiguous, so accept any live entry for it.
-        if single && !matched.is_empty() && !matched[0] {
+        if single && !matched.is_empty() && !matched.iter().any(|m| *m) {
             let s = &streamers[0];
             let state = self.states.entry(s.id).or_default();
             state.live = true;

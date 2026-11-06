@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 /// Height of one list row in pixels.
 pub const ROW_H: f32 = 28.0;
-const SCAN_EVERY: Duration = Duration::from_secs(1);
+const SCAN_EVERY: Duration = Duration::from_millis(900);
 const STATUS_SECS: u64 = 4;
 const TRIM_IDS: [&str; 6] = ["files-trim-0", "files-trim-1", "files-trim-2", "files-trim-3", "files-trim-4", "files-trim-5"];
 
@@ -99,6 +99,10 @@ pub struct Moving {
 }
 
 pub struct FilesState {
+    /// How many files were being written when the rows were last built.
+    built_writing: usize,
+    /// The rows need rebuilding even if the next scan finds no changes.
+    stale: bool,
     pub records: HashMap<PathBuf, FileRec>,
     pub roots: Vec<Root>,
     pub rows: Vec<Row>,
@@ -138,6 +142,8 @@ impl FilesState {
             status: None,
             scanning: false,
             last_scan: None,
+            built_writing: 0,
+            stale: true,
             scroll_y: 0.0,
             view_h: 0.0,
             next_job: 1,
@@ -146,6 +152,7 @@ impl FilesState {
 
     /// Called when the tab is opened.
     pub fn on_enter(&mut self) {
+        self.stale = true;
         self.scroll_y = 0.0;
         self.last_scan = None;
     }
@@ -161,6 +168,7 @@ impl FilesState {
     }
 
     fn rebuild(&mut self) {
+        self.stale = false;
         let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.collapsed, Instant::now());
         self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows);
         self.rows = rows;
@@ -261,6 +269,7 @@ impl App {
         let moving = self.files.moving.as_ref().map(|m| m.tmp.clone());
         self.files.scanning = true;
         self.files.last_scan = Some(now);
+        self.files.stale |= self.files.roots != roots;
         self.files.roots = roots.clone();
         Task::perform(
             async move { tokio::task::spawn_blocking(move || scan::scan(&roots, moving.as_deref())).await.unwrap_or_default() },
@@ -446,7 +455,7 @@ impl App {
                 let now = Instant::now();
                 let f = &mut self.files;
                 f.scanning = false;
-                scan::merge(&mut f.records, res.files, now);
+                let changed = scan::merge(&mut f.records, res.files, now);
                 if let (Some(mv), Some(size)) = (f.moving.as_mut(), res.moving) {
                     let dt = now.saturating_duration_since(mv.last_poll).as_secs_f64().max(0.001);
                     if size != mv.size {
@@ -455,7 +464,11 @@ impl App {
                     mv.size = size;
                     mv.last_poll = now;
                 }
-                f.rebuild();
+                let writing = f.records.values().filter(|r| r.writing(now)).count();
+                if changed || f.stale || writing != f.built_writing {
+                    f.built_writing = writing;
+                    f.rebuild();
+                }
             }
             FilesMsg::Key(ev) => task = self.files_key(ev),
             FilesMsg::Scrolled(v) => {

@@ -628,6 +628,20 @@ impl App {
 
     /// True when at least one RESTARTED, INTERRUPT or ERROR chip is showing.
     /// True while the Clear warnings button applies.
+    /// True while something on screen pulses, so the fast animation tick is needed.
+    pub(super) fn animating(&self) -> bool {
+        let p = &self.posts;
+        !self.processes.is_empty()
+            || self.statuses.values().any(|s| s.live || s.recording)
+            || self.pending_jump.is_some()
+            || p.jumping()
+            || self.update.is_some()
+            || crate::settings::load_problem().is_some()
+            || crate::posts::load_problem().is_some()
+            || self.monitor_alert()
+            || (p.add_target().is_some() && p.cfg.sites.iter().all(|x| x.accounts.is_empty()))
+    }
+
     fn monitor_alert(&self) -> bool {
         self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id))
     }

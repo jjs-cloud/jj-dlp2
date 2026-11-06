@@ -597,6 +597,7 @@ impl StreamerDraft {
 pub enum Msg {
     Policy(PolicyEvent),
     Tick(#[allow(dead_code)] Instant),
+    Anim(#[allow(dead_code)] Instant),
     SetTab(Tab),
     Files(files::FilesMsg),
     Posts(posts::PostsMsg),
@@ -832,10 +833,21 @@ impl App {
     fn subscription(&self) -> Subscription<Msg> {
         Subscription::batch([
             Subscription::run(engine_stream),
-            iced::time::every(Duration::from_millis(100)).map(Msg::Tick),
+            iced::time::every(Duration::from_secs(1)).map(Msg::Tick),
+            if self.animating() { iced::time::every(Duration::from_millis(100)).map(Msg::Anim) } else { Subscription::none() },
             window::resize_events().map(on_resize),
             if self.tab == Tab::Files { iced::keyboard::listen().map(files::key_msg) } else { Subscription::none() },
         ])
+    }
+
+    /// Jumps to a newly added site's editor on a later tick, once the editor is laid out.
+    fn try_jump(&mut self) -> Option<Task<Msg>> {
+        let name = self.pending_jump.clone()?;
+        let task = self.jump_to_site(&name)?;
+        self.pending_jump = None;
+        self.now = now_secs();
+        self.site_added = Some((name, self.now));
+        Some(task)
     }
 
     /// The length a streamer inherits from its site, if splitting is on there.
@@ -922,16 +934,19 @@ impl App {
                 }
                 self.on_event(ev)
             }
-            Msg::Tick(_) => {
+            Msg::Anim(_) => {
                 self.phase = (self.phase + 0.04) % 1.0;
+                if let Some(task) = self.try_jump() {
+                    return task;
+                }
+            }
+            Msg::Tick(_) => {
                 self.now = now_secs();
-                // Jump on a later tick so the new editor is already laid out.
-                if let Some(name) = self.pending_jump.clone() {
-                    if let Some(task) = self.jump_to_site(&name) {
-                        self.pending_jump = None;
-                        self.site_added = Some((name, self.now));
-                        return task;
-                    }
+                if !self.animating() {
+                    self.phase = 0.25;
+                }
+                if let Some(task) = self.try_jump() {
+                    return task;
                 }
                 let posts = self.posts_tick();
                 if self.tab == Tab::Files {

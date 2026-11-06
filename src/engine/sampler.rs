@@ -23,16 +23,26 @@ pub fn spawn_sampler(
 
 fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal: UnboundedSender<Internal>) {
     let mut sys = System::new();
+    let mut primed = false;
     loop {
         std::thread::sleep(Duration::from_secs(1));
         if events.is_closed() {
             return;
+        }
+        if tracked.lock().unwrap().values().all(|t| t.gone_sent) {
+            primed = false;
+            continue;
         }
         sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
             ProcessRefreshKind::nothing().with_cpu().with_memory(),
         );
+        // The first refresh after idling only seeds CPU readings.
+        if !primed {
+            primed = true;
+            continue;
+        }
         let children = children_map(&sys);
         let mut map = tracked.lock().unwrap();
         for (&id, t) in map.iter_mut() {

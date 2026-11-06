@@ -82,12 +82,14 @@ pub fn scan(roots: &[Root], moving: Option<&Path>) -> ScanResult {
     ScanResult { files, moving }
 }
 
-/// Folds a scan into the tracked records, updating write rates and dropping vanished files.
-pub fn merge(records: &mut HashMap<PathBuf, FileRec>, scanned: Vec<Scanned>, now: Instant) {
+/// Folds a scan into the tracked records, updating write rates and dropping vanished files; true when anything changed.
+pub fn merge(records: &mut HashMap<PathBuf, FileRec>, scanned: Vec<Scanned>, now: Instant) -> bool {
+    let before = records.len();
     {
         let live: HashSet<&Path> = scanned.iter().map(|s| s.path.as_path()).collect();
         records.retain(|p, _| live.contains(p.as_path()));
     }
+    let mut changed = records.len() != before;
     for s in scanned {
         if let Some(r) = records.get_mut(&s.path) {
             if s.size != r.size {
@@ -95,7 +97,9 @@ pub fn merge(records: &mut HashMap<PathBuf, FileRec>, scanned: Vec<Scanned>, now
                 r.rate = (s.size as f64 - r.size as f64) / dt;
                 r.size = s.size;
                 r.last_change = now;
+                changed = true;
             }
+            changed |= r.mtime != s.mtime || r.root != s.root;
             r.last_poll = now;
             r.mtime = s.mtime;
             r.root = s.root;
@@ -103,7 +107,9 @@ pub fn merge(records: &mut HashMap<PathBuf, FileRec>, scanned: Vec<Scanned>, now
         }
         let rec = FileRec { size: s.size, mtime: s.mtime, rate: 0.0, last_change: now, last_poll: now, root: s.root };
         records.insert(s.path, rec);
+        changed = true;
     }
+    changed
 }
 
 #[cfg(test)]
@@ -127,6 +133,16 @@ mod tests {
         assert!((a.rate - 100.0).abs() < 1e-6);
         assert!(a.writing(t1));
         assert!(!a.writing(t1 + IDLE_AFTER));
+    }
+
+    #[test]
+    fn merge_reports_only_real_changes() {
+        let t0 = Instant::now();
+        let mut recs = HashMap::new();
+        assert!(merge(&mut recs, vec![sc("/r/a", 100)], t0));
+        assert!(!merge(&mut recs, vec![sc("/r/a", 100)], t0 + Duration::from_secs(1)));
+        assert!(merge(&mut recs, vec![sc("/r/a", 150)], t0 + Duration::from_secs(2)));
+        assert!(merge(&mut recs, vec![], t0 + Duration::from_secs(3)));
     }
 
     #[test]

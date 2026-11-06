@@ -238,6 +238,11 @@ impl PostsState {
         live.peek().is_some() && live.all(|s| s.paused)
     }
 
+    /// True while a jump to a newly added site is waiting for the next tick.
+    pub fn jumping(&self) -> bool {
+        self.pending_jump.is_some()
+    }
+
     /// The site the username box adds to: the chosen one, else TikTok, else the first.
     pub fn add_target(&self) -> Option<SiteId> {
         let chosen = self.add_site.filter(|id| self.cfg.site(*id).is_some());
