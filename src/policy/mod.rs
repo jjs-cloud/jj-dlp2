@@ -290,6 +290,8 @@ struct Policy {
     statuses: HashMap<StreamerId, StreamerStatus>,
     /// Live streamers whose recording is held back by an intro delay.
     waiting: HashSet<StreamerId>,
+    /// Streamers whose current part was prepared but whose recorder has not started yet.
+    part_pending: HashSet<StreamerId>,
     /// Follows each streamer's recorders and the split in flight.
     splitter: Splitter,
     /// Recorders stopped on purpose by a split, so their exit is not a restart.
@@ -341,6 +343,7 @@ impl Policy {
             recorder_pids: HashMap::new(),
             statuses: HashMap::new(),
             waiting: HashSet::new(),
+            part_pending: HashSet::new(),
             splitter: Splitter::default(),
             retiring: HashSet::new(),
             rename_on_exit: HashMap::new(),
@@ -455,6 +458,9 @@ impl Policy {
                     if started && (!first || on_launch) {
                         self.notify_event(*id, Kind::Live, 0);
                     }
+                }
+                if status.recording || !status.live {
+                    self.part_pending.remove(id);
                 }
                 if !status.live && !status.recording {
                     self.gate.take_held(*id);
@@ -732,7 +738,7 @@ impl Policy {
     /// The absolute folder a streamer's recordings are written to.
     fn recording_dir(&self, streamer_id: StreamerId) -> PathBuf {
         let site_id = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.site_id);
-        let dir = site_id.map_or(self.settings.default_output_dir.as_str(), |id| output_dir(&self.settings, id));
+        let dir = site_id.map_or_else(|| layout::base_dir("", &self.settings.default_output_dir), |id| output_dir(&self.settings, id));
         let dir = PathBuf::from(dir);
         std::path::absolute(&dir).unwrap_or(dir)
     }
@@ -822,6 +828,12 @@ impl Policy {
         let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
         let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
         let Some(span) = self.live.span_start(id) else { return };
+        if !self.part_pending.insert(id) {
+            if let Some(rec) = self.live.part(id).map(|r| r.part) {
+                self.send_part_override(id, rec);
+            }
+            return;
+        }
         let opts = &streamer.options;
         let continuing =
             opts.effective_auto_suffix(site) || opts.effective_split_minutes(site).is_some() || opts.intro_split_minutes().is_some();
@@ -1303,7 +1315,8 @@ impl Policy {
                 }
             }
             PolicyCommand::SetGlobalOutputDir(dir) => {
-                self.settings.default_output_dir = dir;
+                let dir = dir.trim();
+                self.settings.default_output_dir = if dir.is_empty() { settings::default_output_dir() } else { dir.to_string() };
                 self.commit();
             }
             PolicyCommand::OpenConfigDir => {
@@ -1367,8 +1380,8 @@ fn restart_clear_minutes(settings: &Settings, id: StreamerId) -> u64 {
 
 /// The site's output folder, or the global one when the site has none.
 fn output_dir(settings: &Settings, site_id: SiteId) -> &str {
-    let site_dir = settings.sites.iter().find(|s| s.id == site_id).map(|s| s.output_dir.trim());
-    site_dir.filter(|d| !d.is_empty()).unwrap_or(&settings.default_output_dir)
+    let site_dir = settings.sites.iter().find(|s| s.id == site_id).map_or("", |s| s.output_dir.as_str());
+    layout::base_dir(site_dir, &settings.default_output_dir)
 }
 
 /// Builds a stream URL by replacing `{username}` in the template; a leading `@` is dropped.
@@ -1624,12 +1637,28 @@ mod e2e {
         let now = now_secs();
         live_status(&mut p, false, now);
         assert!(matches!(sent(&mut rx).as_slice(), [Command::StartRecording { id: 2 }]));
-        live_status(&mut p, false, now + 1);
+        live_status(&mut p, true, now + 1);
+        sent(&mut rx);
+        live_status(&mut p, false, now + 2);
         let cmds = sent(&mut rx);
         assert!(
             matches!(cmds.as_slice(), [Command::SetRecorderOverride { streamer_id: 2, args: Some(a) }, Command::StartRecording { id: 2 }] if a.contains("_part2")),
             "{cmds:?}"
         );
+    }
+
+    #[test]
+    fn failed_starts_do_not_advance_the_part() {
+        let _sb = Sandbox::new("policy-failed-start");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), true);
+        let now = now_secs();
+        for i in 0..3 {
+            live_status(&mut p, false, now + i);
+        }
+        let cmds = sent(&mut rx);
+        assert!(cmds.iter().all(|c| matches!(c, Command::StartRecording { id: 2 })), "{cmds:?}");
+        assert_eq!(p.live.part(2).map(|r| r.part), Some(1));
     }
 
     #[test]

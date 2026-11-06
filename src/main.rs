@@ -45,7 +45,12 @@ fn main() {
     let _instance = if matches!(mode, Mode::Update(_)) {
         None
     } else {
-        match instance::acquire() {
+        let lock = if std::env::var_os(instance::RELAUNCH_ENV).is_some() {
+            instance::acquire_waiting(std::time::Duration::from_secs(15))
+        } else {
+            instance::acquire()
+        };
+        match lock {
             Ok(lock) => Some(lock),
             Err(instance::AlreadyRunning) => {
                 if matches!(mode, Mode::Gui) {

@@ -87,7 +87,7 @@ fn state_path() -> PathBuf {
     config_dir().join("state.json")
 }
 
-fn default_output_dir() -> String {
+pub fn default_output_dir() -> String {
     UserDirs::new()
         .and_then(|u| u.video_dir().map(|p| p.join("jj-dlp")))
         .unwrap_or_else(|| PathBuf::from("recordings"))

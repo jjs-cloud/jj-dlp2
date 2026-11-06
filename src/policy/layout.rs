@@ -47,10 +47,11 @@ fn nest(layout: FolderLayout, site: String, streamer: String) -> Vec<String> {
     }
 }
 
-/// The site's output folder, or the global one when the site's is blank.
+/// The site's output folder, else the global one, else the current folder.
 pub fn base_dir<'a>(site_dir: &'a str, global_dir: &'a str) -> &'a str {
     let site_dir = site_dir.trim();
-    if site_dir.is_empty() { global_dir.trim() } else { site_dir }
+    let dir = if site_dir.is_empty() { global_dir.trim() } else { site_dir };
+    if dir.is_empty() { "." } else { dir }
 }
 
 /// The path a recording would be written to, ending in a placeholder file name; `None` shows `<streamer>`.
@@ -112,6 +113,7 @@ mod tests {
     fn base_dir_falls_back_to_global() {
         assert_eq!(base_dir(" /site ", "/global"), "/site");
         assert_eq!(base_dir("  ", " /global "), "/global");
+        assert_eq!(base_dir(" ", " "), ".");
     }
 
     #[test]

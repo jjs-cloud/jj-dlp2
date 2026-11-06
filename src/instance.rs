@@ -2,8 +2,12 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 pub const MESSAGE: &str = "jj-dlp is already running.";
+
+/// Set on a relaunched process so it waits for the previous instance to release the lock.
+pub const RELAUNCH_ENV: &str = "JJ_DLP_RELAUNCH";
 
 /// Returned when another instance holds the lock.
 #[derive(Debug)]
@@ -17,6 +21,23 @@ pub fn acquire() -> Result<InstanceLock, AlreadyRunning> {
     let dir = crate::settings::config_dir();
     let _ = std::fs::create_dir_all(&dir);
     acquire_at(&dir.join("instance.lock"))
+}
+
+/// Like `acquire`, but keeps retrying for up to `wait` while the previous instance exits.
+pub fn acquire_waiting(wait: Duration) -> Result<InstanceLock, AlreadyRunning> {
+    let dir = crate::settings::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    acquire_at_waiting(&dir.join("instance.lock"), wait)
+}
+
+fn acquire_at_waiting(path: &Path, wait: Duration) -> Result<InstanceLock, AlreadyRunning> {
+    let deadline = Instant::now() + wait;
+    loop {
+        match acquire_at(path) {
+            Err(AlreadyRunning) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            other => return other,
+        }
+    }
 }
 
 fn acquire_at(path: &Path) -> Result<InstanceLock, AlreadyRunning> {
@@ -53,6 +74,22 @@ mod tests {
         assert!(acquire_at(&path).is_err());
         drop(first);
         assert!(acquire_at(&path).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn waiting_acquire_succeeds_once_the_holder_releases() {
+        let path = std::env::temp_dir().join(format!("jj-dlp-test-wait-{}.lock", std::process::id()));
+        let first = acquire_at(&path).expect("first lock");
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(first);
+        });
+        assert!(acquire_at_waiting(&path, Duration::from_secs(10)).is_ok());
+        releaser.join().unwrap();
+        let held = acquire_at(&path).expect("lock");
+        assert!(acquire_at_waiting(&path, Duration::from_millis(200)).is_err());
+        drop(held);
         let _ = std::fs::remove_file(&path);
     }
 }

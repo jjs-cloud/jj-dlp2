@@ -564,11 +564,11 @@ impl Engine {
         };
         let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id).cloned() else { return };
 
-        let out_dir = if site.output_dir.trim().is_empty() {
-            self.settings.default_output_dir.clone()
-        } else {
-            site.output_dir.clone()
-        };
+        let out_dir = [site.output_dir.trim(), self.settings.default_output_dir.trim()]
+            .into_iter()
+            .find(|d| !d.is_empty())
+            .unwrap_or(".")
+            .to_string();
         let url = if entry.webpage_url.is_empty() { streamer.url.clone() } else { entry.webpage_url.clone() };
         let template = self.recorder_overrides.get(&streamer_id).map_or_else(|| site.recorder_or_default(), String::as_str);
         let args = template::expand(template, "url", &[url]);

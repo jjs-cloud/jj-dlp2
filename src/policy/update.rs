@@ -285,7 +285,10 @@ pub fn finish_pending() {
         let _ = std::fs::write(error_file(), format!("update to v{} failed: {e}", staged.version));
     }
     let _ = std::fs::remove_dir_all(work_dir());
-    let _ = std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn();
+    let _ = std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .env(crate::instance::RELAUNCH_ENV, "1")
+        .spawn();
 }
 
 /// Returns and clears the error left by a failed install on the previous run.
