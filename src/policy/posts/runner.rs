@@ -2,6 +2,7 @@
 
 use super::model::*;
 use super::store::thumbs_dir;
+use super::xprofile;
 use crate::api::now_secs;
 use crate::policy::notify;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,8 @@ pub struct AccountReport {
     pub site_id: SiteId,
     pub name: String,
     pub new_posts: Vec<Post>,
+    /// Ids of X posts that have no video.
+    pub no_video: Vec<String>,
     pub error: Option<String>,
 }
 
@@ -78,11 +81,11 @@ async fn run(exe: &str, args: &[String], limit: Duration) -> Result<std::process
 }
 
 /// Checks every enabled account of the given sites once, sequentially.
-pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>) -> CycleReport {
+pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>, no_video: HashSet<String>) -> CycleReport {
     let mut accounts = Vec::new();
     for site in &sites {
         for acct in site.accounts.iter().filter(|a| a.enabled) {
-            let report = check_account(site, acct, &known).await;
+            let report = check_account(site, acct, &known, &no_video).await;
             known.extend(report.new_posts.iter().map(|p| p.id.clone()));
             accounts.push(report);
         }
@@ -90,8 +93,11 @@ pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>) -> Cy
     CycleReport { at: now_secs(), site_ids: sites.iter().map(|s| s.id).collect(), accounts }
 }
 
-async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>) -> AccountReport {
-    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), error: Some(e) };
+async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
+    if let Some(user) = xprofile::profile_user(&acct.url) {
+        return check_x_account(site, acct, &user, known, no_video).await;
+    }
+    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e) };
     let out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT).await {
         Ok(o) => o,
         Err(e) => return fail(e),
@@ -103,35 +109,75 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>)
         return fail(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {}", out.status)));
     }
     let mut new_posts = Vec::new();
-    for mut entry in entries.into_iter().filter(|e| !known.contains(&e.id)) {
-        if entry.thumb_url.is_none() || entry.title.is_empty() {
-            if let Some(full) = fetch_info(site, &entry.url).await {
-                entry.thumb_url = entry.thumb_url.or(full.thumb_url);
-                entry.posted_at = entry.posted_at.or(full.posted_at);
-                entry.duration = entry.duration.or(full.duration);
-                if entry.title.is_empty() {
-                    entry.title = full.title;
-                }
+    for entry in entries.into_iter().filter(|e| !known.contains(&e.id)) {
+        new_posts.push(make_post(site, acct, entry).await);
+    }
+    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, no_video: Vec::new(), error: None }
+}
+
+/// Checks an X account: lists its recent posts from the profile page and keeps those yt-dlp finds a video in.
+async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
+    let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None };
+    let html = match xprofile::fetch_profile(acct.url.clone(), site.user_agent()).await {
+        Ok(h) => h,
+        Err(e) => return AccountReport { error: Some(e), ..report },
+    };
+    let ids = xprofile::newest(xprofile::extract_status_ids(&html, user));
+    if ids.is_empty() {
+        return AccountReport { error: Some("X returned no posts; the profile may be private or need a login".into()), ..report };
+    }
+    let mut last_error = None;
+    for id in ids.into_iter().filter(|id| !known.contains(id) && !no_video.contains(id)) {
+        let url = format!("https://x.com/{user}/status/{id}");
+        let out = match run(site.exe_or_default(), &checker_cmd(site, &url), INFO_TIMEOUT).await {
+            Ok(o) => o,
+            Err(e) => {
+                last_error = Some(e);
+                continue;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        match stdout.lines().find_map(parse_entry) {
+            Some(entry) => report.new_posts.push(make_post(site, acct, Entry { id, url, ..entry }).await),
+            None if stderr.contains("No video could be found") => report.no_video.push(id),
+            None => last_error = Some(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {}", out.status))),
+        }
+    }
+    if report.new_posts.is_empty() && report.no_video.is_empty() {
+        report.error = last_error;
+    }
+    report
+}
+
+/// Builds a post from a listed entry, filling missing details and fetching its thumbnail.
+async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> Post {
+    if entry.thumb_url.is_none() || entry.title.is_empty() {
+        if let Some(full) = fetch_info(site, &entry.url).await {
+            entry.thumb_url = entry.thumb_url.or(full.thumb_url);
+            entry.posted_at = entry.posted_at.or(full.posted_at);
+            entry.duration = entry.duration.or(full.duration);
+            if entry.title.is_empty() {
+                entry.title = full.title;
             }
         }
-        let has_thumb = match entry.thumb_url.clone() {
-            Some(url) => fetch_thumbnail(url, site.user_agent(), entry.id.clone()).await,
-            None => false,
-        };
-        new_posts.push(Post {
-            id: entry.id,
-            site_id: site.id,
-            account: acct.name.clone(),
-            title: entry.title,
-            url: entry.url,
-            posted_at: entry.posted_at,
-            duration: entry.duration,
-            found_at: now_secs(),
-            has_thumb,
-            ..Default::default()
-        });
     }
-    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, error: None }
+    let has_thumb = match entry.thumb_url.clone() {
+        Some(url) => fetch_thumbnail(url, site.user_agent(), entry.id.clone()).await,
+        None => false,
+    };
+    Post {
+        id: entry.id,
+        site_id: site.id,
+        account: acct.name.clone(),
+        title: entry.title,
+        url: entry.url,
+        posted_at: entry.posted_at,
+        duration: entry.duration,
+        found_at: now_secs(),
+        has_thumb,
+        ..Default::default()
+    }
 }
 
 /// Full metadata of one post, or `None` when yt-dlp could not read it.

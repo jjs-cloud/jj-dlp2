@@ -357,9 +357,9 @@ impl App {
     pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
         let mut add = row![self.section_title(s, "ADD SITE")].spacing(10).align_y(Alignment::Center);
-        for (label, preset) in [("TikTok", Preset::Tiktok), ("Youtube Shorts", Preset::YoutubeShorts), ("Twitch Vods", Preset::TwitchVods), ("Blank", Preset::Blank)] {
+        for preset in Preset::ALL {
             add = add.push(
-                button(t(&s, label).size(13))
+                button(t(&s, preset.label()).size(13))
                     .on_press(send(PostsMsg::AddSite(preset)))
                     .padding([7.0, 14.0])
                     .style(skin::btn(s, BtnKind::Ghost)),

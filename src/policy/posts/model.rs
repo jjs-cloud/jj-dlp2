@@ -18,6 +18,7 @@ pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-pl
 pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
 const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
 const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
+const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
 const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
@@ -32,7 +33,29 @@ pub enum Preset {
     Tiktok,
     YoutubeShorts,
     TwitchVods,
+    TwitterX,
     Blank,
+}
+
+impl Preset {
+    /// Every preset, in the order the Add site row shows them.
+    pub const ALL: [Preset; 5] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods, Preset::TwitterX, Preset::Blank];
+
+    /// The button label, which is also the site name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Preset::Tiktok => "TikTok",
+            Preset::YoutubeShorts => "Youtube Shorts",
+            Preset::TwitchVods => "Twitch Vods",
+            Preset::TwitterX => "Twitter/X",
+            Preset::Blank => "Blank",
+        }
+    }
+
+    /// The preset whose label is `name`, else blank.
+    pub fn from_name(name: &str) -> Preset {
+        Preset::ALL.into_iter().find(|p| *p != Preset::Blank && p.label().eq_ignore_ascii_case(name.trim())).unwrap_or(Preset::Blank)
+    }
 }
 
 /// One profile that is checked for new posts.
@@ -115,24 +138,29 @@ impl PostSite {
     pub fn from_preset(preset: Preset) -> PostSite {
         match preset {
             Preset::Tiktok => PostSite {
-                name: "TikTok".into(),
+                name: Preset::Tiktok.label().into(),
                 checker_args: TIKTOK_CHECKER_ARGS.into(),
                 download_args: TIKTOK_DOWNLOAD_ARGS.into(),
                 url_template: TIKTOK_URL_TEMPLATE.into(),
                 ..Default::default()
             },
             Preset::YoutubeShorts => PostSite {
-                name: "Youtube Shorts".into(),
+                name: Preset::YoutubeShorts.label().into(),
                 url_template: YOUTUBE_SHORTS_URL_TEMPLATE.into(),
                 ..Default::default()
             },
             Preset::TwitchVods => PostSite {
-                name: "Twitch Vods".into(),
+                name: Preset::TwitchVods.label().into(),
                 url_template: TWITCH_VODS_URL_TEMPLATE.into(),
                 auto_download: false,
                 backfill: false,
                 open_m3u8: true,
                 auto_delete_days: None,
+                ..Default::default()
+            },
+            Preset::TwitterX => PostSite {
+                name: Preset::TwitterX.label().into(),
+                url_template: TWITTER_X_URL_TEMPLATE.into(),
                 ..Default::default()
             },
             Preset::Blank => PostSite::default(),
@@ -228,7 +256,7 @@ impl PostsConfig {
     /// The config of a first launch: one site per named preset.
     pub(super) fn first_launch() -> Self {
         let mut cfg = PostsConfig::default();
-        for preset in [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods] {
+        for preset in Preset::ALL.into_iter().filter(|p| *p != Preset::Blank) {
             cfg.add_site(PostSite::from_preset(preset));
         }
         cfg
@@ -507,7 +535,22 @@ mod tests {
     #[test]
     fn first_launch_has_every_named_site() {
         let names: Vec<String> = PostsConfig::first_launch().sites.into_iter().map(|s| s.name).collect();
-        assert_eq!(names, ["TikTok", "Youtube Shorts", "Twitch Vods"]);
+        assert_eq!(names, ["TikTok", "Youtube Shorts", "Twitch Vods", "Twitter/X"]);
+    }
+
+    #[test]
+    fn twitter_x_preset_builds_profile_urls() {
+        let site = PostSite::from_preset(Preset::TwitterX);
+        assert_eq!(site.name, "Twitter/X");
+        assert_eq!(site.account_from_input("@smeepsx").unwrap().url, "https://x.com/smeepsx");
+        assert_eq!(site.account_from_input("https://x.com/ash/").unwrap().name, "ash");
+    }
+
+    #[test]
+    fn presets_are_found_by_name() {
+        assert_eq!(Preset::from_name(" twitter/x "), Preset::TwitterX);
+        assert_eq!(Preset::from_name("Blank"), Preset::Blank);
+        assert_eq!(Preset::from_name("other"), Preset::Blank);
     }
 
     #[test]

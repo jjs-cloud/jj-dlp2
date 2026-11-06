@@ -33,6 +33,8 @@ pub struct PostsMonitor {
     last_check: Option<u64>,
     next_check: HashMap<SiteId, Instant>,
     errors: HashMap<AccountKey, String>,
+    /// Ids of X posts found to have no video; not saved.
+    no_video: HashSet<String>,
     downloads: usize,
     next_sweep: Instant,
     pending_view: Vec<(String, Instant)>,
@@ -53,6 +55,7 @@ impl PostsMonitor {
             checking: false,
             last_check: None,
             errors: HashMap::new(),
+            no_video: HashSet::new(),
             downloads: 0,
             next_sweep: soon,
             pending_view: Vec::new(),
@@ -169,9 +172,9 @@ impl PostsMonitor {
     fn start_check(&mut self, sites: Vec<PostSite>) {
         self.checking = true;
         let known: HashSet<String> = self.posts.iter().map(|p| p.id.clone()).collect();
-        let tx = self.tx.clone();
+        let (no_video, tx) = (self.no_video.clone(), self.tx.clone());
         tokio::spawn(async move {
-            let _ = tx.send(PostsMsg::Checked(runner::check_cycle(sites, known).await));
+            let _ = tx.send(PostsMsg::Checked(runner::check_cycle(sites, known, no_video).await));
         });
         self.emit_status();
     }
@@ -230,6 +233,7 @@ impl PostsMonitor {
             }
         }
         for ar in report.accounts {
+            self.no_video.extend(ar.no_video.iter().cloned());
             let key = (ar.site_id, ar.name.clone());
             let Some(site) = self.cfg.site_mut(ar.site_id) else { continue };
             let Some(acct) = site.accounts.iter_mut().find(|a| a.name == ar.name) else { continue };

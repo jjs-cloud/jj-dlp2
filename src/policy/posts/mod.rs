@@ -4,6 +4,7 @@ mod model;
 mod monitor;
 mod runner;
 mod store;
+mod xprofile;
 
 pub use model::*;
 pub use monitor::PostsMonitor;

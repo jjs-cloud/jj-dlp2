@@ -105,13 +105,7 @@ impl SiteDraft {
 
     /// The template for a site name: its preset's, else blank; the name is kept.
     pub fn from_defaults(name: &str) -> Self {
-        let preset = match name.trim().to_ascii_lowercase().as_str() {
-            "tiktok" => Preset::Tiktok,
-            "youtube shorts" => Preset::YoutubeShorts,
-            "twitch vods" => Preset::TwitchVods,
-            _ => Preset::Blank,
-        };
-        SiteDraft::from_site(&PostSite { name: name.to_string(), ..PostSite::from_preset(preset) })
+        SiteDraft::from_site(&PostSite { name: name.to_string(), ..PostSite::from_preset(Preset::from_name(name)) })
     }
 
     /// `base` with these edits applied; `None` while a field is invalid.
