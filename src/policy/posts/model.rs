@@ -389,14 +389,29 @@ pub fn parse_entry(line: &str) -> Option<Entry> {
     let thumb_url = text("thumbnail").map(str::to_string).or_else(|| {
         v.get("thumbnails")?.as_array()?.iter().rev().find_map(|t| t.get("url")?.as_str().map(str::to_string))
     });
+    let (posted_at, duration) = time_fields(&v);
+    Some(Entry { id, url, title, thumb_url, posted_at, duration })
+}
+
+/// Post time and duration in seconds from a yt-dlp JSON object.
+fn time_fields(v: &Value) -> (Option<u64>, Option<u64>) {
     let posted_at = v
         .get("timestamp")
         .and_then(Value::as_f64)
         .filter(|t| *t > 0.0)
         .map(|t| t as u64)
-        .or_else(|| text("upload_date").and_then(date_to_secs));
+        .or_else(|| v.get("upload_date").and_then(Value::as_str).and_then(date_to_secs));
     let duration = v.get("duration").and_then(Value::as_f64).filter(|d| *d > 0.0).map(|d| d.round() as u64);
-    Some(Entry { id, url, title, thumb_url, posted_at, duration })
+    (posted_at, duration)
+}
+
+/// Post time and duration from the JSON line `download_cmd` writes to its sidecar.
+pub fn parse_meta(text: &str) -> (Option<u64>, Option<u64>) {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with('{'))
+        .find_map(|l| serde_json::from_str::<Value>(l).ok())
+        .map_or((None, None), |v| time_fields(&v))
 }
 
 /// Unix seconds of midnight UTC for a `YYYYMMDD` date.
@@ -455,13 +470,16 @@ pub fn checker_cmd(site: &PostSite, url: &str) -> Vec<String> {
     expand(site.checker_or_default(), url, "")
 }
 
-/// Download arguments for one post into `dir`, plus options that write the final file path to `sidecar` and cap the size at `max_mb`.
+/// Download arguments for one post into `dir`, plus options that write the final file path and the post time and duration to `sidecar` and cap the size at `max_mb`.
 pub fn download_cmd(site: &PostSite, url: &str, dir: &str, sidecar: &Path, max_mb: Option<u64>) -> Vec<String> {
     let mut args = expand(site.download_or_default(), url, dir);
     if let Some(mb) = max_mb {
         args.extend(["--max-filesize".to_string(), format!("{mb}M")]);
     }
-    args.extend(["--print-to-file".to_string(), "after_move:filepath".to_string(), sidecar.to_string_lossy().replace('%', "%%")]);
+    let sidecar = sidecar.to_string_lossy().replace('%', "%%");
+    for template in ["after_move:filepath", "after_move:%(.{timestamp,upload_date,duration})j"] {
+        args.extend(["--print-to-file".to_string(), template.to_string(), sidecar.clone()]);
+    }
     args
 }
 
@@ -495,6 +513,14 @@ mod tests {
         assert_eq!((e.posted_at, e.duration), (Some(1700000000), Some(12)));
         assert!(parse_entry("not json").is_none());
         assert!(parse_entry(r#"{"id":"1"}"#).is_none());
+    }
+
+    #[test]
+    fn meta_line_gives_time_and_duration() {
+        let t = "C:\\a.mp4\n{\"timestamp\": 1700000000, \"upload_date\": \"20231114\", \"duration\": 20.6}\n";
+        assert_eq!(parse_meta(t), (Some(1700000000), Some(21)));
+        assert_eq!(parse_meta("{\"timestamp\": null, \"upload_date\": \"20240101\", \"duration\": null}"), (Some(1704067200), None));
+        assert_eq!(parse_meta("a.mp4"), (None, None));
     }
 
     #[test]

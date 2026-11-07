@@ -369,6 +369,8 @@ impl PostsMonitor {
                         p.error_at = None;
                     }
                     Ok(path) => {
+                        p.posted_at = p.posted_at.or(out.posted_at);
+                        p.duration = p.duration.or(out.duration);
                         p.state = PostState::Ready;
                         p.file = Some(path);
                         p.error.clear();

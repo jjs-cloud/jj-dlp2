@@ -471,6 +471,7 @@ impl App {
             }
             PostsMsg::AddSite(Preset::Blank) => {
                 self.posts.drafts.entry(NEW_SITE).or_insert_with(|| SiteDraft::from_site(&PostSite::from_preset(Preset::Blank)));
+                return iced::widget::operation::snap_to(super::posts_scroll_id(), iced::widget::scrollable::RelativeOffset { x: 0.0, y: 0.0 });
             }
             PostsMsg::AddSite(preset) => {
                 let site = PostSite::from_preset(preset);

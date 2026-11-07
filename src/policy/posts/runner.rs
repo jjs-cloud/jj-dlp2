@@ -46,6 +46,9 @@ pub struct DownloadOutcome {
     pub has_thumb: bool,
     /// True when the download was stopped by the size or time limit for auto-downloads.
     pub skipped: bool,
+    /// Post time and duration yt-dlp reported while downloading.
+    pub posted_at: Option<u64>,
+    pub duration: Option<u64>,
 }
 
 /// Resolves a relative path with a separator against the app folder and its parents.
@@ -305,12 +308,13 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
         Err(e) if max_secs.is_some() && e.starts_with(TIMEOUT_PREFIX) => {
             remove_partials(&folder, &post.id, 3);
             let msg = "Over the time limit for auto-downloads".to_string();
-            return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true };
+            return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true, posted_at: None, duration: None };
         }
-        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false },
+        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None },
     };
     let reported = std::fs::read(&sidecar).ok().and_then(|b| String::from_utf8(b).ok());
     let _ = std::fs::remove_file(&sidecar);
+    let (posted_at, duration) = reported.as_deref().map_or((None, None), parse_meta);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let from_sidecar = reported.as_deref().and_then(|t| path_lines(t).find(|p| p.is_file()));
     let path = from_sidecar.or_else(|| path_lines(&stdout).find(|p| p.is_file())).or_else(|| find_by_id(&folder, &post.id, 3));
@@ -322,10 +326,10 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
         } else {
             error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {} and no file", out.status))
         };
-        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped };
+        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped, posted_at: None, duration: None };
     };
     let has_thumb = post.has_thumb || frame_thumbnail(&path, &post.id).await;
-    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, skipped: false }
+    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, skipped: false, posted_at, duration }
 }
 
 /// The stream playlist URL yt-dlp reports for a post.
