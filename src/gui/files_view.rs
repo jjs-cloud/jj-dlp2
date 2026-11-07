@@ -138,6 +138,7 @@ impl App {
             self.section_title(s, "FILES"),
             container(status).width(Length::Fill),
             flag("Delete empty folders", f.delete_empty, FilesMsg::ToggleDeleteEmpty),
+            flag("Hide posts", f.hide_posts, FilesMsg::ToggleHidePosts),
         ]
         .spacing(16)
         .align_y(Alignment::Center);

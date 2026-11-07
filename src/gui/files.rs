@@ -8,6 +8,7 @@ use crate::filemgr::rows::{self, Row, Sel, Sort, SortKey};
 use crate::filemgr::scan::{self, FileRec, Root, ScanResult};
 use crate::filemgr::file_name;
 use crate::policy::layout;
+use crate::policy::posts::{Post, PostState};
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::{Task, keyboard};
 use std::collections::{HashMap, HashSet};
@@ -111,6 +112,7 @@ pub struct FilesState {
     pub sort: Sort,
     pub group: bool,
     pub delete_empty: bool,
+    pub hide_posts: bool,
     pub move_dir: String,
     pub panel: Option<Panel>,
     pub jobs: Vec<RunningJob>,
@@ -135,6 +137,7 @@ impl FilesState {
             sort: Sort { key: SortKey::from_name(&p.sort), asc: p.asc },
             group: p.group,
             delete_empty: p.delete_empty,
+            hide_posts: p.hide_posts,
             move_dir: p.move_dir,
             panel: None,
             jobs: Vec::new(),
@@ -163,6 +166,7 @@ impl FilesState {
             asc: self.sort.asc,
             group: self.group,
             delete_empty: self.delete_empty,
+            hide_posts: self.hide_posts,
             move_dir: self.move_dir.clone(),
         });
     }
@@ -204,6 +208,36 @@ impl FilesState {
     }
 }
 
+/// Files that belong to posts, so the Files tab can hide them.
+struct PostFiles {
+    done: HashSet<String>,
+    downloading: Vec<String>,
+}
+
+/// A path as a comparison key: forward slashes, lower case on Windows.
+fn path_key(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
+impl PostFiles {
+    fn new(posts: &[Post]) -> Self {
+        PostFiles {
+            done: posts.iter().filter_map(|p| p.file.as_deref()).map(|f| path_key(Path::new(f))).collect(),
+            downloading: posts.iter().filter(|p| p.state == PostState::Downloading && !p.id.is_empty()).map(|p| p.id.clone()).collect(),
+        }
+    }
+
+    /// True for a finished post file, or a file of a post that is still downloading.
+    fn hides(&self, path: &Path) -> bool {
+        if self.done.contains(&path_key(path)) {
+            return true;
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.downloading.iter().any(|id| name.contains(id.as_str()))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum FilesMsg {
     Scanned(ScanResult),
@@ -214,6 +248,7 @@ pub enum FilesMsg {
     HeaderSort(SortKey),
     ToggleGroup(bool),
     ToggleDeleteEmpty(bool),
+    ToggleHidePosts(bool),
     ExpandAll,
     CollapseAll,
     OpenSelected,
@@ -451,11 +486,16 @@ impl App {
     pub(super) fn files_update(&mut self, m: FilesMsg) -> Task<Msg> {
         let mut task = Task::none();
         match m {
-            FilesMsg::Scanned(res) => {
+            FilesMsg::Scanned(mut res) => {
                 let now = Instant::now();
+                let mut files = std::mem::take(&mut res.files);
+                if self.files.hide_posts {
+                    let hidden = PostFiles::new(&self.posts.posts);
+                    files.retain(|s| !hidden.hides(&s.path));
+                }
                 let f = &mut self.files;
                 f.scanning = false;
-                let changed = scan::merge(&mut f.records, res.files, now);
+                let changed = scan::merge(&mut f.records, files, now);
                 if let (Some(mv), Some(size)) = (f.moving.as_mut(), res.moving) {
                     let dt = now.saturating_duration_since(mv.last_poll).as_secs_f64().max(0.001);
                     if size != mv.size {
@@ -495,6 +535,12 @@ impl App {
             FilesMsg::ToggleDeleteEmpty(on) => {
                 self.files.delete_empty = on;
                 self.files.save_prefs();
+            }
+            FilesMsg::ToggleHidePosts(on) => {
+                self.files.hide_posts = on;
+                self.files.save_prefs();
+                self.files.stale = true;
+                self.files.last_scan = None;
             }
             FilesMsg::ExpandAll => {
                 self.files.collapsed.clear();
