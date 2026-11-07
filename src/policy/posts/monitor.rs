@@ -345,9 +345,10 @@ impl PostsMonitor {
             return;
         }
         let msg = super::new_posts_message(account, added);
+        let folder = site.output_folder(&self.global_dir);
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let _ = tx.send(PostsMsg::Notified(runner::send_notification(msg, targets).await));
+            let _ = tx.send(PostsMsg::Notified(runner::send_notification(msg, targets, folder).await));
         });
     }
 

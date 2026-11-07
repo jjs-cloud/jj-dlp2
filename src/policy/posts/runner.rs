@@ -357,7 +357,9 @@ pub fn play_stream(player: &str, url: &str, id: &str) -> Result<(), String> {
     open::that_detached(file).map_err(|e| e.to_string())
 }
 
-/// Sends a notification off the async threads and returns the log lines for failures.
-pub async fn send_notification(msg: notify::Message, targets: notify::Targets) -> Vec<String> {
-    tokio::task::spawn_blocking(move || notify::deliver(&msg, &targets, false)).await.unwrap_or_default()
+/// Sends a notification with the free space of `folder` off the async threads and returns the log lines for failures.
+pub async fn send_notification(msg: notify::Message, targets: notify::Targets, folder: PathBuf) -> Vec<String> {
+    tokio::task::spawn_blocking(move || notify::deliver(&notify::with_disk_space(msg, &folder), &targets, false))
+        .await
+        .unwrap_or_default()
 }

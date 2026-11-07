@@ -306,9 +306,11 @@ impl App {
             ),
         ]
         .spacing(8);
-        let right = row![pick_list(ThemeKind::ALL, Some(self.kind), Msg::ThemeChosen).padding(8),]
-            .spacing(10)
-            .align_y(Alignment::Center);
+        let mut right = Row::new().spacing(10).align_y(Alignment::Center);
+        if let Some(disks) = self.disk_chips(s) {
+            right = right.push(disks);
+        }
+        let right = right.push(pick_list(ThemeKind::ALL, Some(self.kind), Msg::ThemeChosen).padding(8));
         container(
             row![title, chips, Space::new().width(Length::Fill), right]
                 .spacing(18)
@@ -1760,6 +1762,7 @@ impl App {
         ]
         .spacing(8);
         col = col.push(card_box(s, folders));
+        col = col.push(self.drives_card(s));
 
         let row_size = |label: &'static str, value: f32, on_change: fn(f32) -> Msg| {
             row![

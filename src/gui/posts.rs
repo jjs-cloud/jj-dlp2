@@ -411,6 +411,9 @@ impl App {
 
     /// Applies a state change reported by the policy layer.
     pub(super) fn posts_on_event(&mut self, ev: PostsEvent) {
+        if matches!(ev, PostsEvent::Config(_)) {
+            self.disks_dirty = true;
+        }
         self.posts.apply(ev);
     }
 

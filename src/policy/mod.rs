@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 
 mod decision;
 mod defaults;
+pub mod disks;
 mod files;
 mod gql;
 pub mod layout;
@@ -150,7 +151,7 @@ pub enum PolicyCommand {
     /// Opens the file a recorder is writing, once its path is verified.
     OpenRecording(RecorderId),
     /// Sends a test notification to the given targets, ignoring cooldowns.
-    TestNotification { site_name: String, targets: Targets },
+    TestNotification { site_name: String, targets: Targets, folder: PathBuf },
     /// Re-runs the engine's setup checks.
     Recheck,
     /// Resets every streamer's restart, interrupt and error counts and dismisses stall warnings.
@@ -616,16 +617,21 @@ impl Policy {
                 click: Some(st.url.clone()),
             },
         };
-        self.dispatch_notification(msg, targets, false);
+        let folder = self.recording_dir(st.id);
+        self.dispatch_notification(msg, targets, false, Some(folder));
     }
 
-    /// Delivers a notification on a blocking thread and logs any failure.
-    fn dispatch_notification(&self, msg: Message, targets: Targets, test: bool) {
+    /// Delivers a notification on a blocking thread, adding the free space of `folder`, and logs any failure.
+    fn dispatch_notification(&self, msg: Message, targets: Targets, test: bool, folder: Option<PathBuf>) {
         if cfg!(test) {
             return;
         }
         let events = self.events.clone();
         tokio::task::spawn_blocking(move || {
+            let msg = match folder {
+                Some(folder) => notify::with_disk_space(msg, &folder),
+                None => msg,
+            };
             for line in notify::deliver(&msg, &targets, test) {
                 uilog::append(&line);
                 let _ = events.send(PolicyEvent::Log(line));
@@ -1358,14 +1364,14 @@ impl Policy {
                 }
             }
             PolicyCommand::OpenRecording(id) => self.open_recording(id),
-            PolicyCommand::TestNotification { site_name, targets } => {
+            PolicyCommand::TestNotification { site_name, targets, folder } => {
                 let msg = Message {
                     title: "jj-dlp test notification".to_string(),
                     body: format!("{site_name}: notifications are working"),
                     click: None,
                 };
                 self.log(format!("sending test notification for {site_name}"));
-                self.dispatch_notification(msg, targets, true);
+                self.dispatch_notification(msg, targets, true, Some(folder));
             }
             PolicyCommand::Recheck => self.engine.send(Command::Recheck),
             PolicyCommand::ClearWarnings => {

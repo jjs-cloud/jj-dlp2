@@ -90,6 +90,14 @@ pub fn live_body(status: LiveStatus, site: &str) -> String {
     format!("{status}\nSite: {site}")
 }
 
+/// The message with the free space of the drive holding `folder` added to its body; blocks.
+pub fn with_disk_space(mut msg: Message, folder: &std::path::Path) -> Message {
+    if let Some(line) = super::disks::free_line(folder) {
+        msg.body = format!("{}\n{line}", msg.body);
+    }
+    msg
+}
+
 /// Sends a message to every target and returns the log lines for failures; blocks, so call it off the async threads.
 pub fn deliver(msg: &Message, targets: &Targets, always_log_missing: bool) -> Vec<String> {
     let mut logs = Vec::new();

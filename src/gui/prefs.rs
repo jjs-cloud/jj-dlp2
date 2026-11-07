@@ -42,6 +42,7 @@ struct Prefs {
     wrap_logs: bool,
     files: FilesPrefs,
     posts: PostsPrefs,
+    extra_drives: Vec<String>,
 }
 
 /// Preferences of the Files tab.
@@ -88,6 +89,7 @@ impl Default for Prefs {
             wrap_logs: true,
             files: FilesPrefs::default(),
             posts: PostsPrefs::default(),
+            extra_drives: Vec::new(),
         }
     }
 }
@@ -190,6 +192,18 @@ pub fn load_posts() -> PostsPrefs {
 pub fn save_posts(posts: &PostsPrefs) {
     let mut prefs = read();
     prefs.posts = posts.clone();
+    write(&prefs);
+}
+
+/// Reads the drives the user added to the disk-space display.
+pub fn load_extra_drives() -> Vec<String> {
+    read().extra_drives
+}
+
+/// Saves the drives the user added to the disk-space display.
+pub fn save_extra_drives(drives: &[String]) {
+    let mut prefs = read();
+    prefs.extra_drives = drives.to_vec();
     write(&prefs);
 }
 

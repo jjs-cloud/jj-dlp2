@@ -1,5 +1,6 @@
 //! The iced GUI. It only talks to the policy layer through `crate::policy`.
 
+mod drives;
 mod files;
 mod files_view;
 mod logs;
@@ -14,6 +15,7 @@ mod view;
 
 use crate::api::*;
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
+use crate::policy::disks;
 use crate::policy::notify::{self, Targets};
 use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
@@ -25,6 +27,7 @@ use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -681,6 +684,9 @@ pub enum Msg {
     SetUpdateChecks(bool),
     SetIncludeRc(bool),
     StartFresh,
+    AddDrive(PathBuf),
+    RemoveDrive(PathBuf),
+    DisksRefreshed(disks::Snapshot),
 }
 
 /// Most output lines kept per recording.
@@ -780,6 +786,11 @@ pub struct App {
     update_cfg: UpdateConfig,
     files: files::FilesState,
     posts: posts::PostsState,
+    disks: disks::Snapshot,
+    extra_drives: Vec<PathBuf>,
+    disks_dirty: bool,
+    disks_busy: bool,
+    disks_at: u64,
 }
 
 impl App {
@@ -836,6 +847,11 @@ impl App {
             update_cfg: UpdateConfig::default(),
             files: files::FilesState::new(),
             posts: posts::PostsState::new(),
+            disks: disks::Snapshot::default(),
+            extra_drives: prefs::load_extra_drives().into_iter().map(PathBuf::from).collect(),
+            disks_dirty: true,
+            disks_busy: false,
+            disks_at: 0,
         };
         if let Some(e) = crate::policy::update::take_last_error() {
             app.push_log(e);
@@ -969,7 +985,7 @@ impl App {
                 if let Some(task) = self.try_jump() {
                     return task;
                 }
-                let posts = self.posts_tick();
+                let posts = Task::batch([self.posts_tick(), self.disks_tick()]);
                 if self.tab == Tab::Files {
                     return Task::batch([posts, self.files_tick()]);
                 }
@@ -1017,6 +1033,9 @@ impl App {
                 self.kind = k;
                 prefs::save_theme(k);
             }
+            Msg::AddDrive(mount) => self.add_drive(mount),
+            Msg::RemoveDrive(mount) => self.remove_drive(&mount),
+            Msg::DisksRefreshed(snap) => self.on_disks(snap),
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenLogsDir => self.client.send(PolicyCommand::OpenLogsDir),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
@@ -1192,7 +1211,8 @@ impl App {
                     let targets = d.test_targets();
                     if d.ntfy_ok() && !targets.is_empty() {
                         let site_name = if d.name.trim().is_empty() { "Site".to_string() } else { d.name.trim().to_string() };
-                        self.client.send(PolicyCommand::TestNotification { site_name, targets });
+                        let folder = PathBuf::from(crate::policy::layout::base_dir(&d.output, &self.settings.default_output_dir));
+                        self.client.send(PolicyCommand::TestNotification { site_name, targets, folder });
                     }
                 }
             }
@@ -1393,6 +1413,7 @@ impl App {
     }
 
     fn on_settings(&mut self, s: Settings) {
+        self.disks_dirty = true;
         if self.global_out.is_empty() || self.global_out == self.settings.default_output_dir {
             self.global_out = s.default_output_dir.clone();
         }
