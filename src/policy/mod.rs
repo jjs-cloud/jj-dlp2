@@ -18,6 +18,7 @@ mod files;
 mod gql;
 pub mod layout;
 pub mod live;
+pub mod logtail;
 pub mod notify;
 mod outpath;
 pub mod posts;

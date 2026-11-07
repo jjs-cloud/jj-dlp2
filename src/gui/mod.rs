@@ -2,6 +2,8 @@
 
 mod files;
 mod files_view;
+mod logs;
+mod logs_view;
 #[cfg(target_os = "linux")]
 mod desktop;
 mod posts;
@@ -93,6 +95,13 @@ pub enum Tab {
     Files,
     Settings,
     Log,
+}
+
+/// Sub-pages of the Log tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogTab {
+    Engine,
+    Output,
 }
 
 /// Sub-pages of the Settings tab.
@@ -611,6 +620,8 @@ pub enum Msg {
     Files(files::FilesMsg),
     Posts(posts::PostsMsg),
     SetSettingsTab(SettingsTab),
+    SetLogTab(LogTab),
+    Logs(logs::LogsMsg),
     OpenAddSite,
     ThemeChosen(ThemeKind),
     OpenConfigDir,
@@ -745,6 +756,8 @@ pub struct App {
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
+    log_tab: LogTab,
+    logs: logs::LogsState,
     site_added: Option<(String, u64)>,
     global_out: String,
     phase: f32,
@@ -799,6 +812,8 @@ impl App {
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
+            log_tab: LogTab::Engine,
+            logs: logs::LogsState::new(),
             site_added: None,
             global_out: String::new(),
             phase: 0.0,
@@ -958,6 +973,9 @@ impl App {
                 if self.tab == Tab::Files {
                     return Task::batch([posts, self.files_tick()]);
                 }
+                if self.tab == Tab::Log && self.log_tab == LogTab::Output {
+                    return Task::batch([posts, self.logs_tick()]);
+                }
                 return posts;
             }
             Msg::SetTab(t) => {
@@ -974,10 +992,20 @@ impl App {
                 if t == Tab::Files {
                     self.files.on_enter();
                 }
+                if t == Tab::Log && self.log_tab == LogTab::Output {
+                    return self.logs_tick();
+                }
             }
             Msg::Files(m) => return self.files_update(m),
+            Msg::Logs(m) => return self.logs_update(m),
             Msg::Posts(m) => return self.posts_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
+            Msg::SetLogTab(w) => {
+                self.log_tab = w;
+                if w == LogTab::Output {
+                    return self.logs_tick();
+                }
+            }
             Msg::OpenAddSite => {
                 if self.tab == Tab::Processes {
                     self.expanded_procs.clear();

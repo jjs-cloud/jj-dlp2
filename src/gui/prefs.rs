@@ -39,6 +39,7 @@ struct Prefs {
     win_w: f32,
     win_h: f32,
     wrap_output: bool,
+    wrap_logs: bool,
     files: FilesPrefs,
     posts: PostsPrefs,
 }
@@ -84,6 +85,7 @@ impl Default for Prefs {
             win_w: WIN_DEFAULT_W,
             win_h: WIN_DEFAULT_H,
             wrap_output: true,
+            wrap_logs: true,
             files: FilesPrefs::default(),
             posts: PostsPrefs::default(),
         }
@@ -263,6 +265,18 @@ pub fn load_wrap_output() -> bool {
 pub fn save_wrap_output(on: bool) {
     let mut prefs = read();
     prefs.wrap_output = on;
+    write(&prefs);
+}
+
+/// Reads whether lines wrap in the Output log viewer.
+pub fn load_wrap_logs() -> bool {
+    read().wrap_logs
+}
+
+/// Saves whether lines wrap in the Output log viewer.
+pub fn save_wrap_logs(on: bool) {
+    let mut prefs = read();
+    prefs.wrap_logs = on;
     write(&prefs);
 }
 

@@ -3,7 +3,7 @@
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
     App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
-    StreamerField, Tab, UpdateStage, prefs,
+    LogTab, StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
@@ -255,7 +255,7 @@ impl App {
             Tab::Processes => self.processes(s),
             Tab::Files => self.files_view(s),
             Tab::Settings => self.settings_tab(s),
-            Tab::Log => self.log_view(s),
+            Tab::Log => self.log_tab(s),
         };
         let mut page = Column::new().spacing(14).push(self.header(s));
         if let Some(banner) = self.config_banner(s) {
@@ -2343,6 +2343,23 @@ impl App {
             .width(Length::Fill)
             .style(skin::card(s, None))
             .into()
+    }
+
+    fn log_tab(&self, s: Skin) -> Element<'_, Msg> {
+        let switch = |label: &'static str, which: LogTab| {
+            let on = self.log_tab == which;
+            let kind = if on { BtnKind::TabActive } else { BtnKind::TabIdle };
+            button(t(&s, label).size(13).color(if on { s.bg } else { s.muted }))
+                .on_press(Msg::SetLogTab(which))
+                .padding([6.0, 16.0])
+                .style(skin::btn(s, kind))
+        };
+        let switcher = row![switch("Engine", LogTab::Engine), switch("Output", LogTab::Output)].spacing(8);
+        let body = match self.log_tab {
+            LogTab::Engine => self.log_view(s),
+            LogTab::Output => self.logs_output(s),
+        };
+        column![switcher, body].spacing(12).height(Length::Fill).into()
     }
 
     fn log_view(&self, s: Skin) -> Element<'_, Msg> {
