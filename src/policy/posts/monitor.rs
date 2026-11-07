@@ -425,10 +425,10 @@ impl PostsMonitor {
                 }
             }
             PostsCommand::Delete(id) => match self.trash(&id) {
-                Ok(()) => {
+                Ok(note) => {
                     self.save_lib();
                     self.emit_changed(&[id]);
-                    self.notice("Moved to the recycle bin");
+                    self.notice(format!("Moved to the recycle bin{note}"));
                 }
                 Err(e) => self.notice(format!("Could not delete: {e}")),
             },
@@ -613,11 +613,16 @@ impl PostsMonitor {
         self.emit_changed(&ids);
     }
 
-    /// Sends the downloaded file to the recycle bin and hides the post.
-    fn trash(&mut self, id: &str) -> Result<(), String> {
-        let Some(post) = self.post(id).cloned() else { return Ok(()) };
+    /// Sends the downloaded file to the recycle bin, removes its folder if that is now empty, and hides the post; returns a status note.
+    fn trash(&mut self, id: &str) -> Result<String, String> {
+        let Some(post) = self.post(id).cloned() else { return Ok(String::new()) };
+        let mut note = String::new();
         if let Some(f) = post.file.as_deref().filter(|f| Path::new(f).is_file()) {
             ops::delete(Path::new(f), DeleteMode::Trash).map_err(|e| e.to_string())?;
+            let root = self.cfg.site(post.site_id).map(|s| s.output_folder(&self.global_dir));
+            if let (Some(root), Some(dir)) = (root, Path::new(f).parent()) {
+                note = ops::remove_empty_folder(dir, &root, DeleteMode::Permanent);
+            }
         }
         let _ = std::fs::remove_file(post.thumb_path());
         if let Some(p) = self.post_mut(id) {
@@ -626,7 +631,7 @@ impl PostsMonitor {
             p.has_thumb = false;
             p.viewed = true;
         }
-        Ok(())
+        Ok(note)
     }
 
     /// Deletes unstarred posts older than their site's auto-delete age.
