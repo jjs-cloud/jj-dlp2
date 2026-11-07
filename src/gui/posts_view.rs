@@ -473,6 +473,16 @@ impl App {
                 ),
                 Length::FillPortion(1),
             ),
+            cell(
+                input(
+                    "Time limit for auto-downloads (seconds, blank = none)",
+                    &posts::DEFAULT_AUTO_DOWNLOAD_SECS.to_string(),
+                    &d.auto_secs,
+                    SiteField::AutoSecs,
+                    bad_number(&d.auto_secs, 1),
+                ),
+                Length::FillPortion(1),
+            ),
             cell(input("m3u8 arguments ({url} = post URL)", posts::DEFAULT_M3U8_ARGS, &d.m3u8, SiteField::M3u8Args, false), Length::FillPortion(1)),
             cell(input("Player for m3u8 (blank = system default)", "", &d.player, SiteField::Player, false), Length::FillPortion(1)),
         ]

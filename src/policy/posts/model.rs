@@ -11,6 +11,8 @@ pub const DEFAULT_INTERVAL_SECS: u64 = 300;
 pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 7;
 /// Megabytes above which automatic downloads are skipped, in every template.
 pub const DEFAULT_AUTO_DOWNLOAD_LIMIT_MB: u64 = 15;
+/// Seconds after which automatic downloads are cancelled, in every template.
+pub const DEFAULT_AUTO_DOWNLOAD_SECS: u64 = 30;
 pub const MIN_INTERVAL_SECS: u64 = 15;
 /// Checker arguments used when a site's own are blank; `{url}` is the profile (or post) URL.
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
@@ -93,6 +95,8 @@ pub struct PostSite {
     pub auto_download: bool,
     /// Automatic downloads skip posts larger than this many megabytes; `None` means no limit.
     pub auto_download_limit_mb: Option<u64>,
+    /// Automatic downloads are cancelled after this many seconds; `None` means no limit.
+    pub auto_download_secs: Option<u64>,
     pub backfill: bool,
     pub mark_on_open: bool,
     pub notify: bool,
@@ -124,6 +128,7 @@ impl Default for PostSite {
             paused: false,
             auto_download: true,
             auto_download_limit_mb: Some(DEFAULT_AUTO_DOWNLOAD_LIMIT_MB),
+            auto_download_secs: Some(DEFAULT_AUTO_DOWNLOAD_SECS),
             backfill: true,
             mark_on_open: true,
             notify: true,
@@ -325,7 +330,7 @@ pub struct Post {
     pub state: PostState,
     pub error: String,
     pub attempts: u8,
-    /// True when the person asked for this download, so the size limit does not apply.
+    /// True when the person asked for this download, so the size and time limits do not apply.
     pub manual: bool,
     pub viewed: bool,
     pub viewed_at: Option<u64>,
@@ -563,9 +568,10 @@ mod tests {
     }
 
     #[test]
-    fn size_limit_defaults_everywhere_and_becomes_an_argument() {
+    fn auto_download_limits_default_everywhere_and_size_becomes_an_argument() {
         for preset in Preset::ALL {
-            assert_eq!(PostSite::from_preset(preset).auto_download_limit_mb, Some(15));
+            let site = PostSite::from_preset(preset);
+            assert_eq!((site.auto_download_limit_mb, site.auto_download_secs), (Some(15), Some(30)));
         }
         let dl = download_cmd(&tiktok(), "u", "d", Path::new("s.txt"), Some(15));
         assert!(dl.windows(2).any(|w| w == ["--max-filesize", "15M"]));

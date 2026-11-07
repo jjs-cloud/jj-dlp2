@@ -16,6 +16,8 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(180);
 const INFO_TIMEOUT: Duration = Duration::from_secs(90);
 const M3U8_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Start of the error `run` returns when a command exceeds its time limit.
+const TIMEOUT_PREFIX: &str = "yt-dlp timed out";
 const THUMB_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const THUMB_BOX: (u32, u32) = (360, 640);
 
@@ -42,8 +44,8 @@ pub struct CycleReport {
 pub struct DownloadOutcome {
     pub file: Result<String, String>,
     pub has_thumb: bool,
-    /// True when yt-dlp skipped the post for being over the size limit.
-    pub too_large: bool,
+    /// True when the download was stopped by the size or time limit for auto-downloads.
+    pub skipped: bool,
 }
 
 /// Resolves a relative path with a separator against the app folder and its parents.
@@ -78,7 +80,7 @@ async fn run(exe: &str, args: &[String], limit: Duration) -> Result<std::process
     match tokio::time::timeout(limit, cmd.output()).await {
         Ok(Ok(out)) => Ok(out),
         Ok(Err(e)) => Err(format!("failed to start '{exe}': {e}")),
-        Err(_) => Err(format!("yt-dlp timed out after {}s", limit.as_secs())),
+        Err(_) => Err(format!("{TIMEOUT_PREFIX} after {}s", limit.as_secs())),
     }
 }
 
@@ -262,8 +264,26 @@ fn find_by_id(dir: &Path, id: &str, depth: u32) -> Option<PathBuf> {
     None
 }
 
+/// Deletes unfinished download files of a post.
+fn remove_partials(dir: &Path, id: &str, depth: u32) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.is_dir() {
+            if depth > 0 {
+                remove_partials(&path, id, depth - 1);
+            }
+            continue;
+        }
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let named = path.file_name().is_some_and(|n| n.to_string_lossy().contains(id));
+        if named && ["part", "ytdl", "temp"].contains(&ext.as_str()) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// Downloads one post, then makes sure it has a thumbnail.
-pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Option<u64>) -> DownloadOutcome {
+pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Option<u64>, max_secs: Option<u64>) -> DownloadOutcome {
     let folder = site.output_folder(&global_dir);
     let _ = std::fs::create_dir_all(&folder);
     let sidecar = sidecar_path(&post.id);
@@ -272,9 +292,15 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
     }
     let _ = std::fs::remove_file(&sidecar);
     let args = download_cmd(&site, &post.url, &folder.to_string_lossy(), &sidecar, max_mb);
-    let out = match run(site.exe_or_default(), &args, DOWNLOAD_TIMEOUT).await {
+    let limit = max_secs.map_or(DOWNLOAD_TIMEOUT, Duration::from_secs);
+    let out = match run(site.exe_or_default(), &args, limit).await {
         Ok(o) => o,
-        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, too_large: false },
+        Err(e) if max_secs.is_some() && e.starts_with(TIMEOUT_PREFIX) => {
+            remove_partials(&folder, &post.id, 3);
+            let msg = "Over the time limit for auto-downloads".to_string();
+            return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true };
+        }
+        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false },
     };
     let reported = std::fs::read(&sidecar).ok().and_then(|b| String::from_utf8(b).ok());
     let _ = std::fs::remove_file(&sidecar);
@@ -283,16 +309,16 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
     let path = from_sidecar.or_else(|| path_lines(&stdout).find(|p| p.is_file())).or_else(|| find_by_id(&folder, &post.id, 3));
     let Some(path) = path else {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let too_large = max_mb.is_some() && (stdout.contains("larger than max-filesize") || stderr.contains("larger than max-filesize"));
-        let msg = if too_large {
+        let skipped = max_mb.is_some() && (stdout.contains("larger than max-filesize") || stderr.contains("larger than max-filesize"));
+        let msg = if skipped {
             "Over the size limit for auto-downloads".to_string()
         } else {
             error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {} and no file", out.status))
         };
-        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, too_large };
+        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped };
     };
     let has_thumb = post.has_thumb || frame_thumbnail(&path, &post.id).await;
-    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, too_large: false }
+    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, skipped: false }
 }
 
 /// The stream playlist URL yt-dlp reports for a post.
