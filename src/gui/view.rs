@@ -2,7 +2,7 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, MonitorTab, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
+    App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
     StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
@@ -250,7 +250,8 @@ impl App {
     pub(super) fn view(&self) -> Element<'_, Msg> {
         let s = self.skin();
         let body: Element<'_, Msg> = match self.tab {
-            Tab::Monitor => self.monitor(s),
+            Tab::Livestreams => self.monitor(s),
+            Tab::Posts => self.posts_view(s),
             Tab::Processes => self.processes(s),
             Tab::Files => self.files_view(s),
             Tab::Settings => self.settings_tab(s),
@@ -418,8 +419,8 @@ impl App {
 
     fn tabs(&self, s: Skin) -> Element<'_, Msg> {
         let alert = self.monitor_alert();
-        let tab = |label: &'static str, which: Tab| {
-            let pulsing = alert && which == Tab::Monitor;
+        let tab = |label: String, which: Tab| {
+            let pulsing = alert && which == Tab::Livestreams;
             let kind = if self.tab == which {
                 BtnKind::TabActive
             } else {
@@ -439,11 +440,12 @@ impl App {
             }
         };
         row![
-            tab("Monitor", Tab::Monitor),
-            tab("Processes", Tab::Processes),
-            tab("Files", Tab::Files),
-            tab("Settings", Tab::Settings),
-            tab("Log", Tab::Log)
+            tab("Livestreams".to_string(), Tab::Livestreams),
+            tab(self.posts_tab_label(), Tab::Posts),
+            tab("Processes".to_string(), Tab::Processes),
+            tab("Files".to_string(), Tab::Files),
+            tab("Settings".to_string(), Tab::Settings),
+            tab("Log".to_string(), Tab::Log)
         ]
         .spacing(8)
         .into()
@@ -458,26 +460,14 @@ impl App {
     }
 
     fn monitor(&self, s: Skin) -> Element<'_, Msg> {
-        let switch = |label: String, which: MonitorTab| {
-            let on = self.monitor_tab == which;
-            let kind = if on { BtnKind::TabActive } else { BtnKind::TabIdle };
-            button(t(&s, label).size(13).color(if on { s.bg } else { s.muted }))
-                .on_press(Msg::SetMonitorTab(which))
-                .padding([6.0, 16.0])
-                .style(skin::btn(s, kind))
-        };
-        let mut title = row![
-            switch("Livestreams".to_string(), MonitorTab::Livestreams),
-            switch(self.posts_tab_label(), MonitorTab::Posts),
-            Space::new().width(Length::Fill)
-        ]
+        let mut title = row![Space::new().width(Length::Fill)]
             .spacing(8)
             .padding(iced::Padding {
                 right: 8.0,
                 ..Default::default()
             })
             .align_y(Alignment::Center);
-        if self.monitor_tab == MonitorTab::Livestreams && self.monitor_alert() {
+        if self.monitor_alert() {
             title = title.push(
                 button(btn_label(&s, "Clear warnings").size(12))
                     .on_press(Msg::ClearWarnings)
@@ -485,12 +475,7 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        if self.monitor_tab == MonitorTab::Livestreams {
-            title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
-        }
-        if self.monitor_tab == MonitorTab::Posts {
-            return column![title, self.posts_view(s)].spacing(12).height(Length::Fill).into();
-        }
+        title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
@@ -1721,7 +1706,7 @@ impl App {
         }
         if let Some((name, at)) = &self.site_added {
             if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
-                add = add.push(t(&s, format!("{name} has been added! Switch to the Monitor tab to add a username.")).size(13).color(s.live));
+                add = add.push(t(&s, format!("{name} has been added! Switch to the Livestreams tab to add a username.")).size(13).color(s.live));
             }
         }
         let new_draft = self.drafts.get(&NEW_SITE_ID);

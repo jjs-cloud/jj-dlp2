@@ -72,7 +72,8 @@ fn app_icon() -> Option<window::Icon> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
-    Monitor,
+    Livestreams,
+    Posts,
     Processes,
     Files,
     Settings,
@@ -85,13 +86,6 @@ pub enum SettingsTab {
     Sites,
     Posts,
     General,
-}
-
-/// Sub-pages of the Monitor tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MonitorTab {
-    Livestreams,
-    Posts,
 }
 
 /// Where the update banner is in its flow.
@@ -602,7 +596,6 @@ pub enum Msg {
     Files(files::FilesMsg),
     Posts(posts::PostsMsg),
     SetSettingsTab(SettingsTab),
-    SetMonitorTab(MonitorTab),
     OpenAddSite,
     ThemeChosen(ThemeKind),
     OpenConfigDir,
@@ -737,7 +730,6 @@ pub struct App {
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
-    monitor_tab: MonitorTab,
     site_added: Option<(String, u64)>,
     global_out: String,
     phase: f32,
@@ -771,7 +763,7 @@ impl App {
             client,
             settings: crate::settings::default_settings(),
             kind: prefs::load_theme(),
-            tab: Tab::Monitor,
+            tab: Tab::Livestreams,
             statuses: HashMap::new(),
             restarts: HashMap::new(),
             warnings: HashMap::new(),
@@ -792,7 +784,6 @@ impl App {
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
-            monitor_tab: MonitorTab::Livestreams,
             site_added: None,
             global_out: String::new(),
             phase: 0.0,
@@ -960,8 +951,8 @@ impl App {
                     self.expanded_procs.clear();
                 }
                 self.tab = t;
-                if t == Tab::Monitor {
-                    // Collapse any open streamer settings on entering Monitor.
+                if t == Tab::Livestreams {
+                    // Collapse any open streamer settings on entering Livestreams.
                     self.open_streamer_settings.clear();
                     self.schedule_picker = None;
                 }
@@ -972,14 +963,6 @@ impl App {
             Msg::Files(m) => return self.files_update(m),
             Msg::Posts(m) => return self.posts_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
-            Msg::SetMonitorTab(w) => {
-                if w == MonitorTab::Livestreams && self.monitor_tab != w {
-                    // Collapse any open streamer settings when returning to Livestreams.
-                    self.open_streamer_settings.clear();
-                    self.schedule_picker = None;
-                }
-                self.monitor_tab = w;
-            }
             Msg::OpenAddSite => {
                 if self.tab == Tab::Processes {
                     self.expanded_procs.clear();

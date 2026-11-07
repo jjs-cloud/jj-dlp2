@@ -601,7 +601,7 @@ impl App {
         self.posts_send(PostsCommand::AddAccount { site_id: id, input });
     }
 
-    /// Label of the Posts switch on the Monitor tab, with the unviewed count.
+    /// Label of the Posts tab, with the unviewed count.
     pub(super) fn posts_tab_label(&self) -> String {
         match self.posts.unviewed_total() {
             0 => "Posts".to_string(),

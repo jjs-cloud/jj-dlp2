@@ -367,7 +367,7 @@ impl App {
         }
         if let Some((name, at)) = &p.added {
             if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
-                add = add.push(t(&s, format!("{name} has been added! Switch to the Monitor tab to add a username.")).size(13).color(s.live));
+                add = add.push(t(&s, format!("{name} has been added! Switch to the Posts tab to add a username.")).size(13).color(s.live));
             }
         }
         add = add.push(muted(&s, p.status_text(self.now).unwrap_or("")));
