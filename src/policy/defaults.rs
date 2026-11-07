@@ -47,7 +47,7 @@ pub fn new_site(preset: Preset) -> NewSite {
             "https://tiktok.com/@{username}/live",
             "--cookies-from-browser firefox --dump-json {urls}",
             r#"--cookies-from-browser firefox --downloader ffmpeg --no-part --retries 0 --output "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
-            "#19F0FF",
+            "#25F4EE",
         ),
         Preset::Chaturbate => (
             "Chaturbate",
@@ -68,7 +68,7 @@ pub fn new_site(preset: Preset) -> NewSite {
             "https://www.youtube.com/@{username}/live",
             "--dump-json {urls}",
             r#"--fixup never --no-part --replace-in-metadata uploader_id "^@" "" --output "%(uploader_id)s %(epoch>%Y-%m-%d %H_%M_%S)s [%(id)s].%(ext)s" {url}"#,
-            "#FE2C55",
+            "#FF0000",
         ),
         Preset::Blank => ("", "", "", "", DEFAULT_SITE_COLOR),
     };

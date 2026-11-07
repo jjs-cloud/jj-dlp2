@@ -27,7 +27,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 /// Quick-pick colours shown under the site colour field.
 pub const SITE_SWATCHES: [&str; 10] = [
-    "#9146FF", "#FE2C55", "#F89C1C", "#53FC18", "#19F0FF", "#FF2BD6", "#FFD24A", "#7AA2F7", "#F38BA8", "#B8FFC8",
+    "#9146FF", "#FF0000", "#F89C1C", "#53FC18", "#25F4EE", "#FF2BD6", "#FFD24A", "#7AA2F7", "#F38BA8", "#B8FFC8",
 ];
 
 /// Draft key for the unsaved blank site; real site ids start at 1.
