@@ -2,6 +2,8 @@
 
 mod files;
 mod files_view;
+#[cfg(target_os = "linux")]
+mod desktop;
 mod posts;
 mod posts_view;
 pub mod prefs;
@@ -44,15 +46,28 @@ pub fn install_event_stream(rx: UnboundedReceiver<PolicyEvent>) {
 
 pub fn run(client: PolicyClient) -> iced::Result {
     let (win_w, win_h) = prefs::startup_window_size();
+    #[cfg(target_os = "linux")]
+    desktop::install();
     let result = iced::application(move || App::new(client.clone()), App::update, App::view)
         .title("jj-dlp")
         .subscription(App::subscription)
         .theme(App::theme)
-        .window(window::Settings { size: Size::new(win_w, win_h), position: window::Position::Centered, icon: app_icon(), ..Default::default() })
+        .window(window_settings(win_w, win_h))
         .antialiasing(true)
         .run();
     save_size_on_exit();
     result
+}
+
+/// The main window's settings, with the Linux app id that links it to its launcher entry.
+fn window_settings(w: f32, h: f32) -> window::Settings {
+    #[allow(unused_mut)]
+    let mut settings = window::Settings { size: Size::new(w, h), position: window::Position::Centered, icon: app_icon(), ..Default::default() };
+    #[cfg(target_os = "linux")]
+    {
+        settings.platform_specific.application_id = desktop::APP_ID.to_string();
+    }
+    settings
 }
 
 /// Writes the last window size to gui.json when remembering is on.
