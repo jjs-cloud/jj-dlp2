@@ -196,12 +196,13 @@ impl PostsMonitor {
             return;
         };
         post.state = PostState::Downloading;
+        let max_mb = if post.manual { None } else { site.auto_download_limit_mb };
         let post = post.clone();
         self.downloads += 1;
         self.emit(PostsEvent::Changed(vec![post.clone()]));
         let (tx, dir) = (self.tx.clone(), self.global_dir.clone());
         tokio::spawn(async move {
-            let outcome = runner::download(site, post, dir).await;
+            let outcome = runner::download(site, post, dir, max_mb).await;
             let _ = tx.send(PostsMsg::Downloaded(id, outcome));
         });
     }
@@ -303,8 +304,14 @@ impl PostsMonitor {
         let mut log = None;
         if let Some(p) = self.post_mut(id) {
             p.has_thumb = out.has_thumb;
+            p.manual = false;
             if p.state != PostState::Removed {
                 match out.file {
+                    Err(e) if out.too_large => {
+                        p.state = PostState::Remote;
+                        log = Some(format!("Posts: {} skipped: {e}", p.id));
+                        p.error = e;
+                    }
                     Ok(path) => {
                         p.state = PostState::Ready;
                         p.file = Some(path);
@@ -368,6 +375,7 @@ impl PostsMonitor {
                 if let Some(p) = self.post_mut(&id).filter(|p| matches!(p.state, PostState::Remote | PostState::Failed)) {
                     p.state = PostState::Queued;
                     p.attempts = 0;
+                    p.manual = true;
                     p.error.clear();
                 }
                 self.save_lib();

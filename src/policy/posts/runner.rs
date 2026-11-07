@@ -1,7 +1,7 @@
 //! Background work of the Posts monitor: yt-dlp calls, thumbnails and notifications.
 
 use super::model::*;
-use super::store::thumbs_dir;
+use super::store::{sidecar_path, thumbs_dir};
 use super::xprofile;
 use crate::api::now_secs;
 use crate::policy::notify;
@@ -42,6 +42,8 @@ pub struct CycleReport {
 pub struct DownloadOutcome {
     pub file: Result<String, String>,
     pub has_thumb: bool,
+    /// True when yt-dlp skipped the post for being over the size limit.
+    pub too_large: bool,
 }
 
 /// Resolves a relative path with a separator against the app folder and its parents.
@@ -261,24 +263,36 @@ fn find_by_id(dir: &Path, id: &str, depth: u32) -> Option<PathBuf> {
 }
 
 /// Downloads one post, then makes sure it has a thumbnail.
-pub async fn download(site: PostSite, post: Post, global_dir: String) -> DownloadOutcome {
+pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Option<u64>) -> DownloadOutcome {
     let folder = site.output_folder(&global_dir);
     let _ = std::fs::create_dir_all(&folder);
-    let args = download_cmd(&site, &post.url, &folder.to_string_lossy());
+    let sidecar = sidecar_path(&post.id);
+    if let Some(parent) = sidecar.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::remove_file(&sidecar);
+    let args = download_cmd(&site, &post.url, &folder.to_string_lossy(), &sidecar, max_mb);
     let out = match run(site.exe_or_default(), &args, DOWNLOAD_TIMEOUT).await {
         Ok(o) => o,
-        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb },
+        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, too_large: false },
     };
+    let reported = std::fs::read(&sidecar).ok().and_then(|b| String::from_utf8(b).ok());
+    let _ = std::fs::remove_file(&sidecar);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let printed = stdout.lines().map(str::trim).rev().map(PathBuf::from).find(|p| p.is_file());
-    let path = printed.or_else(|| find_by_id(&folder, &post.id, 3));
+    let from_sidecar = reported.as_deref().and_then(|t| path_lines(t).find(|p| p.is_file()));
+    let path = from_sidecar.or_else(|| path_lines(&stdout).find(|p| p.is_file())).or_else(|| find_by_id(&folder, &post.id, 3));
     let Some(path) = path else {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let msg = error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {} and no file", out.status));
-        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb };
+        let too_large = max_mb.is_some() && (stdout.contains("larger than max-filesize") || stderr.contains("larger than max-filesize"));
+        let msg = if too_large {
+            "Over the size limit for auto-downloads".to_string()
+        } else {
+            error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {} and no file", out.status))
+        };
+        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, too_large };
     };
     let has_thumb = post.has_thumb || frame_thumbnail(&path, &post.id).await;
-    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb }
+    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, too_large: false }
 }
 
 /// The stream playlist URL yt-dlp reports for a post.

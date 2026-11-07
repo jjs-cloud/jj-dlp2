@@ -9,19 +9,22 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_INTERVAL_SECS: u64 = 300;
 /// Days before unstarred posts are deleted, in the TikTok and blank templates.
 pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 7;
+/// Megabytes above which automatic downloads are skipped, in every template.
+pub const DEFAULT_AUTO_DOWNLOAD_LIMIT_MB: u64 = 15;
 pub const MIN_INTERVAL_SECS: u64 = 15;
 /// Checker arguments used when a site's own are blank; `{url}` is the profile (or post) URL.
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
 /// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
-pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
 /// Arguments used when a site's own are blank; `{url}` is the post URL and the printed line is the stream playlist.
 pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
 const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
 const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
+const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
 const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
-const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --print after_move:filepath -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
+const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
 /// Failed downloads are retried until they have failed this many times.
 pub const MAX_ATTEMPTS: u8 = 3;
 
@@ -88,6 +91,8 @@ pub struct PostSite {
     pub output_dir: String,
     pub paused: bool,
     pub auto_download: bool,
+    /// Automatic downloads skip posts larger than this many megabytes; `None` means no limit.
+    pub auto_download_limit_mb: Option<u64>,
     pub backfill: bool,
     pub mark_on_open: bool,
     pub notify: bool,
@@ -118,6 +123,7 @@ impl Default for PostSite {
             output_dir: String::new(),
             paused: false,
             auto_download: true,
+            auto_download_limit_mb: Some(DEFAULT_AUTO_DOWNLOAD_LIMIT_MB),
             backfill: true,
             mark_on_open: true,
             notify: true,
@@ -160,6 +166,7 @@ impl PostSite {
             },
             Preset::TwitterX => PostSite {
                 name: Preset::TwitterX.label().into(),
+                download_args: TWITTER_X_DOWNLOAD_ARGS.into(),
                 url_template: TWITTER_X_URL_TEMPLATE.into(),
                 ..Default::default()
             },
@@ -318,6 +325,8 @@ pub struct Post {
     pub state: PostState,
     pub error: String,
     pub attempts: u8,
+    /// True when the person asked for this download, so the size limit does not apply.
+    pub manual: bool,
     pub viewed: bool,
     pub viewed_at: Option<u64>,
     pub starred: bool,
@@ -334,10 +343,14 @@ impl Post {
     }
 }
 
+/// A post id made safe for use in a file name.
+pub fn safe_name(id: &str) -> String {
+    id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
+}
+
 /// The thumbnail file name for a post id.
 pub fn thumb_name(id: &str) -> String {
-    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
-    format!("{safe}.jpg")
+    format!("{}.jpg", safe_name(id))
 }
 
 /// The fields of one yt-dlp JSON entry that the monitor uses.
@@ -435,9 +448,19 @@ pub fn checker_cmd(site: &PostSite, url: &str) -> Vec<String> {
     expand(site.checker_or_default(), url, "")
 }
 
-/// Download arguments for one post into `dir`.
-pub fn download_cmd(site: &PostSite, url: &str, dir: &str) -> Vec<String> {
-    expand(site.download_or_default(), url, dir)
+/// Download arguments for one post into `dir`, plus options that write the final file path to `sidecar` and cap the size at `max_mb`.
+pub fn download_cmd(site: &PostSite, url: &str, dir: &str, sidecar: &Path, max_mb: Option<u64>) -> Vec<String> {
+    let mut args = expand(site.download_or_default(), url, dir);
+    if let Some(mb) = max_mb {
+        args.extend(["--max-filesize".to_string(), format!("{mb}M")]);
+    }
+    args.extend(["--print-to-file".to_string(), "after_move:filepath".to_string(), sidecar.to_string_lossy().replace('%', "%%")]);
+    args
+}
+
+/// Paths in yt-dlp output or a sidecar file, last line first.
+pub fn path_lines(text: &str) -> impl Iterator<Item = PathBuf> + '_ {
+    text.lines().map(str::trim).rev().filter(|l| !l.is_empty()).map(PathBuf::from)
 }
 
 /// Arguments that print the stream playlist URL of one post.
@@ -513,8 +536,9 @@ mod tests {
     #[test]
     fn commands_fill_placeholders() {
         let mut site = tiktok();
-        let dl = download_cmd(&site, "https://x/v/1", "C:\\out dir");
-        assert!(dl.contains(&"C:\\out dir".to_string()) && dl.last().map(String::as_str) == Some("https://x/v/1"));
+        let dl = download_cmd(&site, "https://x/v/1", "C:\\out dir", Path::new("s%1.txt"), None);
+        assert!(dl.contains(&"C:\\out dir".to_string()) && dl.contains(&"https://x/v/1".to_string()));
+        assert_eq!(&dl[dl.len() - 3..], ["--print-to-file", "after_move:filepath", "s%%1.txt"]);
         assert!(site.user_agent().unwrap().starts_with("Mozilla/5.0"));
         site.checker_args = "--dump-json".into();
         assert_eq!(checker_cmd(&site, "u"), vec!["--dump-json", "u"]);
@@ -536,6 +560,28 @@ mod tests {
     fn first_launch_has_every_named_site() {
         let names: Vec<String> = PostsConfig::first_launch().sites.into_iter().map(|s| s.name).collect();
         assert_eq!(names, ["TikTok", "Youtube Shorts", "Twitch Vods", "Twitter/X"]);
+    }
+
+    #[test]
+    fn size_limit_defaults_everywhere_and_becomes_an_argument() {
+        for preset in Preset::ALL {
+            assert_eq!(PostSite::from_preset(preset).auto_download_limit_mb, Some(15));
+        }
+        let dl = download_cmd(&tiktok(), "u", "d", Path::new("s.txt"), Some(15));
+        assert!(dl.windows(2).any(|w| w == ["--max-filesize", "15M"]));
+    }
+
+    #[test]
+    fn path_lines_are_newest_first_and_skip_blanks() {
+        let got: Vec<PathBuf> = path_lines("a.mp4\r\n\n b.mp4 \n").collect();
+        assert_eq!(got, [PathBuf::from("b.mp4"), PathBuf::from("a.mp4")]);
+    }
+
+    #[test]
+    fn twitter_x_downloads_are_named_by_post_id() {
+        let site = PostSite::from_preset(Preset::TwitterX);
+        assert!(site.download_args.contains("%(display_id)s"));
+        assert!(!site.download_args.contains("--print"));
     }
 
     #[test]

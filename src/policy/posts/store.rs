@@ -13,6 +13,12 @@ pub fn thumbs_dir() -> PathBuf {
     path_in_config("post_thumbs")
 }
 
+/// The file yt-dlp writes a post's downloaded path to.
+pub fn sidecar_path(id: &str) -> PathBuf {
+    let path = path_in_config("post_sidecars").join(format!("{}.txt", super::model::safe_name(id)));
+    std::path::absolute(&path).unwrap_or(path)
+}
+
 fn write_atomic<T: Serialize>(path: &Path, value: &T) {
     let _ = std::fs::create_dir_all(config_dir());
     let tmp = path.with_extension("json.tmp");
