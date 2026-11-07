@@ -30,6 +30,8 @@ pub struct AccountReport {
     /// Ids of X posts that have no video.
     pub no_video: Vec<String>,
     pub error: Option<String>,
+    /// Log lines for posts whose details needed an extra yt-dlp call.
+    pub lookups: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +106,7 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>,
     if let Some(user) = xprofile::profile_user(&acct.url) {
         return check_x_account(site, acct, &user, known, no_video).await;
     }
-    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e) };
+    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e), lookups: Vec::new() };
     let out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT).await {
         Ok(o) => o,
         Err(e) => return fail(e),
@@ -115,16 +117,18 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>,
         let stderr = String::from_utf8_lossy(&out.stderr);
         return fail(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {}", out.status)));
     }
-    let mut new_posts = Vec::new();
+    let (mut new_posts, mut lookups) = (Vec::new(), Vec::new());
     for entry in entries.into_iter().filter(|e| !known.contains(&e.id)) {
-        new_posts.push(make_post(site, acct, entry).await);
+        let (post, lookup) = make_post(site, acct, entry).await;
+        new_posts.push(post);
+        lookups.extend(lookup);
     }
-    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, no_video: Vec::new(), error: None }
+    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, no_video: Vec::new(), error: None, lookups }
 }
 
 /// Checks an X account: lists its recent posts from the profile page and keeps those yt-dlp finds a video in.
 async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
-    let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None };
+    let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None, lookups: Vec::new() };
     let html = match xprofile::fetch_profile(acct.url.clone(), site.user_agent()).await {
         Ok(h) => h,
         Err(e) => return AccountReport { error: Some(e), ..report },
@@ -146,7 +150,11 @@ async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &Ha
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         match stdout.lines().find_map(parse_entry) {
-            Some(entry) => report.new_posts.push(make_post(site, acct, Entry { id, url, ..entry }).await),
+            Some(entry) => {
+                let (post, lookup) = make_post(site, acct, Entry { id, url, ..entry }).await;
+                report.new_posts.push(post);
+                report.lookups.extend(lookup);
+            }
             None if stderr.contains("No video could be found") => report.no_video.push(id),
             None => last_error = Some(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {}", out.status))),
         }
@@ -157,9 +165,16 @@ async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &Ha
     report
 }
 
-/// Builds a post from a listed entry, filling missing details and fetching its thumbnail.
-async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> Post {
+/// Builds a post from a listed entry, filling missing details and fetching its thumbnail; also returns a log line when it needed an extra yt-dlp call.
+async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> (Post, Option<String>) {
+    let mut lookup = None;
     if entry.thumb_url.is_none() || entry.title.is_empty() {
+        let missing = match (entry.thumb_url.is_none(), entry.title.is_empty()) {
+            (true, true) => "thumbnail and title",
+            (true, false) => "thumbnail",
+            _ => "title",
+        };
+        lookup = Some(format!("Posts: {} @{}: {missing} missing for {}, running an extra yt-dlp call", site.name, acct.name, entry.id));
         if let Some(full) = fetch_info(site, &entry.url).await {
             entry.thumb_url = entry.thumb_url.or(full.thumb_url);
             entry.posted_at = entry.posted_at.or(full.posted_at);
@@ -173,7 +188,7 @@ async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> Post {
         Some(url) => fetch_thumbnail(url, site.user_agent(), entry.id.clone()).await,
         None => false,
     };
-    Post {
+    let post = Post {
         id: entry.id,
         site_id: site.id,
         account: acct.name.clone(),
@@ -184,7 +199,8 @@ async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> Post {
         found_at: now_secs(),
         has_thumb,
         ..Default::default()
-    }
+    };
+    (post, lookup)
 }
 
 /// Full metadata of one post, or `None` when yt-dlp could not read it.

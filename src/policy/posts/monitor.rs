@@ -285,6 +285,7 @@ impl PostsMonitor {
             }
         }
         for ar in report.accounts {
+            ar.lookups.iter().for_each(|l| self.log(l.clone()));
             self.no_video.extend(ar.no_video.iter().cloned());
             let key = (ar.site_id, ar.name.clone());
             let Some(site) = self.cfg.site_mut(ar.site_id) else { continue };
