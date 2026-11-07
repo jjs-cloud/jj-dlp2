@@ -6,7 +6,7 @@
 
 mod checker;
 mod diagnose;
-mod exepath;
+pub(crate) mod exepath;
 pub(crate) mod logfile;
 mod preflight;
 mod recorder;

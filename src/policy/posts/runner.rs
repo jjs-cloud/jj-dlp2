@@ -53,21 +53,9 @@ pub struct DownloadOutcome {
     pub duration: Option<u64>,
 }
 
-/// Resolves a relative path with a separator against the app folder and its parents.
+/// Resolves a relative path against the app folder and its parents, setting the executable bit.
 fn resolve_exe(raw: &str) -> String {
-    let raw = raw.trim();
-    if !raw.contains(['/', '\\']) || Path::new(raw).is_absolute() {
-        return raw.to_string();
-    }
-    let rel: PathBuf = raw.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
-        bases.extend(dir.ancestors().take(4).map(Path::to_path_buf));
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd);
-    }
-    bases.iter().map(|b| b.join(&rel)).find(|p| p.is_file()).map_or_else(|| raw.to_string(), |p| p.to_string_lossy().into_owned())
+    crate::engine::exepath::resolve(raw).exe
 }
 
 /// The most useful line of yt-dlp's error output.
