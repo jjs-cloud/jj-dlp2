@@ -343,7 +343,8 @@ impl App {
             ],
             PostState::Remote => row![star, card_btn(s, "Save", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
             PostState::Failed => row![star, card_btn(s, "Retry", PostsMsg::Download(id.clone()), BtnKind::Ghost), page],
-            _ => row![star, page],
+            PostState::Queued | PostState::Downloading => row![star, card_btn(s, "Cancel", PostsMsg::CancelDownload(id.clone()), BtnKind::Ghost), page],
+            PostState::Removed => row![star, page],
         }
         .spacing(6);
 

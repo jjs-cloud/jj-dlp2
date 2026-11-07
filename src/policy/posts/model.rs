@@ -329,6 +329,8 @@ pub struct Post {
     pub file: Option<String>,
     pub state: PostState,
     pub error: String,
+    /// Unix time a failed manual download's error was set; it is cleared after a delay.
+    pub error_at: Option<u64>,
     pub attempts: u8,
     /// True when the person asked for this download, so the size and time limits do not apply.
     pub manual: bool,

@@ -366,6 +366,7 @@ pub enum PostsMsg {
     ToggleViewed(String),
     ToggleStar(String),
     Download(String),
+    CancelDownload(String),
     Reveal(String),
     Delete(String),
     MarkAllViewed,
@@ -446,6 +447,7 @@ impl App {
                 self.posts_send(PostsCommand::SetStarred { id, starred: !starred });
             }
             PostsMsg::Download(id) => self.posts_send(PostsCommand::Download(id)),
+            PostsMsg::CancelDownload(id) => self.posts_send(PostsCommand::CancelDownload(id)),
             PostsMsg::Reveal(id) => self.posts_send(PostsCommand::Reveal(id)),
             PostsMsg::Delete(id) => self.posts_send(PostsCommand::Delete(id)),
             PostsMsg::MarkAllViewed => {

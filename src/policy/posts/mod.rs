@@ -28,6 +28,8 @@ pub enum PostsCommand {
     Delete(String),
     /// Queues a post that is not downloaded, or retries a failed one.
     Download(String),
+    /// Stops a queued or running download.
+    CancelDownload(String),
     SetViewed { ids: Vec<String>, viewed: bool },
     SetStarred { id: String, starred: bool },
     /// Adds a site; its id and accounts are ignored.

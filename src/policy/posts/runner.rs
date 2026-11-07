@@ -282,6 +282,13 @@ fn remove_partials(dir: &Path, id: &str, depth: u32) {
     }
 }
 
+/// Removes the unfinished files of a cancelled download once its process has exited.
+pub async fn discard_partials(folder: PathBuf, id: String) {
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    remove_partials(&folder, &id, 3);
+    let _ = std::fs::remove_file(sidecar_path(&id));
+}
+
 /// Downloads one post, then makes sure it has a thumbnail.
 pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Option<u64>, max_secs: Option<u64>) -> DownloadOutcome {
     let folder = site.output_folder(&global_dir);

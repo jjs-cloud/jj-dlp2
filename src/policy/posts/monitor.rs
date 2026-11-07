@@ -20,6 +20,8 @@ const SECS_PER_DAY: u64 = 86_400;
 const VIEW_DELAY: Duration = Duration::from_secs(2);
 /// Downloads that run at the same time.
 const MAX_DOWNLOADS: usize = 2;
+/// Seconds a failed manual download's error stays on its card.
+const ERROR_SHOW_SECS: u64 = 15;
 
 type AccountKey = (SiteId, String);
 
@@ -36,6 +38,8 @@ pub struct PostsMonitor {
     /// Ids of X posts found to have no video; not saved.
     no_video: HashSet<String>,
     downloads: usize,
+    /// Handles that stop the running downloads, by post id.
+    cancels: HashMap<String, tokio::task::AbortHandle>,
     next_sweep: Instant,
     pending_view: Vec<(String, Instant)>,
 }
@@ -57,6 +61,7 @@ impl PostsMonitor {
             errors: HashMap::new(),
             no_video: HashSet::new(),
             downloads: 0,
+            cancels: HashMap::new(),
             next_sweep: soon,
             pending_view: Vec::new(),
         }
@@ -147,6 +152,7 @@ impl PostsMonitor {
     pub fn tick(&mut self) {
         let now = Instant::now();
         self.mark_due_views(now);
+        self.clear_stale_errors();
         if now >= self.next_sweep {
             self.next_sweep = now + SWEEP_EVERY;
             self.sweep();
@@ -167,6 +173,49 @@ impl PostsMonitor {
             let Some(next) = self.next_queued() else { break };
             self.start_download(next);
         }
+    }
+
+    /// Clears the error of failed manual downloads once it has been shown long enough.
+    fn clear_stale_errors(&mut self) {
+        let now = now_secs();
+        let ids: Vec<String> = self
+            .posts
+            .iter()
+            .filter(|p| p.error_at.is_some_and(|t| now >= t + ERROR_SHOW_SECS))
+            .map(|p| p.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        for p in self.posts.iter_mut().filter(|p| ids.contains(&p.id)) {
+            p.error.clear();
+            p.error_at = None;
+        }
+        self.save_lib();
+        self.emit_changed(&ids);
+    }
+
+    /// Stops a queued or running download and returns the post to not saved.
+    fn cancel_download(&mut self, id: &str) {
+        let site = self.post(id).and_then(|p| self.cfg.site(p.site_id)).cloned();
+        let Some(post) = self.post_mut(id).filter(|p| matches!(p.state, PostState::Queued | PostState::Downloading)) else { return };
+        let was_running = post.state == PostState::Downloading;
+        post.state = PostState::Remote;
+        post.attempts = 0;
+        post.manual = false;
+        post.error.clear();
+        post.error_at = None;
+        if was_running {
+            self.downloads = self.downloads.saturating_sub(1);
+            if let Some(h) = self.cancels.remove(id) {
+                h.abort();
+            }
+            if let Some(site) = site {
+                tokio::spawn(runner::discard_partials(site.output_folder(&self.global_dir), id.to_string()));
+            }
+        }
+        self.save_lib();
+        self.emit_changed(&[id.to_string()]);
     }
 
     fn start_check(&mut self, sites: Vec<PostSite>) {
@@ -201,10 +250,12 @@ impl PostsMonitor {
         self.downloads += 1;
         self.emit(PostsEvent::Changed(vec![post.clone()]));
         let (tx, dir) = (self.tx.clone(), self.global_dir.clone());
-        tokio::spawn(async move {
+        let key = id.clone();
+        let task = tokio::spawn(async move {
             let outcome = runner::download(site, post, dir, max_mb, max_secs).await;
             let _ = tx.send(PostsMsg::Downloaded(id, outcome));
         });
+        self.cancels.insert(key, task.abort_handle());
     }
 
     /// Handles the result of background work.
@@ -300,9 +351,13 @@ impl PostsMonitor {
     }
 
     fn on_downloaded(&mut self, id: &str, out: DownloadOutcome) {
+        if self.cancels.remove(id).is_none() {
+            return;
+        }
         self.downloads = self.downloads.saturating_sub(1);
         let mut log = None;
         if let Some(p) = self.post_mut(id) {
+            let was_manual = p.manual;
             p.has_thumb = out.has_thumb;
             p.manual = false;
             if p.state != PostState::Removed {
@@ -311,17 +366,20 @@ impl PostsMonitor {
                         p.state = PostState::Remote;
                         log = Some(format!("Posts: {} skipped: {e}", p.id));
                         p.error = e;
+                        p.error_at = None;
                     }
                     Ok(path) => {
                         p.state = PostState::Ready;
                         p.file = Some(path);
                         p.error.clear();
+                        p.error_at = None;
                     }
                     Err(e) => {
                         p.state = PostState::Failed;
                         p.attempts = p.attempts.saturating_add(1);
                         log = Some(format!("Posts: download of {} failed: {e}", p.id));
                         p.error = e;
+                        p.error_at = was_manual.then(now_secs);
                     }
                 }
             }
@@ -377,10 +435,12 @@ impl PostsMonitor {
                     p.attempts = 0;
                     p.manual = true;
                     p.error.clear();
+                    p.error_at = None;
                 }
                 self.save_lib();
                 self.emit_changed(&[id]);
             }
+            PostsCommand::CancelDownload(id) => self.cancel_download(&id),
             PostsCommand::SetViewed { ids, viewed } => {
                 for p in self.posts.iter_mut().filter(|p| ids.contains(&p.id)) {
                     p.viewed = viewed;
