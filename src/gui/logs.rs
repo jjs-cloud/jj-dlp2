@@ -24,6 +24,16 @@ pub enum LogKind {
     Stderr,
 }
 
+impl LogKind {
+    /// The name used in log file names.
+    pub fn file_label(self) -> &'static str {
+        match self {
+            LogKind::Stdout => "stdout",
+            LogKind::Stderr => "stderr",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LogsMsg {
     Open(PathBuf, String),

@@ -7,12 +7,15 @@ use super::{App, Msg};
 use crate::api::Site;
 use crate::policy::logtail;
 use iced::widget::text::Wrapping;
+use iced::alignment::Horizontal;
 use iced::widget::{Column, Space, button, column, container, row, scrollable, text_editor, toggler};
 use iced::{Alignment, Element, Font, Length, Padding};
 use std::path::PathBuf;
 
-const LIST_W: f32 = 470.0;
-const NAME_W: f32 = 110.0;
+const LIST_W: f32 = 290.0;
+const NAME_W: f32 = 84.0;
+const COL_W: f32 = 80.0;
+const GAP: f32 = 6.0;
 
 impl App {
     pub(super) fn logs_output(&self, s: Skin) -> Element<'_, Msg> {
@@ -20,15 +23,21 @@ impl App {
     }
 
     fn logs_list(&self, s: Skin) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(14).padding(Padding { right: 10.0, ..Padding::ZERO });
+        let mut col = Column::new().spacing(12).padding(Padding { right: 10.0, ..Padding::ZERO });
         if self.settings.sites.is_empty() {
             col = col.push(muted(&s, "Add a site and streamers in Settings to see their logs."));
         }
         for site in &self.settings.sites {
             col = col.push(self.logs_site(s, site));
         }
-        container(column![self.section_title(s, "LOG FILES"), scrollable(col).height(Length::Fill)].spacing(10))
-            .padding(14)
+        let heads = row![
+            Space::new().width(NAME_W),
+            container(muted(&s, "stdout")).width(COL_W).align_x(Horizontal::Center),
+            container(muted(&s, "stderr")).width(COL_W).align_x(Horizontal::Center),
+        ]
+        .spacing(GAP);
+        container(column![self.section_title(s, "LOG FILES"), heads, scrollable(col).height(Length::Fill)].spacing(8))
+            .padding(10)
             .width(LIST_W)
             .height(Length::Fill)
             .style(skin::card(s, None))
@@ -38,41 +47,37 @@ impl App {
     fn logs_site<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
         let id = site.id;
         let name = iced::widget::text(clip(&site.name, 28)).font(s.font).size(14).color(s.site_color(site.color.as_deref()));
-        let toggle = |label: &'static str, on: bool, kind: LogKind| {
-            toggler(on).label(label).on_toggle(move |v| Msg::Logs(LogsMsg::ToggleChecker(id, kind, v))).text_size(12)
+        let line = |label: Element<'a, Msg>, out: Element<'a, Msg>, err: Element<'a, Msg>| {
+            row![container(label).width(NAME_W), out, err].spacing(GAP).align_y(Alignment::Center)
         };
-        let checker = row![
-            container(muted(&s, "Checker")).width(NAME_W),
-            toggle("stdout", site.log_checker_stdout, LogKind::Stdout),
-            toggle("stderr", site.log_checker_stderr, LogKind::Stderr),
-            Space::new().width(Length::Fill),
-            self.view_button(s, logtail::checker_file(&site.name)),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-        let mut col = Column::new().spacing(6).push(name).push(checker);
+        let checker = |kind: LogKind, on: bool| {
+            let file = logtail::checker_file(&site.name, kind.file_label());
+            self.log_cell(s, on, move |v| LogsMsg::ToggleChecker(id, kind, v), file)
+        };
+        let mut col = Column::new().spacing(6).push(name).push(line(
+            muted(&s, "Checker").into(),
+            checker(LogKind::Stdout, site.log_checker_stdout),
+            checker(LogKind::Stderr, site.log_checker_stderr),
+        ));
         for st in self.settings.streamers.iter().filter(|x| x.site_id == site.id) {
             let sid = st.id;
-            let cell = |label: &'static str, on: bool, kind: LogKind| {
-                let path = logtail::stream_file(&site.name, &st.name, label);
-                row![
-                    toggler(on).label(label).on_toggle(move |v| Msg::Logs(LogsMsg::ToggleStreamer(sid, kind, v))).text_size(12),
-                    self.view_button(s, path),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center)
+            let cell = |kind: LogKind, on: bool| {
+                let file = logtail::stream_file(&site.name, &st.name, kind.file_label());
+                self.log_cell(s, on, move |v| LogsMsg::ToggleStreamer(sid, kind, v), file)
             };
-            col = col.push(
-                row![
-                    container(t(&s, clip(&st.name, 14)).size(12)).width(NAME_W),
-                    cell("stdout", st.options.log_stdout, LogKind::Stdout),
-                    cell("stderr", st.options.log_stderr, LogKind::Stderr),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            );
+            col = col.push(line(
+                t(&s, clip(&st.name, 12)).size(12).into(),
+                cell(LogKind::Stdout, st.options.log_stdout),
+                cell(LogKind::Stderr, st.options.log_stderr),
+            ));
         }
         col.into()
+    }
+
+    /// A log switch with the button that opens its file beside it.
+    fn log_cell<'a>(&self, s: Skin, on: bool, make: impl Fn(bool) -> LogsMsg + 'a, path: PathBuf) -> Element<'a, Msg> {
+        let switch = toggler(on).on_toggle(move |v| Msg::Logs(make(v)));
+        container(row![switch, self.view_button(s, path)].spacing(4).align_y(Alignment::Center)).width(COL_W).into()
     }
 
     /// Button that opens a log file in the viewer; disabled until the file exists.
@@ -83,7 +88,7 @@ impl App {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Msg::Logs(LogsMsg::Open(path, name))
         });
-        button(btn_label(&s, "View").size(11)).on_press_maybe(open).padding([3.0, 10.0]).style(skin::btn(s, kind)).into()
+        button(btn_label(&s, "View").size(11)).on_press_maybe(open).padding([3.0, 7.0]).style(skin::btn(s, kind)).into()
     }
 
     fn logs_viewer(&self, s: Skin) -> Element<'_, Msg> {

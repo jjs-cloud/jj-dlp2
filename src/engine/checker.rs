@@ -103,28 +103,27 @@ async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) ->
     Ok(CheckReport { entries, problem, errors })
 }
 
-/// Appends this check's command, exit code and the enabled output streams to the site's checker log.
+/// Appends this check's command, exit code and output to the checker log of each enabled stream.
 fn log_output(site: &Site, exe: &str, args: &[String], output: &std::process::Output, elapsed: Duration) {
     if !site.log_checker_stdout && !site.log_checker_stderr {
         return;
     }
     let code = output.status.code().map_or("?".to_string(), |c| c.to_string());
-    let mut block = format!(
+    let header = format!(
         "{}  {} (exit {code}, {:.1}s)\n",
         logfile::stamp(),
         logfile::cmdline(exe, args),
         elapsed.as_secs_f32()
     );
-    for (on, label, bytes) in [
+    for (on, kind, bytes) in [
         (site.log_checker_stdout, "stdout", &output.stdout),
         (site.log_checker_stderr, "stderr", &output.stderr),
     ] {
         if on {
-            block.push_str(&format!("--- {label} ---\n{}\n", String::from_utf8_lossy(bytes).trim_end()));
+            let block = format!("{header}{}\n\n", String::from_utf8_lossy(bytes).trim_end());
+            logfile::append(&logfile::checker_path(&site.name, kind), &block);
         }
     }
-    block.push('\n');
-    logfile::append(&logfile::checker_path(&site.name), &block);
 }
 
 fn parse_output(kind: CheckOutput, stdout: &str) -> Vec<LiveEntry> {

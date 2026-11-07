@@ -726,9 +726,9 @@ mod e2e {
             }
 
             let logs = settings::config_dir().join("logs");
-            let checker_log = std::fs::read_to_string(logs.join("fake.checker.log")).unwrap();
-            assert!(checker_log.contains("--- stdout ---") && checker_log.contains("vid1"), "{checker_log}");
-            assert!(checker_log.contains("--- stderr ---"), "{checker_log}");
+            let checker_out = std::fs::read_to_string(logs.join("fake.checker.stdout.log")).unwrap();
+            assert!(checker_out.contains("(exit ") && checker_out.contains("vid1"), "{checker_out}");
+            assert!(logs.join("fake.checker.stderr.log").exists());
 
             write_settings(&dir, &script, false);
             p.client.send(Command::Reload);

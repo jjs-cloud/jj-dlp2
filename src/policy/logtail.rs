@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 const CHUNK: u64 = 64 * 1024;
 
-/// Path of a site's checker log.
-pub fn checker_file(site: &str) -> PathBuf {
-    logfile::checker_path(site)
+/// Path of a site's checker log; `kind` is "stdout" or "stderr".
+pub fn checker_file(site: &str, kind: &str) -> PathBuf {
+    logfile::checker_path(site, kind)
 }
 
 /// Path of a streamer's recorder log; `kind` is "stdout" or "stderr".

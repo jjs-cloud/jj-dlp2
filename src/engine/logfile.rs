@@ -25,9 +25,9 @@ pub fn logs_dir() -> PathBuf {
     settings::config_dir().join("logs")
 }
 
-/// Path of a site's checker log, e.g. `twitch.checker.log`.
-pub fn checker_path(site: &str) -> PathBuf {
-    logs_dir().join(format!("{}.checker.log", slug(site)))
+/// Path of a site's checker log; `kind` is "stdout" or "stderr", e.g. `twitch.checker.stdout.log`.
+pub fn checker_path(site: &str, kind: &str) -> PathBuf {
+    logs_dir().join(format!("{}.checker.{kind}.log", slug(site)))
 }
 
 /// Path of a streamer's recorder log; `kind` is "stdout" or "stderr".
@@ -89,7 +89,7 @@ mod tests {
     fn names_are_lowercase_and_safe() {
         let p = stream_path("Twitch", "Emi ru/x", "stderr");
         assert_eq!(p.file_name().unwrap(), "twitch.emi-ru_x.stderr.log");
-        assert_eq!(checker_path("Twitch").file_name().unwrap(), "twitch.checker.log");
+        assert_eq!(checker_path("Twitch", "stdout").file_name().unwrap(), "twitch.checker.stdout.log");
     }
 
     #[test]
