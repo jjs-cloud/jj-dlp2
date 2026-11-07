@@ -262,7 +262,7 @@ async fn frame_thumbnail(video: &Path, id: &str) -> bool {
 }
 
 /// Looks for a finished download whose name contains the post id.
-fn find_by_id(dir: &Path, id: &str, depth: u32) -> Option<PathBuf> {
+pub(super) fn find_by_id(dir: &Path, id: &str, depth: u32) -> Option<PathBuf> {
     const SKIP: [&str; 8] = ["part", "ytdl", "json", "jpg", "jpeg", "webp", "png", "temp"];
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();

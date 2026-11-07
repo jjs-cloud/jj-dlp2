@@ -428,7 +428,7 @@ impl PostsMonitor {
                 Ok(note) => {
                     self.save_lib();
                     self.emit_changed(&[id]);
-                    self.notice(format!("Moved to the recycle bin{note}"));
+                    self.notice(note);
                 }
                 Err(e) => self.notice(format!("Could not delete: {e}")),
             },
@@ -613,17 +613,29 @@ impl PostsMonitor {
         self.emit_changed(&ids);
     }
 
-    /// Sends the downloaded file to the recycle bin, removes its folder if that is now empty, and hides the post; returns a status note.
+    /// Sends the downloaded file to the recycle bin, removes its folder if that is now empty, and hides the post; returns a status message.
     fn trash(&mut self, id: &str) -> Result<String, String> {
         let Some(post) = self.post(id).cloned() else { return Ok(String::new()) };
-        let mut note = String::new();
-        if let Some(f) = post.file.as_deref().filter(|f| Path::new(f).is_file()) {
-            ops::delete(Path::new(f), DeleteMode::Trash).map_err(|e| e.to_string())?;
-            let root = self.cfg.site(post.site_id).map(|s| s.output_folder(&self.global_dir));
-            if let (Some(root), Some(dir)) = (root, Path::new(f).parent()) {
-                note = ops::remove_empty_folder(dir, &root, DeleteMode::Permanent);
+        let root = self.cfg.site(post.site_id).map(|s| s.output_folder(&self.global_dir));
+        let abs = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        let found = post.file.as_deref().map(|f| abs(Path::new(f))).filter(|p| p.is_file()).or_else(|| {
+            post.file.as_ref()?;
+            let dir = root.as_deref()?;
+            runner::find_by_id(dir, &post.id, 3)
+        });
+        let note = match (&post.file, found) {
+            (_, Some(path)) => {
+                ops::delete(&path, DeleteMode::Trash)?;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let folder = match (&root, path.parent()) {
+                    (Some(root), Some(dir)) => ops::remove_empty_folder(dir, root, DeleteMode::Permanent),
+                    _ => String::new(),
+                };
+                format!("Moved {name} to the recycle bin{folder}")
             }
-        }
+            (Some(f), None) => format!("File not found at {f}; removed the post from the list"),
+            (None, None) => "Removed the post from the list".to_string(),
+        };
         let _ = std::fs::remove_file(post.thumb_path());
         if let Some(p) = self.post_mut(id) {
             p.state = PostState::Removed;
