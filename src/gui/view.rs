@@ -51,6 +51,19 @@ pub(super) fn chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color) -> E
         .into()
 }
 
+/// The REC/RECORDING chip; clicking opens the file when one is confirmed.
+fn rec_chip<'a>(s: Skin, label: &'static str, size: f32, pad: [f32; 2], open: Option<RecorderId>) -> Element<'a, Msg> {
+    let text = iced::widget::text(label).font(s.font).size(size).color(s.accent);
+    match open {
+        Some(id) => button(text)
+            .on_press(Msg::OpenRecording(id))
+            .padding(pad)
+            .style(skin::chip_btn(s, s.accent))
+            .into(),
+        None => container(text).padding(pad).style(skin::chip(s, s.accent)).into(),
+    }
+}
+
 fn dot<'a>(s: Skin, color: Color, glow: f32) -> Element<'a, Msg> {
     let _ = s;
     container(Space::new().width(10).height(10))
@@ -185,12 +198,13 @@ fn compact_chips<'a>(
     stalled: bool,
     restarts: u32,
     warns: Warnings,
+    open: Option<RecorderId>,
 ) -> Row<'a, Msg> {
     let mut chips: Row<'a, Msg> = Row::new()
         .spacing(m.spacing / 2.0)
         .align_y(Alignment::Center);
     if status.recording && st.enabled {
-        chips = chips.push(mini_chip(s, m, "REC", s.accent));
+        chips = chips.push(rec_chip(s, "REC", m.chip, [m.chip_pad_v, m.chip_pad_h], open));
     }
     if stalled {
         chips = chips.push(mini_chip(s, m, "STALLED", s.danger));
@@ -658,6 +672,11 @@ impl App {
     }
 
     /// True when any active recording of the streamer is stalled.
+    /// The recording of the streamer whose file is confirmed and can be opened.
+    fn openable_recording(&self, id: StreamerId) -> Option<RecorderId> {
+        self.processes.values().find(|p| p.streamer_id == id && self.recording_openable(p.id)).map(|p| p.id)
+    }
+
     fn streamer_stalled(&self, id: StreamerId) -> bool {
         self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
     }
@@ -763,7 +782,7 @@ impl App {
                 }
                 times.push(iced::widget::text(time_text).font(s.font).size(m.info).color(time_color).wrapping(Wrapping::None))
             },
-            compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id)),
+            compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id), self.openable_recording(id)),
             toggler(st.enabled)
                 .on_toggle(move |v| Msg::ToggleStreamer(id, v))
                 .size(m.toggler),
@@ -1244,7 +1263,7 @@ impl App {
         let id = st.id;
         let mut chips: Row<'_, Msg> = Row::new().spacing(6);
         if status.recording && st.enabled {
-            chips = chips.push(chip(s, "RECORDING", s.accent));
+            chips = chips.push(rec_chip(s, "RECORDING", 11.0, [3.0, 10.0], self.openable_recording(id)));
         }
         if self.streamer_stalled(id) {
             chips = chips.push(chip(s, "STALLED", s.danger));

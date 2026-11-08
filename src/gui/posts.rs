@@ -176,6 +176,7 @@ pub struct PostsState {
     pub last_check: Option<u64>,
     pub checking: bool,
     next_check: Option<u64>,
+    next_site: Option<String>,
     pub newest_first: bool,
     pub card_w: f32,
     pending_jump: Option<String>,
@@ -201,6 +202,7 @@ impl PostsState {
             last_check: None,
             checking: false,
             next_check: None,
+            next_site: None,
             newest_first: prefs.newest_first,
             card_w: prefs.card_w,
             pending_jump: None,
@@ -263,6 +265,12 @@ impl PostsState {
             .or_else(|| self.cfg.sites.first().map(|s| s.id))
     }
 
+    /// The site due next, named only when more than one site is being checked.
+    pub fn next_site_label(&self) -> Option<&str> {
+        let active = self.cfg.sites.iter().filter(|s| s.has_enabled_accounts() && !s.paused).count();
+        self.next_site.as_deref().filter(|_| active > 1)
+    }
+
     /// Seconds until the next check, or `None` while checking, paused or with nothing to check.
     pub fn secs_to_next(&self) -> Option<u64> {
         if self.checking {
@@ -309,6 +317,7 @@ impl PostsState {
                 self.checking = st.checking;
                 self.last_check = st.last_check;
                 self.next_check = st.next_check;
+                self.next_site = st.next_site;
                 self.errors = st.errors.into_iter().map(|e| ((e.site_id, e.name), e.message)).collect();
             }
             PostsEvent::Notice(msg) => self.say(msg),

@@ -61,6 +61,8 @@ pub struct PostsStatus {
     pub last_check: Option<u64>,
     /// Unix time the next check starts; `None` while paused or with nothing to check.
     pub next_check: Option<u64>,
+    /// Name of the site whose check is due first.
+    pub next_site: Option<String>,
     pub errors: Vec<AccountError>,
 }
 

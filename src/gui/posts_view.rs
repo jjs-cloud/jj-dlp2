@@ -124,15 +124,18 @@ impl App {
         } else if p.all_paused() {
             "Paused".to_string()
         } else {
-            p.secs_to_next().map_or("No accounts enabled".to_string(), |n| format!("Next check in {n}s"))
+            p.secs_to_next().map_or("No accounts enabled".to_string(), |n| match p.next_site_label() {
+                Some(site) => format!("Next check in {n}s ({})", clip(site, 18)),
+                None => format!("Next check in {n}s"),
+            })
         };
-        let last = p.last_check.map(|at| format!("Last check {}", fmt_ago(self.now.saturating_sub(at))));
+        let last = p.last_check.map(|at| format!("Last check (all sites) {}", fmt_ago(self.now.saturating_sub(at))));
         let controls = column![
             muted(&s, status),
             muted(&s, last.unwrap_or_default()),
             row![
-                card_btn(s, "Check now", PostsMsg::CheckNow, BtnKind::Ghost),
-                card_btn(s, if p.all_paused() { "Resume" } else { "Pause" }, PostsMsg::Paused(!p.all_paused()), BtnKind::Ghost),
+                card_btn(s, "Check all now", PostsMsg::CheckNow, BtnKind::Ghost),
+                card_btn(s, if p.all_paused() { "Resume all" } else { "Pause all" }, PostsMsg::Paused(!p.all_paused()), BtnKind::Ghost),
             ]
             .spacing(6),
         ]

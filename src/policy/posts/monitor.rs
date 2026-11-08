@@ -126,18 +126,20 @@ impl PostsMonitor {
 
     fn emit_status(&self) {
         let now = Instant::now();
-        let wait = self
+        let soonest = self
             .cfg
             .sites
             .iter()
             .filter(|s| Self::active(s))
-            .map(|s| self.next_check.get(&s.id).map_or(0, |t| t.saturating_duration_since(now).as_secs()))
-            .min();
+            .map(|s| (self.next_check.get(&s.id).map_or(0, |t| t.saturating_duration_since(now).as_secs()), s.name.clone()))
+            .min_by_key(|(w, _)| *w);
+        let wait = soonest.as_ref().map(|(w, _)| *w);
+        let next_site = if self.checking { None } else { soonest.map(|(_, n)| n) };
         let mut errors: Vec<AccountError> =
             self.errors.iter().map(|((site_id, name), message)| AccountError { site_id: *site_id, name: name.clone(), message: message.clone() }).collect();
         errors.sort_by(|a, b| (a.site_id, &a.name).cmp(&(b.site_id, &b.name)));
         let next_check = if self.checking { None } else { wait.map(|w| now_secs() + w) };
-        self.emit(PostsEvent::Status(PostsStatus { checking: self.checking, last_check: self.last_check, next_check, errors }));
+        self.emit(PostsEvent::Status(PostsStatus { checking: self.checking, last_check: self.last_check, next_check, next_site, errors }));
     }
 
     fn post(&self, id: &str) -> Option<&Post> {
