@@ -73,6 +73,7 @@ fn main() {
         }
     };
     if !matches!(mode, Mode::Update(_)) {
+        policy::update::cleanup_stale();
         resets::run();
     }
     match mode {

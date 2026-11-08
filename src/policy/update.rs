@@ -291,6 +291,35 @@ pub fn finish_pending() {
         .spawn();
 }
 
+/// Deletes leftover self-update helper and old-exe files from the app folder (Windows only).
+pub fn cleanup_stale() {
+    #[cfg(windows)]
+    if let Ok(exe) = std::env::current_exe() {
+        if let (Some(dir), Some(stem)) = (exe.parent(), exe.file_stem().and_then(|s| s.to_str())) {
+            remove_stale(dir, stem, &exe);
+        }
+    }
+}
+
+/// Removes `.<stem>.*.__selfdelete__.exe` and `.<stem>.*.__relocated__.exe` files in `dir`, except `keep`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn remove_stale(dir: &Path, stem: &str, keep: &Path) {
+    let prefix = format!(".{stem}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let stale = name.starts_with(&prefix) && (name.ends_with(".__selfdelete__.exe") || name.ends_with(".__relocated__.exe"));
+        if stale && path != keep {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// Returns and clears the error left by a failed install on the previous run.
 pub fn take_last_error() -> Option<String> {
     let text = std::fs::read_to_string(error_file()).ok()?;
@@ -396,5 +425,26 @@ pub fn run_cli(include_rc: bool) -> i32 {
             eprintln!("update failed: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_stale_deletes_only_matching_leftovers() {
+        let dir = std::env::temp_dir().join(format!("jj-dlp-test-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stale = [".jj-dlp.abc.__selfdelete__.exe", ".jj-dlp.abc.__relocated__.exe"];
+        let kept = ["jj-dlp.exe", ".other.abc.__selfdelete__.exe", ".jj-dlp.abc.__temp__.exe"];
+        for n in stale.iter().chain(kept.iter()) {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        remove_stale(&dir, "jj-dlp", &dir.join("jj-dlp.exe"));
+        assert!(stale.iter().all(|n| !dir.join(n).exists()));
+        assert!(kept.iter().all(|n| dir.join(n).exists()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
