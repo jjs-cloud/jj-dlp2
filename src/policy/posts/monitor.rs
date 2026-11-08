@@ -31,7 +31,8 @@ pub struct PostsMonitor {
     events: UnboundedSender<PolicyEvent>,
     tx: UnboundedSender<PostsMsg>,
     global_dir: String,
-    checking: bool,
+    /// Sites whose check is running.
+    checking: HashSet<SiteId>,
     next_check: HashMap<SiteId, Instant>,
     errors: HashMap<AccountKey, String>,
     /// Ids of X posts found to have no video; not saved.
@@ -55,7 +56,7 @@ impl PostsMonitor {
             events,
             tx,
             global_dir,
-            checking: false,
+            checking: HashSet::new(),
             errors: HashMap::new(),
             no_video: HashSet::new(),
             downloads: 0,
@@ -134,7 +135,9 @@ impl PostsMonitor {
         let mut errors: Vec<AccountError> =
             self.errors.iter().map(|((site_id, name), message)| AccountError { site_id: *site_id, name: name.clone(), message: message.clone() }).collect();
         errors.sort_by(|a, b| (a.site_id, &a.name).cmp(&(b.site_id, &b.name)));
-        self.emit(PostsEvent::Status(PostsStatus { checking: self.checking, next_checks, errors }));
+        let mut checking: Vec<SiteId> = self.checking.iter().copied().collect();
+        checking.sort();
+        self.emit(PostsEvent::Status(PostsStatus { checking, next_checks, errors }));
     }
 
     fn post(&self, id: &str) -> Option<&Post> {
@@ -155,17 +158,15 @@ impl PostsMonitor {
             self.next_sweep = now + SWEEP_EVERY;
             self.sweep();
         }
-        if !self.checking {
-            let due: Vec<PostSite> = self
-                .cfg
-                .sites
-                .iter()
-                .filter(|s| Self::active(s) && self.next_check.get(&s.id).is_none_or(|t| now >= *t))
-                .cloned()
-                .collect();
-            if !due.is_empty() {
-                self.start_check(due);
-            }
+        let due: Vec<PostSite> = self
+            .cfg
+            .sites
+            .iter()
+            .filter(|s| Self::active(s) && !self.checking.contains(&s.id) && self.next_check.get(&s.id).is_none_or(|t| now >= *t))
+            .cloned()
+            .collect();
+        for site in due {
+            self.start_check(site);
         }
         while self.downloads < MAX_DOWNLOADS {
             let Some(next) = self.next_queued() else { break };
@@ -216,12 +217,12 @@ impl PostsMonitor {
         self.emit_changed(&[id.to_string()]);
     }
 
-    fn start_check(&mut self, sites: Vec<PostSite>) {
-        self.checking = true;
+    fn start_check(&mut self, site: PostSite) {
+        self.checking.insert(site.id);
         let known: HashSet<String> = self.posts.iter().map(|p| p.id.clone()).collect();
         let (no_video, tx) = (self.no_video.clone(), self.tx.clone());
         tokio::spawn(async move {
-            let _ = tx.send(PostsMsg::Checked(runner::check_cycle(sites, known, no_video).await));
+            let _ = tx.send(PostsMsg::Checked(runner::check_cycle(vec![site], known, no_video).await));
         });
         self.emit_status();
     }
@@ -275,8 +276,8 @@ impl PostsMonitor {
     fn on_checked(&mut self, report: CycleReport) {
         let now = Instant::now();
         let mut changed: Vec<String> = Vec::new();
-        self.checking = false;
         for sid in &report.site_ids {
+            self.checking.remove(sid);
             if let Some(site) = self.cfg.site(*sid) {
                 self.next_check.insert(*sid, now + Duration::from_secs(site.interval_or_default()));
             }

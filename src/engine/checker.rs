@@ -54,7 +54,6 @@ pub fn spawn_worker(snap: SiteSnapshot, internal: UnboundedSender<Internal>) -> 
 async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedSender<Internal>) {
     loop {
         let snap = rx.borrow_and_update().clone();
-        let started = Instant::now();
         if !snap.urls.is_empty() && !snap.site.paused {
             let result = run_check(&snap, &internal).await;
             let msg = Internal::CheckResult { site_id: snap.site.id, at: now_secs(), result };
@@ -62,8 +61,8 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
                 return;
             }
         }
-        let interval = Duration::from_secs(snap.site.interval_or_default().max(5));
-        let wait = interval.saturating_sub(started.elapsed());
+        // The interval starts once the checker process has exited.
+        let wait = Duration::from_secs(snap.site.interval_or_default().max(5));
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             changed = rx.changed() => if changed.is_err() { return; }

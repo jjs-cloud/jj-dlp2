@@ -6,7 +6,7 @@ use crate::policy::posts::{Post, PostSite, PostState, PostsCommand, PostsConfig,
 use crate::policy::PolicyCommand;
 use iced::widget::text_editor::{Action, Content, Edit};
 use iced::Task;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Cards shown before "Show more" is pressed, and added by each press.
@@ -173,7 +173,7 @@ pub struct PostsState {
     pub added: Option<(String, u64)>,
     pub confirm_remove: Option<SiteId>,
     pub errors: HashMap<AccountKey, String>,
-    pub checking: bool,
+    pub checking: HashSet<SiteId>,
     next_checks: HashMap<SiteId, u64>,
     pub newest_first: bool,
     pub card_w: f32,
@@ -197,7 +197,7 @@ impl PostsState {
             added: None,
             confirm_remove: None,
             errors: HashMap::new(),
-            checking: false,
+            checking: HashSet::new(),
             next_checks: HashMap::new(),
             newest_first: prefs.newest_first,
             card_w: prefs.card_w,
@@ -266,7 +266,7 @@ impl PostsState {
         if site.paused {
             return Some("paused".to_string());
         }
-        if self.checking {
+        if self.checking.contains(&site.id) {
             return Some("checking…".to_string());
         }
         self.next_checks.get(&site.id).map(|at| format!("{}s", at.saturating_sub(now_secs())))
@@ -307,7 +307,7 @@ impl PostsState {
             }
             PostsEvent::Removed(ids) => self.posts.retain(|p| !ids.contains(&p.id)),
             PostsEvent::Status(st) => {
-                self.checking = st.checking;
+                self.checking = st.checking.into_iter().collect();
                 self.next_checks = st.next_checks.into_iter().collect();
                 self.errors = st.errors.into_iter().map(|e| ((e.site_id, e.name), e.message)).collect();
             }
