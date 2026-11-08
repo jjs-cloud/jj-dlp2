@@ -2,6 +2,7 @@
 
 use super::{App, Msg, prefs};
 use crate::api::{SiteId, StreamerId};
+use crate::policy::posts::{LogTarget, PostsCommand};
 use crate::policy::{PolicyCommand, logtail};
 use iced::Task;
 use iced::widget::text_editor::{Action, Content, Edit, Motion};
@@ -45,6 +46,8 @@ pub enum LogsMsg {
     Copy,
     ToggleStreamer(StreamerId, LogKind, bool),
     ToggleChecker(SiteId, LogKind, bool),
+    TogglePostChecker(SiteId, String, LogKind, bool),
+    TogglePostDownloader(SiteId, LogKind, bool),
 }
 
 pub struct LogsState {
@@ -242,6 +245,8 @@ impl App {
             }
             LogsMsg::ToggleStreamer(id, kind, on) => self.toggle_streamer_log(id, kind, on),
             LogsMsg::ToggleChecker(id, kind, on) => self.toggle_checker_log(id, kind, on),
+            LogsMsg::TogglePostChecker(site_id, name, kind, on) => self.set_post_log(site_id, LogTarget::Checker(name), kind, on),
+            LogsMsg::TogglePostDownloader(site_id, kind, on) => self.set_post_log(site_id, LogTarget::Downloader, kind, on),
         }
         Task::none()
     }
@@ -288,6 +293,12 @@ impl App {
             }
         }
         self.client.send(PolicyCommand::UpdateSite(site));
+    }
+
+    /// Asks the Posts monitor to turn one of a Posts site's command logs on or off.
+    fn set_post_log(&mut self, site_id: SiteId, target: LogTarget, kind: LogKind, on: bool) {
+        let stderr = kind == LogKind::Stderr;
+        self.client.send(PolicyCommand::Posts(PostsCommand::SetLog { site_id, target, stderr, on }));
     }
 }
 

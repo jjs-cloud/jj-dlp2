@@ -6,6 +6,7 @@ use super::view::{btn_label, clip, muted, t};
 use super::{App, Msg};
 use crate::api::Site;
 use crate::policy::logtail;
+use crate::policy::posts::PostSite;
 use iced::widget::text::Wrapping;
 use iced::alignment::Horizontal;
 use iced::widget::{Column, Space, button, column, container, row, scrollable, text_editor, toggler};
@@ -17,6 +18,11 @@ const NAME_W: f32 = 84.0;
 const COL_W: f32 = 80.0;
 const GAP: f32 = 6.0;
 
+/// One row of the file list: a label, then the stdout and stderr cells.
+fn log_line<'a>(label: Element<'a, Msg>, out: Element<'a, Msg>, err: Element<'a, Msg>) -> Element<'a, Msg> {
+    row![container(label).width(NAME_W), out, err].spacing(GAP).align_y(Alignment::Center).into()
+}
+
 impl App {
     pub(super) fn logs_output(&self, s: Skin) -> Element<'_, Msg> {
         row![self.logs_list(s), self.logs_viewer(s)].spacing(12).height(Length::Fill).into()
@@ -24,11 +30,17 @@ impl App {
 
     fn logs_list(&self, s: Skin) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(12).padding(Padding { right: 10.0, ..Padding::ZERO });
-        if self.settings.sites.is_empty() {
-            col = col.push(muted(&s, "Add a site and streamers in Settings to see their logs."));
+        if self.settings.sites.is_empty() && self.posts.cfg.sites.is_empty() {
+            col = col.push(muted(&s, "Add a site and streamers in Settings, or a Posts site, to see their logs."));
         }
         for site in &self.settings.sites {
             col = col.push(self.logs_site(s, site));
+        }
+        if !self.posts.cfg.sites.is_empty() {
+            col = col.push(self.section_title(s, "POSTS"));
+        }
+        for site in &self.posts.cfg.sites {
+            col = col.push(self.logs_post_site(s, site));
         }
         let heads = row![
             Space::new().width(NAME_W),
@@ -47,14 +59,11 @@ impl App {
     fn logs_site<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
         let id = site.id;
         let name = iced::widget::text(clip(&site.name, 28)).font(s.font).size(14).color(s.site_color(site.color.as_deref()));
-        let line = |label: Element<'a, Msg>, out: Element<'a, Msg>, err: Element<'a, Msg>| {
-            row![container(label).width(NAME_W), out, err].spacing(GAP).align_y(Alignment::Center)
-        };
         let checker = |kind: LogKind, on: bool| {
             let file = logtail::checker_file(&site.name, kind.file_label());
             self.log_cell(s, on, move |v| LogsMsg::ToggleChecker(id, kind, v), file)
         };
-        let mut col = Column::new().spacing(6).push(name).push(line(
+        let mut col = Column::new().spacing(6).push(name).push(log_line(
             muted(&s, "Checker").into(),
             checker(LogKind::Stdout, site.log_checker_stdout),
             checker(LogKind::Stderr, site.log_checker_stderr),
@@ -65,10 +74,40 @@ impl App {
                 let file = logtail::stream_file(&site.name, &st.name, kind.file_label());
                 self.log_cell(s, on, move |v| LogsMsg::ToggleStreamer(sid, kind, v), file)
             };
-            col = col.push(line(
+            col = col.push(log_line(
                 t(&s, clip(&st.name, 12)).size(12).into(),
                 cell(LogKind::Stdout, st.options.log_stdout),
                 cell(LogKind::Stderr, st.options.log_stderr),
+            ));
+        }
+        col.into()
+    }
+
+    /// A Posts site's downloader row, then one checker row per account.
+    fn logs_post_site<'a>(&'a self, s: Skin, site: &'a PostSite) -> Element<'a, Msg> {
+        let id = site.id;
+        let downloader = |kind: LogKind, on: bool| {
+            let file = logtail::posts_download_file(&site.name, kind.file_label());
+            self.log_cell(s, on, move |v| LogsMsg::TogglePostDownloader(id, kind, v), file)
+        };
+        let mut col = Column::new().spacing(6).push(t(&s, clip(&site.name, 28)).size(14)).push(log_line(
+            muted(&s, "Downloader").into(),
+            downloader(LogKind::Stdout, site.log_download_stdout),
+            downloader(LogKind::Stderr, site.log_download_stderr),
+        ));
+        if !site.accounts.is_empty() {
+            col = col.push(muted(&s, "Checker per account"));
+        }
+        for acct in &site.accounts {
+            let cell = |kind: LogKind, on: bool| {
+                let name = acct.name.clone();
+                let file = logtail::posts_checker_file(&site.name, &name, kind.file_label());
+                self.log_cell(s, on, move |v| LogsMsg::TogglePostChecker(id, name.clone(), kind, v), file)
+            };
+            col = col.push(log_line(
+                t(&s, clip(&format!("@{}", acct.name), 12)).size(12).into(),
+                cell(LogKind::Stdout, acct.log_stdout),
+                cell(LogKind::Stderr, acct.log_stderr),
             ));
         }
         col.into()

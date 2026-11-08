@@ -5,13 +5,14 @@ use super::store::{sidecar_path, thumbs_dir};
 use super::xprofile;
 use crate::api::now_secs;
 use crate::engine::exepath;
+use crate::engine::logfile::{self, CmdLog};
 use crate::policy::notify;
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 use std::io::Read;
 use std::process::Stdio;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(180);
@@ -78,14 +79,35 @@ fn error_line(stderr: &str) -> Option<String> {
     Some(line.chars().take(220).collect())
 }
 
-async fn run(exe: &str, args: &[String], limit: Duration) -> Result<std::process::Output, String> {
-    let mut cmd = Command::new(resolve_and_note(exe));
+/// The log of an account's checker commands.
+fn checker_log(site: &PostSite, acct: &Account) -> CmdLog {
+    CmdLog::new(acct.log_stdout, acct.log_stderr, |k| logfile::posts_checker_path(&site.name, &acct.name, k))
+}
+
+/// The log of a site's downloader commands.
+fn download_log(site: &PostSite) -> CmdLog {
+    CmdLog::new(site.log_download_stdout, site.log_download_stderr, |k| logfile::posts_download_path(&site.name, k))
+}
+
+async fn run(exe: &str, args: &[String], limit: Duration, log: &CmdLog) -> Result<std::process::Output, String> {
+    let resolved = resolve_and_note(exe);
+    let mut cmd = Command::new(&resolved);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::engine::hide_window(&mut cmd);
+    let started = Instant::now();
     match tokio::time::timeout(limit, cmd.output()).await {
-        Ok(Ok(out)) => Ok(out),
-        Ok(Err(e)) => Err(format!("failed to start '{exe}': {e}")),
-        Err(_) => Err(format!("{TIMEOUT_PREFIX} after {}s", limit.as_secs())),
+        Ok(Ok(out)) => {
+            log.output(&resolved, args, &out, started.elapsed());
+            Ok(out)
+        }
+        Ok(Err(e)) => {
+            log.failure(&resolved, args, &format!("failed to start: {e}"));
+            Err(format!("failed to start '{exe}': {e}"))
+        }
+        Err(_) => {
+            log.failure(&resolved, args, &format!("timed out after {}s", limit.as_secs()));
+            Err(format!("{TIMEOUT_PREFIX} after {}s", limit.as_secs()))
+        }
     }
 }
 
@@ -107,7 +129,7 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>,
         return check_x_account(site, acct, &user, known, no_video).await;
     }
     let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e), lookups: Vec::new() };
-    let out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT).await {
+    let out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT, &checker_log(site, acct)).await {
         Ok(o) => o,
         Err(e) => return fail(e),
     };
@@ -138,9 +160,10 @@ async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &Ha
         return AccountReport { error: Some("X returned no posts; the profile may be private or need a login".into()), ..report };
     }
     let mut last_error = None;
+    let log = checker_log(site, acct);
     for id in ids.into_iter().filter(|id| !known.contains(id) && !no_video.contains(id)) {
         let url = format!("https://x.com/{user}/status/{id}");
-        let out = match run(site.exe_or_default(), &checker_cmd(site, &url), INFO_TIMEOUT).await {
+        let out = match run(site.exe_or_default(), &checker_cmd(site, &url), INFO_TIMEOUT, &log).await {
             Ok(o) => o,
             Err(e) => {
                 last_error = Some(e);
@@ -175,7 +198,7 @@ async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> (Post, 
             _ => "title",
         };
         lookup = Some(format!("Posts: {} @{}: {missing} missing for {}, running an extra yt-dlp call", site.name, acct.name, entry.id));
-        if let Some(full) = fetch_info(site, &entry.url).await {
+        if let Some(full) = fetch_info(site, &entry.url, &checker_log(site, acct)).await {
             entry.thumb_url = entry.thumb_url.or(full.thumb_url);
             entry.posted_at = entry.posted_at.or(full.posted_at);
             entry.duration = entry.duration.or(full.duration);
@@ -204,8 +227,8 @@ async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> (Post, 
 }
 
 /// Full metadata of one post, or `None` when yt-dlp could not read it.
-async fn fetch_info(site: &PostSite, url: &str) -> Option<Entry> {
-    let out = run(site.exe_or_default(), &checker_cmd(site, url), INFO_TIMEOUT).await.ok()?;
+async fn fetch_info(site: &PostSite, url: &str, log: &CmdLog) -> Option<Entry> {
+    let out = run(site.exe_or_default(), &checker_cmd(site, url), INFO_TIMEOUT, log).await.ok()?;
     String::from_utf8_lossy(&out.stdout).lines().find_map(parse_entry)
 }
 
@@ -319,7 +342,7 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
     let _ = std::fs::remove_file(&sidecar);
     let args = download_cmd(&site, &post.url, &folder.to_string_lossy(), &sidecar, max_mb);
     let limit = max_secs.map_or(DOWNLOAD_TIMEOUT, Duration::from_secs);
-    let out = match run(site.exe_or_default(), &args, limit).await {
+    let out = match run(site.exe_or_default(), &args, limit, &download_log(&site)).await {
         Ok(o) => o,
         Err(e) if max_secs.is_some() && e.starts_with(TIMEOUT_PREFIX) => {
             remove_partials(&folder, &post.id, 3);
@@ -350,7 +373,7 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
 
 /// The stream playlist URL yt-dlp reports for a post.
 pub async fn resolve_m3u8(site: PostSite, url: String) -> Result<String, String> {
-    let out = run(site.exe_or_default(), &m3u8_cmd(&site, &url), M3U8_TIMEOUT).await?;
+    let out = run(site.exe_or_default(), &m3u8_cmd(&site, &url), M3U8_TIMEOUT, &download_log(&site)).await?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if let Some(line) = stdout.lines().map(str::trim).find(|l| l.starts_with("http")) {
         return Ok(line.to_string());

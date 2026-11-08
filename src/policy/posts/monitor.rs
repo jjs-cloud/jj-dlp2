@@ -2,7 +2,7 @@
 
 use super::runner::{self, CycleReport, DownloadOutcome};
 use super::store;
-use super::{AccountError, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, SiteId};
+use super::{AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, SiteId};
 use crate::api::{now_secs, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
@@ -463,6 +463,7 @@ impl PostsMonitor {
             PostsCommand::RemoveSite(id) => self.remove_site(id),
             PostsCommand::AddAccount { site_id, input } => self.add_account(site_id, &input),
             PostsCommand::RemoveAccount { site_id, name } => self.remove_account(site_id, &name),
+            PostsCommand::SetLog { site_id, target, stderr, on } => self.set_log(site_id, &target, stderr, on),
             PostsCommand::OpenOutputDir(id) => {
                 if let Some(site) = self.cfg.site(id) {
                     let dir = site.output_folder(&self.global_dir);
@@ -497,12 +498,29 @@ impl PostsMonitor {
         }
         let Some(slot) = self.cfg.site_mut(site.id) else { return };
         let accounts = std::mem::take(&mut slot.accounts);
-        *slot = PostSite { accounts, ..site };
+        let (log_download_stdout, log_download_stderr) = (slot.log_download_stdout, slot.log_download_stderr);
+        *slot = PostSite { accounts, log_download_stdout, log_download_stderr, ..site };
         self.next_sweep = Instant::now();
         self.save_cfg();
         self.emit_config();
         self.emit_status();
         self.notice("Changes saved");
+    }
+
+    fn set_log(&mut self, site_id: SiteId, target: &LogTarget, stderr: bool, on: bool) {
+        let Some(site) = self.cfg.site_mut(site_id) else { return };
+        let flag = match target {
+            LogTarget::Checker(name) => {
+                let Some(acct) = site.accounts.iter_mut().find(|a| a.name == *name) else { return };
+                if stderr { &mut acct.log_stderr } else { &mut acct.log_stdout }
+            }
+            LogTarget::Downloader => {
+                if stderr { &mut site.log_download_stderr } else { &mut site.log_download_stdout }
+            }
+        };
+        *flag = on;
+        self.save_cfg();
+        self.emit_config();
     }
 
     fn remove_site(&mut self, id: SiteId) {
@@ -741,5 +759,25 @@ mod tests {
         m.handle(PostsCommand::UpdateSite(edited));
         let site = m.cfg.site(site_id).unwrap();
         assert_eq!((site.name.as_str(), site.accounts.len()), ("Renamed", 1));
+    }
+
+    #[test]
+    fn log_switches_are_set_per_target_and_survive_site_edits() {
+        let _sb = Sandbox::new("posts-logs");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let (mut m, mut rx) = monitor();
+        m.handle(PostsCommand::AddSite(paused_site("Test")));
+        let site_id = m.cfg.sites.last().unwrap().id;
+        m.handle(PostsCommand::AddAccount { site_id, input: "someone".into() });
+        drain(&mut rx);
+        m.handle(PostsCommand::SetLog { site_id, target: LogTarget::Checker("someone".into()), stderr: true, on: true });
+        m.handle(PostsCommand::SetLog { site_id, target: LogTarget::Downloader, stderr: false, on: true });
+        let site = m.cfg.site(site_id).unwrap();
+        assert_eq!((site.accounts[0].log_stdout, site.accounts[0].log_stderr), (false, true));
+        assert_eq!((site.log_download_stdout, site.log_download_stderr), (true, false));
+        let edited = PostSite { id: site_id, name: "Test".into(), paused: true, ..Default::default() };
+        m.handle(PostsCommand::UpdateSite(edited));
+        assert!(m.cfg.site(site_id).unwrap().log_download_stdout);
     }
 }

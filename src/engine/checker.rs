@@ -87,12 +87,20 @@ async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) ->
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     hide_window(&mut cmd);
+    let log = logfile::CmdLog::new(snap.site.log_checker_stdout, snap.site.log_checker_stderr, |k| logfile::checker_path(&snap.site.name, k));
     let started = Instant::now();
-    let output = tokio::time::timeout(CHECK_TIMEOUT, cmd.output())
-        .await
-        .map_err(|_| format!("checker timed out after {}s", CHECK_TIMEOUT.as_secs()))?
-        .map_err(|e| format!("failed to start '{}': {e}", exe.exe))?;
-    log_output(&snap.site, &exe.exe, &args, &output, started.elapsed());
+    let output = match tokio::time::timeout(CHECK_TIMEOUT, cmd.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            log.failure(&exe.exe, &args, &format!("failed to start: {e}"));
+            return Err(format!("failed to start '{}': {e}", exe.exe));
+        }
+        Err(_) => {
+            log.failure(&exe.exe, &args, &format!("timed out after {}s", CHECK_TIMEOUT.as_secs()));
+            return Err(format!("checker timed out after {}s", CHECK_TIMEOUT.as_secs()));
+        }
+    };
+    log.output(&exe.exe, &args, &output, started.elapsed());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let entries = parse_output(kind, &stdout);
     let stderr: Vec<String> = String::from_utf8_lossy(&output.stderr).lines().map(str::to_string).collect();
@@ -100,29 +108,6 @@ async fn run_check(snap: &SiteSnapshot, internal: &UnboundedSender<Internal>) ->
     let problem = diagnose::check_problem(&stderr, status.success(), status.code(), !entries.is_empty());
     let errors = diagnose::error_problems(&stderr);
     Ok(CheckReport { entries, problem, errors })
-}
-
-/// Appends this check's command, exit code and output to the checker log of each enabled stream.
-fn log_output(site: &Site, exe: &str, args: &[String], output: &std::process::Output, elapsed: Duration) {
-    if !site.log_checker_stdout && !site.log_checker_stderr {
-        return;
-    }
-    let code = output.status.code().map_or("?".to_string(), |c| c.to_string());
-    let header = format!(
-        "{}  {} (exit {code}, {:.1}s)\n",
-        logfile::stamp(),
-        logfile::cmdline(exe, args),
-        elapsed.as_secs_f32()
-    );
-    for (on, kind, bytes) in [
-        (site.log_checker_stdout, "stdout", &output.stdout),
-        (site.log_checker_stderr, "stderr", &output.stderr),
-    ] {
-        if on {
-            let block = format!("{header}{}\n\n", String::from_utf8_lossy(bytes).trim_end());
-            logfile::append(&logfile::checker_path(&site.name, kind), &block);
-        }
-    }
 }
 
 fn parse_output(kind: CheckOutput, stdout: &str) -> Vec<LiveEntry> {

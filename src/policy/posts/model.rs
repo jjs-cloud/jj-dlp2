@@ -72,6 +72,12 @@ pub struct Account {
     pub enabled: bool,
     /// True once a check of this account has succeeded.
     pub baselined: bool,
+    /// Writes the checker's stdout to this account's log file.
+    #[serde(default)]
+    pub log_stdout: bool,
+    /// Writes the checker's stderr to this account's log file.
+    #[serde(default)]
+    pub log_stderr: bool,
 }
 
 /// A website whose accounts are checked, with its own commands and settings.
@@ -112,6 +118,10 @@ pub struct PostSite {
     pub player_path: String,
     /// Unstarred posts older than this many days are deleted; `None` keeps them.
     pub auto_delete_days: Option<u64>,
+    /// Writes the downloader's stdout to the site's log file.
+    pub log_download_stdout: bool,
+    /// Writes the downloader's stderr to the site's log file.
+    pub log_download_stderr: bool,
     pub accounts: Vec<Account>,
 }
 
@@ -140,6 +150,8 @@ impl Default for PostSite {
             m3u8_args: String::new(),
             player_path: String::new(),
             auto_delete_days: Some(DEFAULT_AUTO_DELETE_DAYS),
+            log_download_stdout: false,
+            log_download_stderr: false,
             accounts: Vec::new(),
         }
     }
@@ -248,7 +260,7 @@ impl PostSite {
             return None;
         }
         let dup = self.accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name) || a.url == url);
-        (!dup).then_some(Account { name, url, enabled: true, baselined: false })
+        (!dup).then_some(Account { name, url, enabled: true, baselined: false, log_stdout: false, log_stderr: false })
     }
 }
 

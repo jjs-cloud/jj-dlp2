@@ -43,6 +43,17 @@ pub enum PostsCommand {
     RemoveAccount { site_id: SiteId, name: String },
     /// Opens a site's download folder, creating it when missing.
     OpenOutputDir(SiteId),
+    /// Turns the stdout or stderr log of an account's checker or a site's downloader on or off.
+    SetLog { site_id: SiteId, target: LogTarget, stderr: bool, on: bool },
+}
+
+/// The command a log file belongs to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LogTarget {
+    /// The checker of the account with this name.
+    Checker(String),
+    /// The site's downloader.
+    Downloader,
 }
 
 /// An account whose last check failed.

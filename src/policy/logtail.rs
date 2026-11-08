@@ -18,6 +18,16 @@ pub fn stream_file(site: &str, streamer: &str, kind: &str) -> PathBuf {
     logfile::stream_path(site, streamer, kind)
 }
 
+/// Path of a Posts account's checker log; `kind` is "stdout" or "stderr".
+pub fn posts_checker_file(site: &str, account: &str, kind: &str) -> PathBuf {
+    logfile::posts_checker_path(site, account, kind)
+}
+
+/// Path of a Posts site's downloader log; `kind` is "stdout" or "stderr".
+pub fn posts_download_file(site: &str, kind: &str) -> PathBuf {
+    logfile::posts_download_path(site, kind)
+}
+
 /// File names currently in the logs folder.
 pub fn existing() -> HashSet<String> {
     let Ok(dir) = std::fs::read_dir(logfile::logs_dir()) else { return HashSet::new() };
