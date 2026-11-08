@@ -525,10 +525,16 @@ impl App {
             .into()
     }
 
-    /// Picks two columns when the window is at least the column threshold wide, else one; sizes rows to fit.
+    /// Picks three or two columns when the window is at least that threshold wide, else one; sizes rows to fit.
     fn compact_layout(&self, rows: usize, extra_h: f32) -> (usize, f32) {
         let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h - 2.0 * COLUMN_FRAME).max(0.0);
-        let cols = if self.win_w >= self.two_col_w { 2 } else { 1 };
+        let cols = if self.win_w >= self.three_col_w {
+            3
+        } else if self.win_w >= self.two_col_w {
+            2
+        } else {
+            1
+        };
         let per_col = rows.div_ceil(cols).max(1);
         let fit = ((avail + ROW_GAP) / per_col as f32 - ROW_GAP).floor();
         (cols, fit.clamp(self.row_min, self.row_max))
@@ -1787,7 +1793,7 @@ impl App {
 
         let row_size = |label: &'static str, value: f32, on_change: fn(f32) -> Msg| {
             row![
-                t(&s, label).size(13).width(110),
+                t(&s, label).size(13).width(150),
                 slider(
                     prefs::ROW_MIN_LIMIT..=prefs::ROW_MAX_LIMIT,
                     value,
@@ -1802,7 +1808,7 @@ impl App {
             .align_y(Alignment::Center)
         };
         let two_col = row![
-            t(&s, "Column threshold").size(13).width(110),
+            t(&s, "Two column threshold").size(13).width(150),
             slider(
                 prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
                 self.two_col_w,
@@ -1815,8 +1821,22 @@ impl App {
         ]
         .spacing(12)
         .align_y(Alignment::Center);
+        let three_col = row![
+            t(&s, "Three column threshold").size(13).width(150),
+            slider(
+                prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
+                self.three_col_w,
+                Msg::SetThreeColWidth
+            )
+            .step(10.0_f32)
+            .on_release(Msg::SaveThreeColWidth)
+            .width(Length::Fill),
+            muted(&s, format!("{:.0} px", self.three_col_w)).width(90),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
         let name_clip = row![
-            t(&s, "Name Length").size(13).width(110),
+            t(&s, "Name Length").size(13).width(150),
             slider(
                 prefs::NAME_CLIP_MIN_LIMIT..=prefs::NAME_CLIP_MAX_LIMIT,
                 self.name_clip,
@@ -1830,7 +1850,7 @@ impl App {
         .spacing(12)
         .align_y(Alignment::Center);
         let log_lines = row![
-            t(&s, "Buffer Length").size(13).width(110),
+            t(&s, "Buffer Length").size(13).width(150),
             slider(prefs::LOG_LINES_MIN_LIMIT..=prefs::LOG_LINES_MAX_LIMIT, self.log_lines, Msg::SetLogLines)
                 .step(100.0_f32)
                 .on_release(Msg::SaveLogLines)
@@ -1851,11 +1871,13 @@ impl App {
             .align_y(Alignment::Center),
             muted(&s, "Row Size Max: The tallest a row can be; rows start here when there is room."),
             muted(&s, "Row Size Min: The shortest a row can shrink to as streamers are added."),
-            muted(&s, "Column threshold: The window width at which the list switches to two columns."),
+            muted(&s, "Two column threshold: The window width at which the list switches to two columns."),
+            muted(&s, "Three column threshold: The window width at which the list switches to three columns."),
             muted(&s, "Name Length: Longer names are cut off with …; hover shows the full name."),
             row_size("Row Size Max", self.row_max, Msg::SetRowMax),
             row_size("Row Size Min", self.row_min, Msg::SetRowMin),
             two_col,
+            three_col,
             name_clip,
         ]
         .spacing(8);

@@ -151,7 +151,7 @@ impl App {
         if shown.len() > HEADER_MAX {
             let rest = &shown[HEADER_MAX..];
             let color = if rest.iter().any(|d| d.is_low()) { s.warn } else { s.muted };
-            let lines: Vec<String> = rest.iter().map(|d| format!("{}: {} free", d.label(), disks::free_text(d.total, d.free))).collect();
+            let lines: Vec<String> = rest.iter().map(|d| format!("{}: {}", d.label(), disks::free_text(d.total, d.free))).collect();
             chips = chips.push(tooltip(chip(s, format!("+{}", rest.len()), color), tip(s, lines.join("\n")), tooltip::Position::Bottom));
         }
         Some(chips.into())
@@ -167,7 +167,7 @@ impl App {
         if !d.used_by.is_empty() {
             lines.push(format!("Used by: {}", d.used_by.join(", ")));
         }
-        tooltip(chip(s, format!("{} {free} free", short_label(d)), color), tip(s, lines.join("\n")), tooltip::Position::Bottom).into()
+        tooltip(chip(s, format!("{} {free}", short_label(d)), color), tip(s, lines.join("\n")), tooltip::Position::Bottom).into()
     }
 
     /// The Settings > General card listing the tracked drives and the list for adding more.
@@ -175,10 +175,11 @@ impl App {
         let mut col = column![
             self.section_title(s, "DISK SPACE"),
             muted(&s, "Drives holding your output folders are tracked automatically and shown in the header and in notifications."),
-            toggler(self.disk_limits.show_percent)
-                .label("Show percentage")
-                .on_toggle(Msg::DiskShowPercent)
-                .text_size(12),
+            row![
+                toggler(self.disk_limits.show_percent).label("Show percentage").on_toggle(Msg::DiskShowPercent).text_size(12),
+                toggler(self.disk_limits.show_free).label("Show free").on_toggle(Msg::DiskShowFree).text_size(12),
+            ]
+            .spacing(24),
             self.low_limits_row(s),
         ]
         .spacing(8);

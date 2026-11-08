@@ -450,7 +450,19 @@ impl App {
             cell(column![muted(&s, " "), toggle("Notifications", d.notify, SiteField::Notify)].spacing(2).into(), Length::Shrink),
             cell(column![muted(&s, " "), sub_toggle("Desktop", d.notify_desktop, SiteField::NotifyDesktop)].spacing(2).into(), Length::Shrink),
             cell(column![muted(&s, " "), sub_toggle("Mobile (ntfy)", d.notify_ntfy, SiteField::NotifyNtfy)].spacing(2).into(), Length::Shrink),
-            cell(input("NTFY topic (example: j73hd92xl)", "", &d.ntfy_topic, SiteField::NtfyTopic, topic_bad), Length::FillPortion(1)),
+            cell(
+                column![
+                    muted(&s, "NTFY topic (example: j73hd92xl)"),
+                    text_input("", &d.ntfy_topic)
+                        .on_input_maybe(d.notify_ntfy.then(|| edit(SiteField::NtfyTopic)))
+                        .padding(5)
+                        .size(13)
+                        .style(skin::input_required(s, topic_bad)),
+                ]
+                .spacing(2)
+                .into(),
+                Length::FillPortion(1),
+            ),
         ]
         .spacing(8);
 

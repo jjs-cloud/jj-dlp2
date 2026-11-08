@@ -677,6 +677,8 @@ pub enum Msg {
     SaveRowRange,
     SetTwoColWidth(f32),
     SaveTwoColWidth,
+    SetThreeColWidth(f32),
+    SaveThreeColWidth,
     SetNameClip(f32),
     SaveNameClip,
     SetLogLines(f32),
@@ -696,6 +698,7 @@ pub enum Msg {
     RemoveDrive(PathBuf),
     MoveDrive(PathBuf, isize),
     DiskShowPercent(bool),
+    DiskShowFree(bool),
     DiskLowGb(String),
     DiskLowPercent(String),
     DisksRefreshed(disks::Snapshot),
@@ -787,6 +790,7 @@ pub struct App {
     row_min: f32,
     row_max: f32,
     two_col_w: f32,
+    three_col_w: f32,
     name_clip: f32,
     log_lines: f32,
     remember_size: bool,
@@ -860,6 +864,7 @@ impl App {
             row_min,
             row_max,
             two_col_w: prefs::load_two_col_width(),
+            three_col_w: prefs::load_three_col_width(),
             name_clip: prefs::load_name_clip(),
             log_lines: prefs::load_log_lines(),
             remember_size: prefs::load_remember_size(),
@@ -1069,6 +1074,7 @@ impl App {
             Msg::RemoveDrive(mount) => self.remove_drive(&mount),
             Msg::MoveDrive(mount, delta) => self.move_drive(&mount, delta),
             Msg::DiskShowPercent(on) => self.set_disk_limits(disks::Limits { show_percent: on, ..self.disk_limits }),
+            Msg::DiskShowFree(on) => self.set_disk_limits(disks::Limits { show_free: on, ..self.disk_limits }),
             Msg::DiskLowGb(v) => self.edit_low_gb(v),
             Msg::DiskLowPercent(v) => self.edit_low_percent(v),
             Msg::DisksRefreshed(snap) => self.on_disks(snap),
@@ -1300,6 +1306,10 @@ impl App {
                 self.two_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
             }
             Msg::SaveTwoColWidth => prefs::save_two_col_width(self.two_col_w),
+            Msg::SetThreeColWidth(v) => {
+                self.three_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
+            }
+            Msg::SaveThreeColWidth => prefs::save_three_col_width(self.three_col_w),
             Msg::SetNameClip(v) => {
                 self.name_clip = v.round().clamp(prefs::NAME_CLIP_MIN_LIMIT, prefs::NAME_CLIP_MAX_LIMIT);
             }
@@ -1332,9 +1342,11 @@ impl App {
                 self.row_min = prefs::ROW_MIN_DEFAULT;
                 self.row_max = prefs::ROW_MAX_DEFAULT;
                 self.two_col_w = prefs::TWO_COL_DEFAULT;
+                self.three_col_w = prefs::THREE_COL_DEFAULT;
                 self.name_clip = prefs::NAME_CLIP_DEFAULT;
                 prefs::save_row_range(self.row_min, self.row_max);
                 prefs::save_two_col_width(self.two_col_w);
+                prefs::save_three_col_width(self.three_col_w);
                 prefs::save_name_clip(self.name_clip);
             }
             Msg::Resized(size) => {

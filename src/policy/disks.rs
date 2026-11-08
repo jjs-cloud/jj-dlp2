@@ -17,12 +17,13 @@ pub const DEFAULT_LOW_PERCENT: u64 = 10;
 #[serde(default)]
 pub struct Limits {
     pub show_percent: bool,
+    pub show_free: bool,
     pub low_gb: u64,
     pub low_percent: u64,
 }
 
 impl Limits {
-    const DEFAULT: Limits = Limits { show_percent: false, low_gb: DEFAULT_LOW_GB, low_percent: DEFAULT_LOW_PERCENT };
+    const DEFAULT: Limits = Limits { show_percent: false, show_free: true, low_gb: DEFAULT_LOW_GB, low_percent: DEFAULT_LOW_PERCENT };
 }
 
 impl Default for Limits {
@@ -89,10 +90,17 @@ pub fn free_percent(total: u64, free: u64) -> f64 {
     if total == 0 { 0.0 } else { free as f64 * 100.0 / total as f64 }
 }
 
-/// `"139 GB"`, or `"139 GB 9%"` when the limits ask for the percentage.
+/// `"139 GB 9% free"`; the percentage and the word "free" follow the limits.
 pub fn free_text(total: u64, free: u64) -> String {
-    let size = format_size(free);
-    if limits().show_percent { format!("{size} {:.0}%", free_percent(total, free)) } else { size }
+    let l = limits();
+    let mut text = format_size(free);
+    if l.show_percent {
+        text.push_str(&format!(" {:.0}%", free_percent(total, free)));
+    }
+    if l.show_free {
+        text.push_str(" free");
+    }
+    text
 }
 
 /// True when `free` of `total` bytes is under the low-space limits `l`.
@@ -233,9 +241,9 @@ pub fn free_line(folder: &Path) -> Option<String> {
     let m = mount_for(&mounts, &normalize(folder))?;
     let (free, label) = (free_text(m.total, m.free), mount_label(&m.path));
     Some(if is_low(m.total, m.free) {
-        format!("\u{26A0}\u{FE0F} {free} free on {label}")
+        format!("\u{26A0}\u{FE0F} {free} on {label}")
     } else {
-        format!("\u{1F4BE} {free} free on {label}")
+        format!("\u{1F4BE} {free} on {label}")
     })
 }
 
