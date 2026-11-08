@@ -1,6 +1,6 @@
-//! Launches a yt-dlp recorder, captures its output, and stops it (SIGINT on Unix, taskkill on Windows).
+//! Launches a yt-dlp recorder, captures its output, and stops it (SIGINT on Unix, Ctrl+C on Windows).
 
-use super::{diagnose, hide_window, logfile, Internal};
+use super::{diagnose, logfile, Internal};
 use crate::api::{RecorderId, StreamerId};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,7 +12,6 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-#[cfg(unix)]
 const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// How many recent ERROR lines are kept for the exit report.
@@ -80,8 +79,7 @@ pub fn spawn_recorder(spec: RecorderSpec, tracked: &SharedTracked) -> Result<Rec
     #[cfg(unix)]
     cmd.process_group(0);
     #[cfg(windows)]
-    cmd.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
-    hide_window(&mut cmd);
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW, no new process group so Ctrl+C is delivered
     let mut child = cmd.spawn().map_err(|e| format!("failed to start '{}': {e}", spec.exe))?;
     let pid = child.id().ok_or("process exited immediately")?;
 
@@ -163,9 +161,14 @@ async fn stop_child(child: &mut tokio::process::Child, pid: u32) -> std::io::Res
     }
 }
 
-/// Kills the whole process tree immediately.
+/// Sends Ctrl+C to the recorder's console, then kills the process tree if it is still running after the timeout.
 #[cfg(windows)]
 async fn stop_child(child: &mut tokio::process::Child, pid: u32) -> std::io::Result<std::process::ExitStatus> {
+    if tokio::task::spawn_blocking(move || interrupt(pid)).await.unwrap_or(false) {
+        if let Ok(status) = tokio::time::timeout(GRACEFUL_STOP_TIMEOUT, child.wait()).await {
+            return status;
+        }
+    }
     let _ = tokio::task::spawn_blocking(move || force_kill(pid)).await;
     child.wait().await
 }
@@ -257,6 +260,38 @@ fn interrupt(pid: u32) {
 #[cfg(unix)]
 fn force_kill(pid: u32) {
     unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+}
+
+/// Runs this exe as a helper that sends Ctrl+C to the console of `pid`; true if it succeeded.
+#[cfg(windows)]
+fn interrupt(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    let Ok(exe) = std::env::current_exe() else { return false };
+    std::process::Command::new(exe)
+        .args(["--send-ctrl-c", &pid.to_string()])
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Helper-process entry point: attaches to the console of `pid` and sends it Ctrl+C; returns the exit code.
+#[cfg(windows)]
+pub fn send_ctrl_c(pid: u32) -> i32 {
+    use windows_sys::Win32::System::Console::{AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler, CTRL_C_EVENT};
+    unsafe {
+        FreeConsole();
+        if AttachConsole(pid) == 0 {
+            return 2;
+        }
+        SetConsoleCtrlHandler(None, 1);
+        let sent = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        FreeConsole();
+        if sent == 0 { 3 } else { 0 }
+    }
 }
 
 #[cfg(windows)]

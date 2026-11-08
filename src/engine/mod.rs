@@ -17,6 +17,8 @@ use crate::api::*;
 use crate::settings;
 use checker::{CheckReport, LiveEntry, SiteSnapshot, SiteWorker};
 use diagnose::Problem;
+#[cfg(windows)]
+pub(crate) use recorder::send_ctrl_c;
 use recorder::{RecorderHandle, RecorderSpec, SharedTracked, Tracked};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

@@ -24,6 +24,12 @@ enum Mode {
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if let [flag, pid] = args.as_slice() {
+        if flag.as_str() == "--send-ctrl-c" {
+            std::process::exit(engine::send_ctrl_c(pid.parse().unwrap_or(0)));
+        }
+    }
     if let Some(i) = args.iter().position(|a| a.starts_with("--config-dir=")) {
         let value = args.remove(i).trim_start_matches("--config-dir=").to_string();
         if value.is_empty() {
