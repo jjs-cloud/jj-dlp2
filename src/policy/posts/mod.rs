@@ -57,10 +57,8 @@ pub struct AccountError {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PostsStatus {
     pub checking: bool,
-    /// Unix time the next check starts; `None` while paused or with nothing to check.
-    pub next_check: Option<u64>,
-    /// Name of the site whose check is due first.
-    pub next_site: Option<String>,
+    /// Unix time of each active site's next check.
+    pub next_checks: Vec<(SiteId, u64)>,
     pub errors: Vec<AccountError>,
 }
 

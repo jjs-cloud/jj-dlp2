@@ -105,10 +105,14 @@ impl App {
         }
         nav = nav.push(Space::new().height(8)).push(self.section_title(s, "ACCOUNTS"));
         nav = nav.push(nav_item(s, "All accounts".into(), p.count(Section::Unviewed, None), acct.is_none(), PostsMsg::SetAccount(None)));
-        let multi = p.cfg.sites.iter().filter(|x| !x.accounts.is_empty()).count() > 1;
         for site in &p.cfg.sites {
-            if multi && !site.accounts.is_empty() {
-                nav = nav.push(muted(&s, clip(&site.name, 24)).size(11));
+            if !site.accounts.is_empty() {
+                let name = clip(&site.name, 16);
+                let title = match p.site_countdown(site) {
+                    Some(c) => format!("{name} • {c}"),
+                    None => name,
+                };
+                nav = nav.push(muted(&s, title).size(11));
             }
             for a in &site.accounts {
                 let mark = if p.errors.contains_key(&(site.id, a.name.clone())) { "⚠ " } else { "" };
@@ -119,18 +123,7 @@ impl App {
                 nav = nav.push(nav_item(s, label, unviewed, selected, PostsMsg::SetAccount(Some((site.id, a.name.clone())))));
             }
         }
-        let status = if p.checking {
-            "Checking…".to_string()
-        } else if p.all_paused() {
-            "Paused".to_string()
-        } else {
-            p.secs_to_next().map_or("No accounts enabled".to_string(), |n| match p.next_site_label() {
-                Some(site) => format!("Next check in {n}s ({})", clip(site, 18)),
-                None => format!("Next check in {n}s"),
-            })
-        };
         let controls = column![
-            muted(&s, status),
             row![
                 card_btn(s, "Check all now", PostsMsg::CheckNow, BtnKind::Ghost),
                 card_btn(s, if p.all_paused() { "Resume all" } else { "Pause all" }, PostsMsg::Paused(!p.all_paused()), BtnKind::Ghost),

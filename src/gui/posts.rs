@@ -174,8 +174,7 @@ pub struct PostsState {
     pub confirm_remove: Option<SiteId>,
     pub errors: HashMap<AccountKey, String>,
     pub checking: bool,
-    next_check: Option<u64>,
-    next_site: Option<String>,
+    next_checks: HashMap<SiteId, u64>,
     pub newest_first: bool,
     pub card_w: f32,
     pending_jump: Option<String>,
@@ -199,8 +198,7 @@ impl PostsState {
             confirm_remove: None,
             errors: HashMap::new(),
             checking: false,
-            next_check: None,
-            next_site: None,
+            next_checks: HashMap::new(),
             newest_first: prefs.newest_first,
             card_w: prefs.card_w,
             pending_jump: None,
@@ -263,18 +261,15 @@ impl PostsState {
             .or_else(|| self.cfg.sites.first().map(|s| s.id))
     }
 
-    /// The site due next, named only when more than one site is being checked.
-    pub fn next_site_label(&self) -> Option<&str> {
-        let active = self.cfg.sites.iter().filter(|s| s.has_enabled_accounts() && !s.paused).count();
-        self.next_site.as_deref().filter(|_| active > 1)
-    }
-
-    /// Seconds until the next check, or `None` while checking, paused or with nothing to check.
-    pub fn secs_to_next(&self) -> Option<u64> {
-        if self.checking {
-            return None;
+    /// The site's check countdown for the sidebar: paused, checking or seconds left.
+    pub fn site_countdown(&self, site: &PostSite) -> Option<String> {
+        if site.paused {
+            return Some("paused".to_string());
         }
-        self.next_check.map(|at| at.saturating_sub(now_secs()))
+        if self.checking {
+            return Some("checking…".to_string());
+        }
+        self.next_checks.get(&site.id).map(|at| format!("{}s", at.saturating_sub(now_secs())))
     }
 
     /// Applies an editor action to a site's checker or download argument draft.
@@ -313,8 +308,7 @@ impl PostsState {
             PostsEvent::Removed(ids) => self.posts.retain(|p| !ids.contains(&p.id)),
             PostsEvent::Status(st) => {
                 self.checking = st.checking;
-                self.next_check = st.next_check;
-                self.next_site = st.next_site;
+                self.next_checks = st.next_checks.into_iter().collect();
                 self.errors = st.errors.into_iter().map(|e| ((e.site_id, e.name), e.message)).collect();
             }
             PostsEvent::Notice(msg) => self.say(msg),
