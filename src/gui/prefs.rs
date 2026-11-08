@@ -43,6 +43,8 @@ struct Prefs {
     files: FilesPrefs,
     posts: PostsPrefs,
     extra_drives: Vec<String>,
+    drive_order: Vec<String>,
+    disk_limits: crate::policy::disks::Limits,
 }
 
 /// Preferences of the Files tab.
@@ -90,6 +92,8 @@ impl Default for Prefs {
             files: FilesPrefs::default(),
             posts: PostsPrefs::default(),
             extra_drives: Vec::new(),
+            drive_order: Vec::new(),
+            disk_limits: Default::default(),
         }
     }
 }
@@ -204,6 +208,30 @@ pub fn load_extra_drives() -> Vec<String> {
 pub fn save_extra_drives(drives: &[String]) {
     let mut prefs = read();
     prefs.extra_drives = drives.to_vec();
+    write(&prefs);
+}
+
+/// Reads the saved display order of the tracked drives.
+pub fn load_drive_order() -> Vec<String> {
+    read().drive_order
+}
+
+/// Saves the display order of the tracked drives.
+pub fn save_drive_order(order: &[String]) {
+    let mut prefs = read();
+    prefs.drive_order = order.to_vec();
+    write(&prefs);
+}
+
+/// Reads the saved disk-space display settings.
+pub fn load_disk_limits() -> crate::policy::disks::Limits {
+    read().disk_limits
+}
+
+/// Saves the disk-space display settings.
+pub fn save_disk_limits(limits: crate::policy::disks::Limits) {
+    let mut prefs = read();
+    prefs.disk_limits = limits;
     write(&prefs);
 }
 

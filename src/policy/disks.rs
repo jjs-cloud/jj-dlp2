@@ -1,14 +1,47 @@
 //! Free space of the drives that hold output folders, and the notification line that reports it.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 use sysinfo::Disks;
 
 const GIB: u64 = 1024 * 1024 * 1024;
-/// Free space below this many bytes counts as low.
-pub const LOW_BYTES: u64 = 20 * GIB;
-/// Free space below this percentage of the drive counts as low.
-pub const LOW_PERCENT: u64 = 10;
+/// Free space below this many GB counts as low, unless changed.
+pub const DEFAULT_LOW_GB: u64 = 20;
+/// Free space below this percentage of the drive counts as low, unless changed.
+pub const DEFAULT_LOW_PERCENT: u64 = 10;
+
+/// The user's disk-space display settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Limits {
+    pub show_percent: bool,
+    pub low_gb: u64,
+    pub low_percent: u64,
+}
+
+impl Limits {
+    const DEFAULT: Limits = Limits { show_percent: false, low_gb: DEFAULT_LOW_GB, low_percent: DEFAULT_LOW_PERCENT };
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits::DEFAULT
+    }
+}
+
+static LIMITS: RwLock<Limits> = RwLock::new(Limits::DEFAULT);
+
+/// The limits in use.
+pub fn limits() -> Limits {
+    *LIMITS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Makes `l` the limits in use, for the header and for notifications.
+pub fn set_limits(l: Limits) {
+    *LIMITS.write().unwrap_or_else(|e| e.into_inner()) = l;
+}
 
 /// One drive (mount point) and its space.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,7 +67,7 @@ impl DiskInfo {
     }
 
     pub fn free_percent(&self) -> f64 {
-        if self.total == 0 { 0.0 } else { self.free as f64 * 100.0 / self.total as f64 }
+        free_percent(self.total, self.free)
     }
 }
 
@@ -51,9 +84,25 @@ struct Mount {
     free: u64,
 }
 
-/// True when `free` of `total` bytes is under the low-space limits.
+/// `free` as a percentage of `total`.
+pub fn free_percent(total: u64, free: u64) -> f64 {
+    if total == 0 { 0.0 } else { free as f64 * 100.0 / total as f64 }
+}
+
+/// `"139 GB"`, or `"139 GB 9%"` when the limits ask for the percentage.
+pub fn free_text(total: u64, free: u64) -> String {
+    let size = format_size(free);
+    if limits().show_percent { format!("{size} {:.0}%", free_percent(total, free)) } else { size }
+}
+
+/// True when `free` of `total` bytes is under the low-space limits `l`.
+fn is_low_with(l: Limits, total: u64, free: u64) -> bool {
+    total > 0 && (free < l.low_gb.saturating_mul(GIB) || free.saturating_mul(100) < total.saturating_mul(l.low_percent))
+}
+
+/// True when `free` of `total` bytes is under the low-space limits in use.
 pub fn is_low(total: u64, free: u64) -> bool {
-    total > 0 && (free < LOW_BYTES || free.saturating_mul(100) < total.saturating_mul(LOW_PERCENT))
+    is_low_with(limits(), total, free)
 }
 
 /// A drive's short name: `C:` on Windows, the mount path elsewhere.
@@ -182,9 +231,9 @@ pub fn snapshot(folders: &[(String, PathBuf)], extras: &[PathBuf]) -> Snapshot {
 pub fn free_line(folder: &Path) -> Option<String> {
     let mounts = mounts();
     let m = mount_for(&mounts, &normalize(folder))?;
-    let (free, label) = (format_size(m.free), mount_label(&m.path));
+    let (free, label) = (free_text(m.total, m.free), mount_label(&m.path));
     Some(if is_low(m.total, m.free) {
-        format!("\u{26A0}\u{FE0F} Low disk space: {free} free on {label}")
+        format!("\u{26A0}\u{FE0F} {free} free on {label}")
     } else {
         format!("\u{1F4BE} {free} free on {label}")
     })
@@ -200,11 +249,13 @@ mod tests {
 
     #[test]
     fn low_below_twenty_gib_or_ten_percent() {
-        assert!(is_low(2000 * GIB, 19 * GIB));
-        assert!(!is_low(2000 * GIB, 221 * GIB));
-        assert!(is_low(2000 * GIB, 150 * GIB));
-        assert!(!is_low(500 * GIB, 60 * GIB));
-        assert!(!is_low(0, 0));
+        let d = Limits::default();
+        assert!(is_low_with(d, 2000 * GIB, 19 * GIB));
+        assert!(!is_low_with(d, 2000 * GIB, 221 * GIB));
+        assert!(is_low_with(d, 2000 * GIB, 150 * GIB));
+        assert!(!is_low_with(d, 500 * GIB, 60 * GIB));
+        assert!(!is_low_with(d, 0, 0));
+        assert!(is_low_with(Limits { low_gb: 100, ..d }, 500 * GIB, 60 * GIB));
     }
 
     #[test]

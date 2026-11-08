@@ -174,7 +174,7 @@ impl FilesState {
     fn rebuild(&mut self) {
         self.stale = false;
         let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.collapsed, Instant::now());
-        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows);
+        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group);
         self.rows = rows;
     }
 

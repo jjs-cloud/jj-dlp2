@@ -66,7 +66,7 @@ pub enum Sel {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
-    Folder { path: PathBuf, name: String, count: usize, collapsed: bool, depth: usize },
+    Folder { path: PathBuf, name: String, count: usize, collapsed: bool, writing: bool, depth: usize },
     File { path: PathBuf, prefix: String, name: String, depth: usize },
     Empty,
 }
@@ -113,6 +113,11 @@ fn cmp_paths(cx: Cx, a: &PathBuf, b: &PathBuf) -> Ordering {
     }
 }
 
+/// True when any of `files` is being written.
+fn any_writing(cx: Cx, files: &[PathBuf]) -> bool {
+    files.iter().any(|p| cx.recs.get(p).is_some_and(|r| r.writing(cx.now)))
+}
+
 /// Orders groups by their first file under the sort; groups without files go last.
 fn order_groups(cx: Cx, groups: Vec<(PathBuf, Vec<PathBuf>)>) -> Vec<(PathBuf, Vec<PathBuf>)> {
     let mut keyed: Vec<(Option<PathBuf>, (PathBuf, Vec<PathBuf>))> =
@@ -152,7 +157,8 @@ fn emit_folder(dir: &Path, depth: usize, files: &[PathBuf], cx: Cx, collapsed: &
         .collect();
     for (child, inside) in order_groups(cx, groups) {
         let is_collapsed = collapsed.contains(&child);
-        rows.push(Row::Folder { path: child.clone(), name: file_name(&child).into_owned(), count: inside.len(), collapsed: is_collapsed, depth });
+        let writing = is_collapsed && any_writing(cx, &inside);
+        rows.push(Row::Folder { path: child.clone(), name: file_name(&child).into_owned(), count: inside.len(), collapsed: is_collapsed, writing, depth });
         if !is_collapsed {
             emit_folder(&child, depth + 1, &inside, cx, collapsed, rows);
         }
@@ -174,7 +180,8 @@ pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapse
         let root_collapsed = multi && collapsed.contains(&dir);
         if multi {
             let name = format!("{label}  —  {}", dir.display());
-            rows.push(Row::Folder { path: dir.clone(), name, count: files.len(), collapsed: root_collapsed, depth: 0 });
+            let writing = root_collapsed && any_writing(cx, &files);
+            rows.push(Row::Folder { path: dir.clone(), name, count: files.len(), collapsed: root_collapsed, writing, depth: 0 });
         }
         if root_collapsed {
             continue;
@@ -228,8 +235,8 @@ pub fn subfolders(recs: &Recs, roots: &[Root]) -> HashSet<PathBuf> {
     out
 }
 
-/// Keeps the selection across a rebuild, moving to the neighbouring row when it disappeared.
-pub fn keep_selection(old_rows: &[Row], cur: Option<&Sel>, new_rows: &[Row]) -> Option<Sel> {
+/// Keeps the selection across a rebuild; a vanished file moves to its next (else previous) sibling in the same folder when grouped, else to the neighbouring row.
+pub fn keep_selection(old_rows: &[Row], cur: Option<&Sel>, new_rows: &[Row], group: bool) -> Option<Sel> {
     let fresh: Vec<Sel> = new_rows.iter().filter_map(Row::sel).collect();
     if fresh.is_empty() {
         return None;
@@ -238,9 +245,26 @@ pub fn keep_selection(old_rows: &[Row], cur: Option<&Sel>, new_rows: &[Row]) -> 
         if fresh.contains(c) {
             return Some(c.clone());
         }
+        if let (true, Sel::File(path)) = (group, c) {
+            if let Some(sib) = sibling_in_folder(old_rows, path, &fresh) {
+                return Some(sib);
+            }
+        }
     }
     let old_pos = cur.and_then(|c| old_rows.iter().filter_map(Row::sel).position(|s| &s == c));
     Some(fresh[old_pos.map_or(0, |p| p.min(fresh.len() - 1))].clone())
+}
+
+/// The nearest surviving file after `path` (else before it) in the same folder of `old_rows`.
+fn sibling_in_folder(old_rows: &[Row], path: &Path, fresh: &[Sel]) -> Option<Sel> {
+    let i = old_rows.iter().position(|r| matches!(r, Row::File { path: p, .. } if p == path))?;
+    let same = |r: &Row| match r {
+        Row::File { path: p, .. } if p.parent() == path.parent() => Some(Sel::File(p.clone())),
+        _ => None,
+    };
+    let after = old_rows[i + 1..].iter().map(same).take_while(Option::is_some).flatten();
+    let before = old_rows[..i].iter().rev().map(same).take_while(Option::is_some).flatten();
+    after.chain(before).find(|s| fresh.contains(s))
 }
 
 /// The selection `delta` selectable rows away from `cur`, clamped to the list.
@@ -346,14 +370,46 @@ mod tests {
         let rs = roots(&["/r"]);
         let old = build(&rs, &sample(), Sort::default(), false, &HashSet::new());
         let cur = Sel::File(PathBuf::from("/r/a10.ts"));
-        let same = keep_selection(&old, Some(&cur), &old);
+        let same = keep_selection(&old, Some(&cur), &old, false);
         assert_eq!(same, Some(cur.clone()));
         let mut recs = sample();
         recs.remove(Path::new("/r/a10.ts"));
         let new = build(&rs, &recs, Sort::default(), false, &HashSet::new());
-        assert_eq!(keep_selection(&old, Some(&cur), &new), Some(Sel::File(PathBuf::from("/r/s/x.ts"))));
-        assert_eq!(keep_selection(&old, None, &new), Some(Sel::File(PathBuf::from("/r/a2.ts"))));
-        assert_eq!(keep_selection(&old, Some(&cur), &[]), None);
+        assert_eq!(keep_selection(&old, Some(&cur), &new, false), Some(Sel::File(PathBuf::from("/r/s/x.ts"))));
+        assert_eq!(keep_selection(&old, None, &new, false), Some(Sel::File(PathBuf::from("/r/a2.ts"))));
+        assert_eq!(keep_selection(&old, Some(&cur), &[], false), None);
+    }
+
+    #[test]
+    fn grouped_delete_stays_in_folder() {
+        let rs = roots(&["/r"]);
+        let mut recs = HashMap::new();
+        for n in ["1", "2", "3", "4"] {
+            recs.insert(PathBuf::from(format!("/r/d/{n}.mp4")), rec("/r", 1, 0));
+        }
+        recs.insert(PathBuf::from("/r/z/9.mp4"), rec("/r", 1, 0));
+        let old = build(&rs, &recs, Sort::default(), true, &HashSet::new());
+        let pick = |gone: &str| {
+            let cur = Sel::File(PathBuf::from(format!("/r/d/{gone}.mp4")));
+            let mut left = recs.clone();
+            left.remove(Path::new(&format!("/r/d/{gone}.mp4")));
+            let new = build(&rs, &left, Sort::default(), true, &HashSet::new());
+            keep_selection(&old, Some(&cur), &new, true)
+        };
+        assert_eq!(pick("1"), Some(Sel::File(PathBuf::from("/r/d/2.mp4"))));
+        assert_eq!(pick("3"), Some(Sel::File(PathBuf::from("/r/d/4.mp4"))));
+        assert_eq!(pick("4"), Some(Sel::File(PathBuf::from("/r/d/3.mp4"))));
+    }
+
+    #[test]
+    fn collapsed_folder_shows_writing() {
+        let rs = roots(&["/r"]);
+        let mut collapsed = HashSet::new();
+        collapsed.insert(PathBuf::from("/r/s"));
+        let rows = build(&rs, &sample(), Sort::default(), true, &collapsed);
+        assert!(matches!(rows.last(), Some(Row::Folder { writing: true, .. })));
+        let rows = build(&rs, &sample(), Sort::default(), true, &HashSet::new());
+        assert!(rows.iter().all(|r| !matches!(r, Row::Folder { writing: true, .. })));
     }
 
     #[test]

@@ -200,15 +200,22 @@ impl App {
         };
         let selected = f.sel.as_ref() == Some(&sel);
         let line: Element<'a, Msg> = match r {
-            FRow::Folder { name, count, collapsed, depth, .. } => row![
-                Space::new().width(*depth as f32 * INDENT),
-                container(t(&s, if *collapsed { "►" } else { "▼" }).size(12).color(s.accent2)).width(16.0),
-                container(t(&s, name.as_str()).size(13).color(s.accent2).wrapping(Wrapping::None)).width(Length::Fill).clip(true),
-                muted(&s, format!("{count} files")),
-            ]
-            .spacing(2)
-            .align_y(Alignment::Center)
-            .into(),
+            FRow::Folder { name, count, collapsed, writing, depth, .. } => {
+                let mut line = row![
+                    Space::new().width(*depth as f32 * INDENT),
+                    container(t(&s, if *collapsed { "►" } else { "▼" }).size(12).color(s.accent2)).width(16.0),
+                    container(t(&s, name.as_str()).size(13).color(s.accent2).wrapping(Wrapping::None)).width(Length::Fill).clip(true),
+                ]
+                .spacing(2)
+                .align_y(Alignment::Center);
+                let count = muted(&s, format!("{count} files"));
+                if *writing {
+                    line = line.push(cell(W_STATUS, t(&s, "WRITING").size(12).color(s.live)));
+                    line.push(container(count).width(W_MODIFIED + W_SIZE + W_RATE).align_x(iced::alignment::Horizontal::Right)).into()
+                } else {
+                    line.push(count).into()
+                }
+            }
             FRow::File { path, prefix, name, depth } => {
                 let job = f.job_for(path);
                 let (status, rate): (Element<'a, Msg>, String) = match (job, f.records.get(path)) {

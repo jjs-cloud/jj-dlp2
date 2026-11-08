@@ -662,6 +662,9 @@ pub enum Msg {
     TestNotify(SiteId),
     GlobalOutEdit(String),
     GlobalOutSave,
+    BrowseGlobalOut,
+    GlobalOutChosen(Option<PathBuf>),
+    OpenGlobalOut,
     Recheck,
     ClearWarnings,
     CopyText(String),
@@ -691,6 +694,10 @@ pub enum Msg {
     StartFresh,
     AddDrive(PathBuf),
     RemoveDrive(PathBuf),
+    MoveDrive(PathBuf, isize),
+    DiskShowPercent(bool),
+    DiskLowGb(String),
+    DiskLowPercent(String),
     DisksRefreshed(disks::Snapshot),
 }
 
@@ -794,12 +801,23 @@ pub struct App {
     priority: priority::PriorityState,
     disks: disks::Snapshot,
     extra_drives: Vec<PathBuf>,
+    drive_order: Vec<PathBuf>,
+    disk_limits: disks::Limits,
+    low_gb_text: String,
+    low_percent_text: String,
+    default_out: String,
     disks_dirty: bool,
     disks_busy: bool,
     disks_at: u64,
 }
 
 impl App {
+    /// The folder the global output field points at; the default when blank.
+    fn global_out_dir(&self) -> &str {
+        let dir = self.global_out.trim();
+        if dir.is_empty() { &self.default_out } else { dir }
+    }
+
     fn new(client: PolicyClient) -> (App, Task<Msg>) {
         client.send(PolicyCommand::RequestSnapshot);
         let (row_min, row_max) = prefs::load_row_range();
@@ -856,10 +874,16 @@ impl App {
             priority: priority::PriorityState::default(),
             disks: disks::Snapshot::default(),
             extra_drives: prefs::load_extra_drives().into_iter().map(PathBuf::from).collect(),
+            drive_order: prefs::load_drive_order().into_iter().map(PathBuf::from).collect(),
+            disk_limits: prefs::load_disk_limits(),
+            low_gb_text: String::new(),
+            low_percent_text: String::new(),
+            default_out: crate::settings::default_output_dir(),
             disks_dirty: true,
             disks_busy: false,
             disks_at: 0,
         };
+        disks::set_limits(app.disk_limits);
         if let Some(e) = crate::policy::update::take_last_error() {
             app.push_log(e);
         }
@@ -1043,6 +1067,10 @@ impl App {
             }
             Msg::AddDrive(mount) => self.add_drive(mount),
             Msg::RemoveDrive(mount) => self.remove_drive(&mount),
+            Msg::MoveDrive(mount, delta) => self.move_drive(&mount, delta),
+            Msg::DiskShowPercent(on) => self.set_disk_limits(disks::Limits { show_percent: on, ..self.disk_limits }),
+            Msg::DiskLowGb(v) => self.edit_low_gb(v),
+            Msg::DiskLowPercent(v) => self.edit_low_percent(v),
             Msg::DisksRefreshed(snap) => self.on_disks(snap),
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenLogsDir => self.client.send(PolicyCommand::OpenLogsDir),
@@ -1232,6 +1260,26 @@ impl App {
             }
             Msg::GlobalOutEdit(v) => self.global_out = v,
             Msg::GlobalOutSave => self.client.send(PolicyCommand::SetGlobalOutputDir(self.global_out.trim().to_string())),
+            Msg::BrowseGlobalOut => {
+                let start = PathBuf::from(self.global_out_dir());
+                return Task::perform(
+                    async move {
+                        let mut dlg = rfd::AsyncFileDialog::new().set_title("Global output folder");
+                        if start.is_dir() {
+                            dlg = dlg.set_directory(start);
+                        }
+                        dlg.pick_folder().await.map(|h| h.path().to_path_buf())
+                    },
+                    Msg::GlobalOutChosen,
+                );
+            }
+            Msg::GlobalOutChosen(Some(dir)) => self.global_out = dir.to_string_lossy().into_owned(),
+            Msg::GlobalOutChosen(None) => {}
+            Msg::OpenGlobalOut => {
+                let dir = PathBuf::from(self.global_out_dir());
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = open::that_detached(dir);
+            }
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
             Msg::ClearWarnings => self.client.send(PolicyCommand::ClearWarnings),
             Msg::CopyText(text) => return iced::clipboard::write(text),

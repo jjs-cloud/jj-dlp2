@@ -467,7 +467,7 @@ impl App {
             cell(
                 input(
                     "Size limit for auto-downloads (MB, blank = none)",
-                    &posts::DEFAULT_AUTO_DOWNLOAD_LIMIT_MB.to_string(),
+                    "None",
                     &d.auto_limit,
                     SiteField::AutoLimit,
                     bad_number(&d.auto_limit, 1),
@@ -477,7 +477,7 @@ impl App {
             cell(
                 input(
                     "Time limit for auto-downloads (seconds, blank = none)",
-                    &posts::DEFAULT_AUTO_DOWNLOAD_SECS.to_string(),
+                    "None",
                     &d.auto_secs,
                     SiteField::AutoSecs,
                     bad_number(&d.auto_secs, 1),

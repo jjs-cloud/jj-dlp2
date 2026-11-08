@@ -275,6 +275,12 @@ impl App {
     fn header(&self, s: Skin) -> Element<'_, Msg> {
         let live = self.statuses.values().filter(|x| x.live).count();
         let rec = self.processes.len();
+        let monitoring = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|st| st.enabled && !self.settings.sites.iter().any(|site| site.id == st.site_id && site.paused))
+            .count();
         let p = pulse(self.phase);
         let title = row![
             dot(s, s.accent, 0.4 + 0.6 * p),
@@ -294,6 +300,11 @@ impl App {
         .spacing(12)
         .align_y(Alignment::Center);
         let chips = row![
+            chip(
+                s,
+                format!("{monitoring} monitoring"),
+                if monitoring > 0 { s.accent2 } else { s.muted }
+            ),
             chip(
                 s,
                 format!("{live} live"),
@@ -1747,11 +1758,19 @@ impl App {
             .align_y(Alignment::Center),
             muted(&s, "Global output folder, used by any site that has no output folder of its own."),
             row![
-                text_input("Recordings folder", &self.global_out)
+                text_input(&self.default_out, &self.global_out)
                     .on_input(Msg::GlobalOutEdit)
                     .on_submit(Msg::GlobalOutSave)
                     .padding(8)
                     .style(skin::input(s)),
+                button(btn_label(&s, "Browse").size(13))
+                    .on_press(Msg::BrowseGlobalOut)
+                    .padding([8.0, 16.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+                button(btn_label(&s, "Open").size(13))
+                    .on_press(Msg::OpenGlobalOut)
+                    .padding([8.0, 16.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
                 button(btn_label(&s, "Save").size(13))
                     .on_press_maybe(
                         (self.global_out.trim() != self.settings.default_output_dir)
@@ -2200,7 +2219,7 @@ impl App {
                 .text_size(12)
         };
         let topic_input = text_input("", &d.ntfy_topic)
-            .on_input(move |v| Msg::Draft(id, DraftField::NtfyTopic(v)))
+            .on_input_maybe(d.notify_ntfy.then(|| move |v: String| Msg::Draft(id, DraftField::NtfyTopic(v))))
             .padding(5)
             .size(13)
             .style(skin::input_required(s, !d.ntfy_ok()));
