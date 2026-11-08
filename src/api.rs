@@ -269,6 +269,7 @@ pub struct StreamerOptions {
     /// Automatic enabling and disabling of the streamer.
     pub schedule: Schedule,
     /// Records even when the recording limit is reached; owned by the Priority tab.
+    #[serde(default)]
     pub always_record: bool,
 }
 
@@ -568,5 +569,13 @@ mod tests {
         assert_eq!(CheckOutput::detect("-s --print x {urls}"), Some(CheckOutput::Simulate));
         assert_eq!(CheckOutput::detect("--simulate --dump-json {urls}"), Some(CheckOutput::Json));
         assert_eq!(CheckOutput::detect("--cookies-from-browser firefox {urls}"), None);
+    }
+
+    #[test]
+    fn streamer_options_deserializes_without_always_record() {
+        let mut value = serde_json::to_value(StreamerOptions::default()).unwrap();
+        value.as_object_mut().unwrap().remove("always_record");
+        let opts: StreamerOptions = serde_json::from_value(value).unwrap();
+        assert!(!opts.always_record);
     }
 }
