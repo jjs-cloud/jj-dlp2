@@ -147,6 +147,7 @@ impl PostsMonitor {
 
     /// Starts due checks, queued downloads and delayed view marks; called regularly.
     pub fn tick(&mut self) {
+        runner::take_notes().into_iter().for_each(|n| self.log(n));
         let now = Instant::now();
         self.mark_due_views(now);
         self.clear_stale_errors();

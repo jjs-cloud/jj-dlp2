@@ -2,6 +2,7 @@
 
 use super::outpath;
 use crate::api::FolderLayout;
+use crate::engine::template::tokenize;
 use std::path::PathBuf;
 
 /// File name shown at the end of a previewed path.
@@ -72,7 +73,7 @@ pub(super) fn is_absolute_template(template: &str) -> bool {
 
 /// True when the recorder arguments' `--output` template is absolute, so subfolders cannot apply.
 pub fn has_absolute_template(recorder_args: &str) -> bool {
-    outpath::output_template(&outpath::split_args(recorder_args)).is_some_and(|t| is_absolute_template(&t))
+    outpath::output_template(&tokenize(recorder_args)).is_some_and(|t| is_absolute_template(&t))
 }
 
 #[cfg(test)]

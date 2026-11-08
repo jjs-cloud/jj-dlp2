@@ -1,6 +1,7 @@
 //! Data model of the Posts monitor: sites, accounts and posts, and the yt-dlp command lines built from them.
 
 use crate::api::DEFAULT_EXE;
+use crate::engine::template::tokenize;
 use crate::policy::notify;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -424,38 +425,6 @@ fn date_to_secs(s: &str) -> Option<u64> {
     u64::try_from(secs).ok()
 }
 
-/// Splits on whitespace, honouring "double" and 'single' quotes.
-pub fn tokenize(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_token = false;
-    let mut quote: Option<char> = None;
-    for c in input.chars() {
-        match quote {
-            Some(q) if c == q => quote = None,
-            Some(_) => cur.push(c),
-            None if c == '"' || c == '\'' => {
-                quote = Some(c);
-                in_token = true;
-            }
-            None if c.is_whitespace() => {
-                if in_token {
-                    out.push(std::mem::take(&mut cur));
-                    in_token = false;
-                }
-            }
-            None => {
-                cur.push(c);
-                in_token = true;
-            }
-        }
-    }
-    if in_token {
-        out.push(cur);
-    }
-    out
-}
-
 /// Replaces `{url}` and `{dir}` in each argument; the URL is appended if `{url}` is absent.
 fn expand(template: &str, url: &str, dir: &str) -> Vec<String> {
     let mut args: Vec<String> = tokenize(template).into_iter().map(|t| t.replace("{url}", url).replace("{dir}", dir)).collect();
@@ -636,11 +605,6 @@ mod tests {
     #[test]
     fn m3u8_command_fills_the_url() {
         assert_eq!(m3u8_cmd(&tiktok(), "https://x/v/1"), vec!["--no-warnings", "--no-playlist", "--get-url", "https://x/v/1"]);
-    }
-
-    #[test]
-    fn tokenizer_keeps_quoted_values() {
-        assert_eq!(tokenize(r#"--a "b c" 'd e' f"#), vec!["--a", "b c", "d e", "f"]);
     }
 
     #[test]

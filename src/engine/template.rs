@@ -1,6 +1,6 @@
 //! Splits command strings into arguments and fills in `{placeholders}`.
 
-/// Splits on whitespace, honouring "double" and 'single' quotes; backslashes stay literal.
+/// Splits on whitespace, honouring "double" and 'single' quotes and `\"` inside double quotes; other backslashes stay literal.
 pub fn tokenize(input: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -79,6 +79,11 @@ mod tests {
     #[test]
     fn splits_quotes() {
         assert_eq!(tokenize(r#"--output "a b/%(id)s" --x 'y z'"#), vec!["--output", "a b/%(id)s", "--x", "y z"]);
+    }
+
+    #[test]
+    fn keeps_escaped_quote_and_literal_backslashes() {
+        assert_eq!(tokenize(r#"--a "say \"hi\"" C:\rec"#), vec!["--a", "say \"hi\"", "C:\\rec"]);
     }
 
     #[test]

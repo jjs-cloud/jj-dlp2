@@ -11,7 +11,7 @@ pub(crate) mod logfile;
 mod preflight;
 mod recorder;
 mod sampler;
-mod template;
+pub(crate) mod template;
 
 use crate::api::*;
 use crate::settings;

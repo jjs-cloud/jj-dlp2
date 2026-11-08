@@ -4,11 +4,13 @@ use super::model::*;
 use super::store::{sidecar_path, thumbs_dir};
 use super::xprofile;
 use crate::api::now_secs;
+use crate::engine::exepath;
 use crate::policy::notify;
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 use std::io::Read;
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -18,6 +20,8 @@ const M3U8_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
 /// Start of the error `run` returns when a command exceeds its time limit.
 const TIMEOUT_PREFIX: &str = "yt-dlp timed out";
+/// Log notes from resolving executables, waiting for the monitor to log them.
+static NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 const THUMB_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const THUMB_BOX: (u32, u32) = (360, 640);
 
@@ -52,9 +56,18 @@ pub struct DownloadOutcome {
     pub duration: Option<u64>,
 }
 
-/// Resolves a relative path against the app folder and its parents, setting the executable bit.
-fn resolve_exe(raw: &str) -> String {
-    crate::engine::exepath::resolve(raw).exe
+/// Resolves an executable path and queues its note for the Log tab.
+fn resolve_and_note(raw: &str) -> String {
+    let resolved = exepath::resolve(raw);
+    if let (Some(note), Ok(mut notes)) = (resolved.note, NOTES.lock()) {
+        notes.push(note);
+    }
+    resolved.exe
+}
+
+/// Takes the notes queued by executable resolution.
+pub fn take_notes() -> Vec<String> {
+    NOTES.lock().map(|mut n| std::mem::take(&mut *n)).unwrap_or_default()
 }
 
 /// The most useful line of yt-dlp's error output.
@@ -66,7 +79,7 @@ fn error_line(stderr: &str) -> Option<String> {
 }
 
 async fn run(exe: &str, args: &[String], limit: Duration) -> Result<std::process::Output, String> {
-    let mut cmd = Command::new(resolve_exe(exe));
+    let mut cmd = Command::new(resolve_and_note(exe));
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::engine::hide_window(&mut cmd);
     match tokio::time::timeout(limit, cmd.output()).await {
@@ -349,7 +362,7 @@ pub async fn resolve_m3u8(site: PostSite, url: String) -> Result<String, String>
 /// Plays a stream URL in `player`, or through a temporary .m3u8 file when `player` is blank.
 pub fn play_stream(player: &str, url: &str, id: &str) -> Result<(), String> {
     if !player.trim().is_empty() {
-        return open::with_detached(url, resolve_exe(player)).map_err(|e| e.to_string());
+        return open::with_detached(url, resolve_and_note(player)).map_err(|e| e.to_string());
     }
     let file = std::env::temp_dir().join(Path::new(&thumb_name(id)).with_extension("m3u8"));
     std::fs::write(&file, format!("#EXTM3U\n{url}\n")).map_err(|e| e.to_string())?;

@@ -2,6 +2,7 @@
 
 use super::{layout, segments};
 use crate::api::StreamerId;
+use crate::engine::template::tokenize;
 use crate::settings;
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
@@ -62,7 +63,7 @@ pub fn remove_sidecar(streamer_id: StreamerId) {
 
 /// The recorder arguments to hand the engine: the site's own arguments plus the part/folder `--output` and sidecar options.
 pub fn recorder_override(recorder_args: &str, dirs: &[String], sidecar: &Path, part: u32) -> Option<String> {
-    let mut args = split_args(recorder_args);
+    let mut args = tokenize(recorder_args);
     let mut extra = output_args(&args, dirs, part);
     args.extend(extra.iter().cloned());
     extra.extend(sidecar_args(&args, sidecar));
@@ -108,48 +109,7 @@ fn sidecar_args(args: &[String], sidecar: &Path) -> Vec<String> {
     specs.into_iter().flat_map(|spec| ["--print-to-file".to_string(), spec, file.clone()]).collect()
 }
 
-/// Splits on whitespace honouring "double" and 'single' quotes, the way the engine reads recorder arguments.
-pub(super) fn split_args(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_token = false;
-    let mut quote: Option<char> = None;
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        match quote {
-            Some(q) => {
-                if c == q {
-                    quote = None;
-                } else if c == '\\' && q == '"' && chars.peek() == Some(&'"') {
-                    cur.push('"');
-                    chars.next();
-                } else {
-                    cur.push(c);
-                }
-            }
-            None => {
-                if c == '"' || c == '\'' {
-                    quote = Some(c);
-                    in_token = true;
-                } else if c.is_whitespace() {
-                    if in_token {
-                        out.push(std::mem::take(&mut cur));
-                        in_token = false;
-                    }
-                } else {
-                    cur.push(c);
-                    in_token = true;
-                }
-            }
-        }
-    }
-    if in_token {
-        out.push(cur);
-    }
-    out
-}
-
-/// Quotes one argument so `split_args` returns it unchanged.
+/// Quotes one argument so `tokenize` returns it unchanged.
 fn quote_arg(arg: &str) -> String {
     let pieces: Vec<String> = arg.split('\'').map(|p| format!("'{p}'")).collect();
     pieces.join("\"'\"")
@@ -298,14 +258,14 @@ mod tests {
     }
 
     #[test]
-    fn split_args_honours_quotes() {
-        assert_eq!(split_args(r#"--output "a b/%(id)s" --x 'y z'"#), ["--output", "a b/%(id)s", "--x", "y z"]);
+    fn tokenize_honours_quotes() {
+        assert_eq!(tokenize(r#"--output "a b/%(id)s" --x 'y z'"#), ["--output", "a b/%(id)s", "--x", "y z"]);
     }
 
     #[test]
     fn quote_arg_round_trips_awkward_values() {
         for value in ["plain", "a b", "it's", "say \"hi\"", "C:\\rec\\", "'", "", "%(title)s | x", "主播 🎬"] {
-            assert_eq!(split_args(&quote_arg(value)), [value], "{value:?}");
+            assert_eq!(tokenize(&quote_arg(value)), [value], "{value:?}");
         }
     }
 
@@ -313,7 +273,7 @@ mod tests {
     fn override_appends_quoted_sidecar_options_after_the_users_arguments() {
         let got = recorder_override("--no-part --output \"%(title)s.%(ext)s\" {url}", &[], Path::new("/cfg/50%/3.txt"), 1).unwrap();
         assert!(got.starts_with("--no-part --output \"%(title)s.%(ext)s\" {url} '--print-to-file' "), "{got}");
-        let args = split_args(&got);
+        let args = tokenize(&got);
         assert_eq!(args.len(), 4 + 9);
         assert_eq!(&args[4..7], ["--print-to-file", "before_dl:BDP|%(filepath)s", "/cfg/50%%/3.txt"]);
         assert_eq!(args[11], "before_dl:BDT|%(title)s.%(ext)s");
@@ -323,14 +283,14 @@ mod tests {
     fn override_works_when_the_site_has_no_arguments() {
         let got = recorder_override("  ", &[], Path::new("/cfg/3.txt"), 1).unwrap();
         assert!(got.starts_with("'--print-to-file' "), "{got}");
-        assert_eq!(split_args(&got).len(), 6);
+        assert_eq!(tokenize(&got).len(), 6);
     }
 
     #[test]
     fn override_nests_the_users_template_under_the_folders() {
         let dirs = strings(&["Twitch", "Emiru"]);
         let got = recorder_override("--no-part --output \"%(title)s.%(ext)s\" {url}", &dirs, Path::new("/cfg/3.txt"), 1).unwrap();
-        let args = split_args(&got);
+        let args = tokenize(&got);
         assert_eq!(args.len(), 4 + 2 + 9);
         assert_eq!(&args[4..6], ["--output", "Twitch/Emiru/%(title)s.%(ext)s"]);
         assert_eq!(args[13], "before_dl:BDT|Twitch/Emiru/%(title)s.%(ext)s");
@@ -339,37 +299,37 @@ mod tests {
     #[test]
     fn override_uses_the_default_template_when_there_is_no_output_option() {
         let got = recorder_override("--no-part {url}", &strings(&["Emiru"]), Path::new("/cfg/3.txt"), 1).unwrap();
-        let args = split_args(&got);
+        let args = tokenize(&got);
         assert_eq!(&args[2..4], ["--output", "Emiru/%(title)s [%(id)s].%(ext)s"]);
     }
 
     #[test]
     fn override_escapes_percent_signs_in_folder_names() {
         let got = recorder_override("--output \"%(id)s.%(ext)s\"", &strings(&["50%"]), Path::new("/cfg/3.txt"), 1).unwrap();
-        assert_eq!(split_args(&got)[2..4], ["--output", "50%%/%(id)s.%(ext)s"]);
+        assert_eq!(tokenize(&got)[2..4], ["--output", "50%%/%(id)s.%(ext)s"]);
     }
 
     #[test]
     fn override_leaves_absolute_templates_alone() {
         let args_in = "--output \"D:\\rec\\%(id)s.%(ext)s\" {url}";
         let got = recorder_override(args_in, &strings(&["Emiru"]), Path::new("/cfg/3.txt"), 1).unwrap();
-        assert_eq!(split_args(&got).len(), 3 + 9);
+        assert_eq!(tokenize(&got).len(), 3 + 9);
     }
 
     #[test]
     fn later_parts_suffix_the_template_with_or_without_folders() {
         let args_in = "--no-part --output \"%(title)s.%(ext)s\" {url}";
         let plain = recorder_override(args_in, &[], Path::new("/cfg/3.txt"), 2).unwrap();
-        assert_eq!(&split_args(&plain)[4..6], ["--output", "%(title)s_part2.%(ext)s"]);
+        assert_eq!(&tokenize(&plain)[4..6], ["--output", "%(title)s_part2.%(ext)s"]);
         let nested = recorder_override(args_in, &strings(&["Emiru"]), Path::new("/cfg/3.txt"), 3).unwrap();
-        assert_eq!(&split_args(&nested)[4..6], ["--output", "Emiru/%(title)s_part3.%(ext)s"]);
+        assert_eq!(&tokenize(&nested)[4..6], ["--output", "Emiru/%(title)s_part3.%(ext)s"]);
     }
 
     #[test]
     fn later_parts_suffix_absolute_templates_without_folders() {
         let args_in = "--output \"D:\\rec\\%(id)s.%(ext)s\" {url}";
         let got = recorder_override(args_in, &strings(&["Emiru"]), Path::new("/cfg/3.txt"), 2).unwrap();
-        assert_eq!(&split_args(&got)[3..5], ["--output", "D:\\rec\\%(id)s_part2.%(ext)s"]);
+        assert_eq!(&tokenize(&got)[3..5], ["--output", "D:\\rec\\%(id)s_part2.%(ext)s"]);
     }
 
     #[test]

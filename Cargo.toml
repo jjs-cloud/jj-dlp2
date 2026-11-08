@@ -19,7 +19,6 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10"
 sysinfo = "0.38.4"
-time = { version = "0.3", features = ["parsing"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "sync", "time", "macros", "io-util", "signal"] }
 trash = "5.2"
 ureq = { version = "2", features = ["json"] }

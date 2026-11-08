@@ -3,8 +3,6 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
 
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
 /// Public Client-Id the Twitch web client itself uses.
@@ -39,7 +37,7 @@ pub fn login_from_url(url: &str) -> Option<String> {
 
 /// Parses an RFC 3339 timestamp into unix seconds.
 fn parse_started_at(s: &str) -> Option<u64> {
-    let secs = OffsetDateTime::parse(s, &Rfc3339).ok()?.unix_timestamp();
+    let secs = chrono::DateTime::parse_from_rfc3339(s).ok()?.timestamp();
     u64::try_from(secs).ok()
 }
 
