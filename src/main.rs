@@ -13,7 +13,7 @@ mod testutil;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
-const USAGE: &str = "Usage: jj-dlp [--no-gui | --engine-only | --update [--rc]]\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
+const USAGE: &str = "Usage: jj-dlp [--config-dir=<path>] [--no-gui | --engine-only | --update [--rc]]\n  --config-dir  keep config, logs and the instance lock in <path>, so several instances can run\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
 
 enum Mode {
     Gui,
@@ -23,7 +23,17 @@ enum Mode {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(i) = args.iter().position(|a| a.starts_with("--config-dir=")) {
+        let value = args.remove(i).trim_start_matches("--config-dir=").to_string();
+        if value.is_empty() {
+            attach_console();
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        }
+        let dir = std::path::PathBuf::from(value);
+        settings::set_config_dir(std::path::absolute(&dir).unwrap_or(dir));
+    }
     let mode = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] => Mode::Gui,
         ["--no-gui"] => Mode::NoGui,

@@ -5,7 +5,7 @@ use crate::policy::{new_site, Preset};
 use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Holds the reason saving is paused after a config file failed to load.
 pub struct SaveGuard(Mutex<Option<String>>);
@@ -66,7 +66,17 @@ struct State {
     next_id: u64,
 }
 
+static CONFIG_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Uses `dir` as the config directory instead of the platform default; call once at startup.
+pub fn set_config_dir(dir: PathBuf) {
+    let _ = CONFIG_DIR_OVERRIDE.set(dir);
+}
+
 pub fn config_dir() -> PathBuf {
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.get() {
+        return dir.clone();
+    }
     ProjectDirs::from("", "", "jj-dlp")
         .map(|d| d.config_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
