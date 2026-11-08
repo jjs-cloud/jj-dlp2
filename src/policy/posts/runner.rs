@@ -36,7 +36,6 @@ pub struct AccountReport {
 
 #[derive(Debug, Clone)]
 pub struct CycleReport {
-    pub at: u64,
     pub site_ids: Vec<SiteId>,
     pub accounts: Vec<AccountReport>,
 }
@@ -87,7 +86,7 @@ pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>, no_vi
             accounts.push(report);
         }
     }
-    CycleReport { at: now_secs(), site_ids: sites.iter().map(|s| s.id).collect(), accounts }
+    CycleReport { site_ids: sites.iter().map(|s| s.id).collect(), accounts }
 }
 
 async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {

@@ -173,7 +173,6 @@ pub struct PostsState {
     pub added: Option<(String, u64)>,
     pub confirm_remove: Option<SiteId>,
     pub errors: HashMap<AccountKey, String>,
-    pub last_check: Option<u64>,
     pub checking: bool,
     next_check: Option<u64>,
     next_site: Option<String>,
@@ -199,7 +198,6 @@ impl PostsState {
             added: None,
             confirm_remove: None,
             errors: HashMap::new(),
-            last_check: None,
             checking: false,
             next_check: None,
             next_site: None,
@@ -315,7 +313,6 @@ impl PostsState {
             PostsEvent::Removed(ids) => self.posts.retain(|p| !ids.contains(&p.id)),
             PostsEvent::Status(st) => {
                 self.checking = st.checking;
-                self.last_check = st.last_check;
                 self.next_check = st.next_check;
                 self.next_site = st.next_site;
                 self.errors = st.errors.into_iter().map(|e| ((e.site_id, e.name), e.message)).collect();

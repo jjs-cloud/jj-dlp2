@@ -32,7 +32,6 @@ pub struct PostsMonitor {
     tx: UnboundedSender<PostsMsg>,
     global_dir: String,
     checking: bool,
-    last_check: Option<u64>,
     next_check: HashMap<SiteId, Instant>,
     errors: HashMap<AccountKey, String>,
     /// Ids of X posts found to have no video; not saved.
@@ -57,7 +56,6 @@ impl PostsMonitor {
             tx,
             global_dir,
             checking: false,
-            last_check: None,
             errors: HashMap::new(),
             no_video: HashSet::new(),
             downloads: 0,
@@ -139,7 +137,7 @@ impl PostsMonitor {
             self.errors.iter().map(|((site_id, name), message)| AccountError { site_id: *site_id, name: name.clone(), message: message.clone() }).collect();
         errors.sort_by(|a, b| (a.site_id, &a.name).cmp(&(b.site_id, &b.name)));
         let next_check = if self.checking { None } else { wait.map(|w| now_secs() + w) };
-        self.emit(PostsEvent::Status(PostsStatus { checking: self.checking, last_check: self.last_check, next_check, next_site, errors }));
+        self.emit(PostsEvent::Status(PostsStatus { checking: self.checking, next_check, next_site, errors }));
     }
 
     fn post(&self, id: &str) -> Option<&Post> {
@@ -280,7 +278,6 @@ impl PostsMonitor {
         let now = Instant::now();
         let mut changed: Vec<String> = Vec::new();
         self.checking = false;
-        self.last_check = Some(report.at);
         for sid in &report.site_ids {
             if let Some(site) = self.cfg.site(*sid) {
                 self.next_check.insert(*sid, now + Duration::from_secs(site.interval_or_default()));

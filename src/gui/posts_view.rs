@@ -129,10 +129,8 @@ impl App {
                 None => format!("Next check in {n}s"),
             })
         };
-        let last = p.last_check.map(|at| format!("Last check (all sites) {}", fmt_ago(self.now.saturating_sub(at))));
         let controls = column![
             muted(&s, status),
-            muted(&s, last.unwrap_or_default()),
             row![
                 card_btn(s, "Check all now", PostsMsg::CheckNow, BtnKind::Ghost),
                 card_btn(s, if p.all_paused() { "Resume all" } else { "Pause all" }, PostsMsg::Paused(!p.all_paused()), BtnKind::Ghost),
