@@ -388,7 +388,7 @@ mod tests {
     }
 
     fn settings_with(sites: Vec<Site>) -> Settings {
-        Settings { next_id: 10, default_output_dir: "x".into(), sites, streamers: Vec::new() }
+        Settings { next_id: 10, default_output_dir: "x".into(), max_recordings: None, sites, streamers: Vec::new() }
     }
 
     #[test]

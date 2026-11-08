@@ -1671,12 +1671,14 @@ impl App {
         let switcher = row![
             switch("Livestreams", SettingsTab::Sites),
             switch("Posts", SettingsTab::Posts),
+            switch("Priority", SettingsTab::Priority),
             switch("General", SettingsTab::General)
         ]
         .spacing(8);
         let body = match self.settings_tab {
             SettingsTab::Sites => self.settings_sites(s),
             SettingsTab::Posts => self.posts_settings(s),
+            SettingsTab::Priority => self.priority_settings(s),
             SettingsTab::General => self.settings_general(s),
         };
         column![switcher, body].spacing(12).height(Length::Fill).into()

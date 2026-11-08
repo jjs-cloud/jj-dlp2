@@ -23,6 +23,7 @@ pub mod logtail;
 pub mod notify;
 mod outpath;
 pub mod posts;
+mod priority;
 mod probe;
 mod restarts;
 mod schedule;
@@ -144,6 +145,8 @@ pub enum PolicyCommand {
     RemoveStreamer(StreamerId),
     SetStreamerEnabled { id: StreamerId, enabled: bool },
     SetStreamerOptions { id: StreamerId, options: StreamerOptions },
+    /// Saves the priority order (highest first), the always-record streamers and the recording limit.
+    SetPriority { order: Vec<StreamerId>, always: HashSet<StreamerId>, max: Option<u32> },
     SetGlobalOutputDir(String),
     OpenConfigDir,
     /// Opens the folder holding the recorder and checker logs.
@@ -309,6 +312,10 @@ struct Policy {
     rename_on_exit: HashMap<RecorderId, (StreamerId, PathBuf)>,
     /// The part number in the recorder arguments last sent to the engine for each streamer.
     override_part: HashMap<StreamerId, u32>,
+    /// Streamers already told to stop for a higher-priority one, so the stop is logged once.
+    evicting: HashSet<StreamerId>,
+    /// Names of the streamers evicted for a held live notification, by the streamer it is for.
+    evicted_notes: HashMap<StreamerId, Vec<String>>,
     posts: posts::PostsMonitor,
 }
 
@@ -360,6 +367,8 @@ impl Policy {
             retiring: HashSet::new(),
             rename_on_exit: HashMap::new(),
             override_part: HashMap::new(),
+            evicting: HashSet::new(),
+            evicted_notes: HashMap::new(),
             posts,
         }
     }
@@ -485,6 +494,9 @@ impl Policy {
                 if status.recording || !status.live {
                     self.part_pending.remove(id);
                 }
+                if !status.recording {
+                    self.evicting.remove(id);
+                }
                 if !status.live && !status.recording {
                     self.gate.take_held(*id);
                     self.warnings.end_span(*id);
@@ -563,22 +575,28 @@ impl Policy {
             return;
         }
         let mut live = LiveStatus::Unconfirmed;
+        let mut evicted = Vec::new();
         if kind == Kind::Live {
             if let Decision::NotRecording(reason) = self.decision_for(&st) {
                 live = LiveStatus::NotRecording(reason);
-                if reason.only_delays_start() {
+                if reason.defers_notice() {
                     self.gate.defer(id);
                 }
-            } else if site.notify_confirmed {
-                self.gate.hold(id);
-                return;
+            } else {
+                evicted = self.evicted_by(id);
+                if site.notify_confirmed {
+                    self.evicted_notes.insert(id, evicted);
+                    self.gate.hold(id);
+                    return;
+                }
             }
         }
-        self.send_notification(&st, &site, kind, restarts, live, now);
+        self.send_notification(&st, &site, kind, restarts, live, &evicted, now);
     }
 
     /// Sends the live notification that was waiting for the file to be confirmed growing.
     fn on_growth_confirmed(&mut self, id: StreamerId) {
+        let evicted = self.evicted_notes.remove(&id).unwrap_or_default();
         if !self.gate.take_held(id) {
             return;
         }
@@ -586,11 +604,12 @@ impl Policy {
         let now = Instant::now();
         let cooldown = Duration::from_secs(site.notify_cooldown_or_default().saturating_mul(60));
         if self.gate.ready(id, Kind::Live, cooldown, now) {
-            self.send_notification(&st, &site, Kind::Live, 0, LiveStatus::Confirmed, now);
+            self.send_notification(&st, &site, Kind::Live, 0, LiveStatus::Confirmed, &evicted, now);
         }
     }
 
-    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, live: LiveStatus, now: Instant) {
+    #[allow(clippy::too_many_arguments)]
+    fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, live: LiveStatus, evicted: &[String], now: Instant) {
         let targets = Targets {
             desktop_timeout_secs: site.notify_desktop.then(|| site.notify_timeout_or_default()),
             ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic))
@@ -603,7 +622,7 @@ impl Policy {
         let msg = match kind {
             Kind::Live => Message {
                 title: format!("{} is live", st.name),
-                body: notify::live_body(live, &site.name),
+                body: notify::live_body(live, &site.name, evicted),
                 click: Some(st.url.clone()),
             },
             Kind::Stalled => Message {
@@ -771,17 +790,62 @@ impl Policy {
         std::path::absolute(&dir).unwrap_or(dir)
     }
 
-    /// The recording decision for a streamer right now.
-    fn decision_for(&self, streamer: &Streamer) -> Decision {
-        decision::decide(streamer, self.live.span_start(streamer.id), now_secs())
+    /// Streamers that want a recording slot: enabled ones recording now, or live and past any intro delay.
+    fn wanting(&self) -> HashSet<StreamerId> {
+        let now = now_secs();
+        let wants = |s: &&Streamer| {
+            let st = self.statuses.get(&s.id).copied().unwrap_or_default();
+            s.enabled && (st.recording || (st.live && decision::decide(s, self.live.span_start(s.id), now) == Decision::Record))
+        };
+        self.settings.streamers.iter().filter(wants).map(|s| s.id).collect()
     }
 
-    /// Applies the recording decision to a streamer: starts a live one that should record and stops one that should not.
+    /// The streamers among `wanting` that the priority order and recording limit allow to record.
+    fn admitted(&self, wanting: &HashSet<StreamerId>) -> HashSet<StreamerId> {
+        let order: Vec<priority::Ranked> = self.settings.streamers.iter().map(|s| (s.id, s.options.always_record)).collect();
+        priority::admitted(&order, wanting, self.settings.max_recordings)
+    }
+
+    /// Names of the streamers recording now that the priority order no longer lets record, other than `id`.
+    fn evicted_by(&self, id: StreamerId) -> Vec<String> {
+        let wanting = self.wanting();
+        let admitted = self.admitted(&wanting);
+        let recording = |s: &Streamer| self.statuses.get(&s.id).is_some_and(|st| st.recording);
+        let out = |s: &&Streamer| s.id != id && wanting.contains(&s.id) && !admitted.contains(&s.id) && recording(s);
+        self.settings.streamers.iter().filter(out).map(|s| s.name.clone()).collect()
+    }
+
+    /// The recording decision for a streamer right now.
+    fn decision_for(&self, streamer: &Streamer) -> Decision {
+        let base = decision::decide(streamer, self.live.span_start(streamer.id), now_secs());
+        let wanting = self.wanting();
+        if base != Decision::Record || !wanting.contains(&streamer.id) || self.admitted(&wanting).contains(&streamer.id) {
+            return base;
+        }
+        Decision::NotRecording(notify::NotRecordingReason::LowerPriority)
+    }
+
+    /// Applies the recording decision to a streamer, then to the others it affects: recordings the priority order now stops and streamers waiting for a slot.
     fn reconcile(&mut self, id: StreamerId) {
+        self.apply_decision(id);
+        let affected: Vec<StreamerId> = self
+            .settings
+            .streamers
+            .iter()
+            .map(|s| s.id)
+            .filter(|o| *o != id && (self.waiting.contains(o) || self.statuses.get(o).is_some_and(|st| st.recording)))
+            .collect();
+        for other in affected {
+            self.apply_decision(other);
+        }
+    }
+
+    /// Starts a live streamer that should record and stops one that should not.
+    fn apply_decision(&mut self, id: StreamerId) {
         let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { return };
         let status = self.statuses.get(&id).copied().unwrap_or_default();
         let decision = self.decision_for(&streamer);
-        let delayed = decision == Decision::NotRecording(notify::NotRecordingReason::IntroDelay);
+        let delayed = matches!(decision, Decision::NotRecording(reason) if reason.defers_notice());
         let was_waiting = if status.live && !status.recording && delayed {
             !self.waiting.insert(id)
         } else {
@@ -797,6 +861,9 @@ impl Policy {
                 self.engine.send(Command::StartRecording { id });
             }
             Decision::NotRecording(reason) if status.recording && !reason.only_delays_start() => {
+                if reason == notify::NotRecordingReason::LowerPriority && self.evicting.insert(id) {
+                    self.log(format!("Priority: stopped {} (lower priority)", streamer.name));
+                }
                 self.restarts.stopping(id);
                 self.splitter.cancel(id);
                 self.engine.send(Command::StopRecording { id });
@@ -809,11 +876,11 @@ impl Policy {
     fn reconcile_all(&mut self) {
         let ids: Vec<StreamerId> = self.settings.streamers.iter().map(|s| s.id).collect();
         for id in ids {
-            self.reconcile(id);
+            self.apply_decision(id);
         }
     }
 
-    /// Re-applies the decision to streamers held back by an intro delay, so their recording starts when it ends.
+    /// Re-applies the decision to streamers held back by an intro delay or a full recording limit.
     fn release_due_delays(&mut self) {
         let ids: Vec<StreamerId> = self.waiting.iter().copied().collect();
         for id in ids {
@@ -1077,6 +1144,8 @@ impl Policy {
         self.gate.retain(|id| live::lookup(settings, id).is_some());
         self.statuses.retain(|id, _| live::lookup(settings, *id).is_some());
         self.waiting.retain(|id| live::lookup(settings, *id).is_some());
+        self.evicting.retain(|id| live::lookup(settings, *id).is_some());
+        self.evicted_notes.retain(|id, _| live::lookup(settings, *id).is_some());
         self.splitter.retain(|id| live::lookup(settings, id).is_some());
         self.flush_live();
         self.flush_restarts();
@@ -1337,11 +1406,21 @@ impl Policy {
             }
             PolicyCommand::SetStreamerOptions { id, options } => {
                 if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
+                    let options = StreamerOptions { always_record: s.options.always_record, ..options };
                     let old = std::mem::replace(&mut s.options, options.clone());
                     self.mark_log_toggles(id, &old, &options);
                     self.commit();
                     self.run_schedules();
                 }
+            }
+            PolicyCommand::SetPriority { order, always, max } => {
+                let rank = |id: StreamerId| order.iter().position(|o| *o == id).unwrap_or(usize::MAX);
+                self.settings.streamers.sort_by_key(|s| rank(s.id));
+                for s in &mut self.settings.streamers {
+                    s.options.always_record = always.contains(&s.id);
+                }
+                self.settings.max_recordings = max.filter(|m| *m > 0);
+                self.commit();
             }
             PolicyCommand::SetGlobalOutputDir(dir) => {
                 let dir = dir.trim();
@@ -1491,6 +1570,7 @@ mod tests {
         let mut s = Settings {
             next_id: 1,
             default_output_dir: "/global".into(),
+            max_recordings: None,
             sites: vec![site(1, " /custom "), site(2, "  ")],
             streamers: Vec::new(),
         };
@@ -1616,7 +1696,7 @@ mod e2e {
     fn one_streamer(p: &mut Policy, options: StreamerOptions, enabled: bool) {
         let site = new_site(Preset::Blank).into_site(1);
         let streamer = Streamer { id: 2, site_id: 1, name: "n".into(), url: "u".into(), enabled, options, schedule_runs: Default::default() };
-        p.settings = Settings { next_id: 10, default_output_dir: "out".into(), sites: vec![site], streamers: vec![streamer] };
+        p.settings = Settings { next_id: 10, default_output_dir: "out".into(), max_recordings: None, sites: vec![site], streamers: vec![streamer] };
     }
 
     fn live_status(p: &mut Policy, recording: bool, checked: u64) {
@@ -1651,6 +1731,71 @@ mod e2e {
         p.settings.streamers[0].enabled = true;
         p.run_schedules();
         assert!(p.settings.streamers[0].enabled);
+    }
+
+    fn two_streamers(p: &mut Policy, max: Option<u32>) {
+        let site = new_site(Preset::Blank).into_site(1);
+        let mk = |id, name: &str| Streamer {
+            id,
+            site_id: 1,
+            name: name.into(),
+            url: "u".into(),
+            enabled: true,
+            options: StreamerOptions::default(),
+            schedule_runs: Default::default(),
+        };
+        p.settings = Settings {
+            next_id: 10,
+            default_output_dir: "out".into(),
+            max_recordings: max,
+            sites: vec![site],
+            streamers: vec![mk(2, "hi"), mk(3, "lo")],
+        };
+    }
+
+    fn set_status(p: &mut Policy, id: StreamerId, live: bool, recording: bool) {
+        let status = StreamerStatus { live, recording, last_checked: Some(now_secs()), check_failed: false };
+        p.on_engine_event(Event::StreamerStatus { id, status });
+    }
+
+    #[test]
+    fn higher_priority_streamer_evicts_the_lowest_at_the_limit() {
+        let _sb = Sandbox::new("policy-evict");
+        let (mut p, mut rx) = bare_policy();
+        two_streamers(&mut p, Some(1));
+        set_status(&mut p, 3, true, true);
+        sent(&mut rx);
+        set_status(&mut p, 2, true, false);
+        let cmds = sent(&mut rx);
+        assert!(cmds.iter().any(|c| matches!(c, Command::StartRecording { id: 2 })));
+        assert!(cmds.iter().any(|c| matches!(c, Command::StopRecording { id: 3 })));
+    }
+
+    #[test]
+    fn lower_priority_streamer_waits_then_starts_when_a_slot_frees() {
+        let _sb = Sandbox::new("policy-wait");
+        let (mut p, mut rx) = bare_policy();
+        two_streamers(&mut p, Some(1));
+        set_status(&mut p, 2, true, true);
+        sent(&mut rx);
+        set_status(&mut p, 3, true, false);
+        assert!(sent(&mut rx).is_empty());
+        set_status(&mut p, 2, false, false);
+        assert!(sent(&mut rx).iter().any(|c| matches!(c, Command::StartRecording { id: 3 })));
+    }
+
+    #[test]
+    fn always_record_starts_at_the_limit_and_evicts_the_lowest() {
+        let _sb = Sandbox::new("policy-always");
+        let (mut p, mut rx) = bare_policy();
+        two_streamers(&mut p, Some(1));
+        p.settings.streamers[0].options.always_record = true;
+        set_status(&mut p, 3, true, true);
+        sent(&mut rx);
+        set_status(&mut p, 2, true, false);
+        let cmds = sent(&mut rx);
+        assert!(cmds.iter().any(|c| matches!(c, Command::StartRecording { id: 2 })));
+        assert!(cmds.iter().any(|c| matches!(c, Command::StopRecording { id: 3 })));
     }
 
     #[test]

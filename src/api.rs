@@ -268,6 +268,8 @@ pub struct StreamerOptions {
     pub auto_suffix: Option<bool>,
     /// Automatic enabling and disabling of the streamer.
     pub schedule: Schedule,
+    /// Records even when the recording limit is reached; owned by the Priority tab.
+    pub always_record: bool,
 }
 
 /// Whether a schedule runs once or repeats weekly.
@@ -338,6 +340,8 @@ impl StreamerOptions {
 pub struct Settings {
     pub next_id: u64,
     pub default_output_dir: String,
+    /// Most streamers recorded at once; `None` is unlimited.
+    pub max_recordings: Option<u32>,
     pub sites: Vec<Site>,
     pub streamers: Vec<Streamer>,
 }

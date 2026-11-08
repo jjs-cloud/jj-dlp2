@@ -10,6 +10,8 @@ mod desktop;
 mod posts;
 mod posts_view;
 pub mod prefs;
+mod priority;
+mod priority_view;
 mod skin;
 mod view;
 
@@ -112,6 +114,7 @@ pub enum LogTab {
 pub enum SettingsTab {
     Sites,
     Posts,
+    Priority,
     General,
 }
 
@@ -564,6 +567,7 @@ impl StreamerDraft {
             intro_delay_minutes: self.intro_minutes.trim().parse().unwrap_or(0),
             intro_delay_split: self.intro_split.then_some(true),
             schedule: self.schedule.clone(),
+            always_record: false,
         }
     }
 
@@ -622,6 +626,7 @@ pub enum Msg {
     SetTab(Tab),
     Files(files::FilesMsg),
     Posts(posts::PostsMsg),
+    Priority(priority::PriorityMsg),
     SetSettingsTab(SettingsTab),
     SetLogTab(LogTab),
     Logs(logs::LogsMsg),
@@ -786,6 +791,7 @@ pub struct App {
     update_cfg: UpdateConfig,
     files: files::FilesState,
     posts: posts::PostsState,
+    priority: priority::PriorityState,
     disks: disks::Snapshot,
     extra_drives: Vec<PathBuf>,
     disks_dirty: bool,
@@ -847,6 +853,7 @@ impl App {
             update_cfg: UpdateConfig::default(),
             files: files::FilesState::new(),
             posts: posts::PostsState::new(),
+            priority: priority::PriorityState::default(),
             disks: disks::Snapshot::default(),
             extra_drives: prefs::load_extra_drives().into_iter().map(PathBuf::from).collect(),
             disks_dirty: true,
@@ -1015,6 +1022,7 @@ impl App {
             Msg::Files(m) => return self.files_update(m),
             Msg::Logs(m) => return self.logs_update(m),
             Msg::Posts(m) => return self.posts_update(m),
+            Msg::Priority(m) => self.priority_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
             Msg::SetLogTab(w) => {
                 self.log_tab = w;
@@ -1446,6 +1454,7 @@ impl App {
             self.confirm_remove_site = None;
         }
         self.issues.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
+        self.priority_on_settings(&s);
         self.settings = s;
     }
 }

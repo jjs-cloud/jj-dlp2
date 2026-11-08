@@ -57,6 +57,7 @@ pub fn resume_saving() {
 #[derive(Serialize, Deserialize)]
 struct Globals {
     default_output_dir: String,
+    max_recordings: Option<u32>,
 }
 
 /// Contents of state.json.
@@ -99,6 +100,7 @@ pub fn default_settings() -> Settings {
     Settings {
         next_id: 1,
         default_output_dir: default_output_dir(),
+        max_recordings: None,
         sites: Vec::new(),
         streamers: Vec::new(),
     }
@@ -126,7 +128,13 @@ pub fn try_load() -> Result<Settings, String> {
     let sites: Vec<Site> = read_json(&sites_path())?;
     let streamers: Vec<Streamer> = read_json(&streamers_path())?;
     let state: State = read_json(&state_path())?;
-    Ok(Settings { next_id: state.next_id, default_output_dir: globals.default_output_dir, sites, streamers })
+    Ok(Settings {
+        next_id: state.next_id,
+        default_output_dir: globals.default_output_dir,
+        max_recordings: globals.max_recordings,
+        sites,
+        streamers,
+    })
 }
 
 /// Whether any of the four main config files exists.
@@ -174,7 +182,7 @@ pub fn save(settings: &Settings) -> std::io::Result<()> {
     }
     std::fs::create_dir_all(config_dir())?;
     write_json(&state_path(), &State { next_id: settings.next_id })?;
-    write_json(&settings_path(), &Globals { default_output_dir: settings.default_output_dir.clone() })?;
+    write_json(&settings_path(), &Globals { default_output_dir: settings.default_output_dir.clone(), max_recordings: settings.max_recordings })?;
     write_json(&sites_path(), &settings.sites)?;
     write_json(&streamers_path(), &settings.streamers)
 }

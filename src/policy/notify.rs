@@ -54,12 +54,18 @@ pub fn topic_valid(topic: &str) -> bool {
 pub enum NotRecordingReason {
     Disabled,
     IntroDelay,
+    LowerPriority,
 }
 
 impl NotRecordingReason {
     /// True when the reason only delays starting: a running recording is left alone and a recording notice follows once it clears.
     pub fn only_delays_start(self) -> bool {
         matches!(self, NotRecordingReason::IntroDelay)
+    }
+
+    /// True when a recording notice follows once the reason clears.
+    pub fn defers_notice(self) -> bool {
+        matches!(self, NotRecordingReason::IntroDelay | NotRecordingReason::LowerPriority)
     }
 }
 
@@ -68,6 +74,7 @@ impl std::fmt::Display for NotRecordingReason {
         match self {
             NotRecordingReason::Disabled => f.write_str("Disabled"),
             NotRecordingReason::IntroDelay => f.write_str("Intro Delay"),
+            NotRecordingReason::LowerPriority => f.write_str("Lower priority"),
         }
     }
 }
@@ -80,14 +87,15 @@ pub enum LiveStatus {
     Confirmed,
 }
 
-/// Body of the live notification: recording status, the reason when not recording, then the site.
-pub fn live_body(status: LiveStatus, site: &str) -> String {
+/// Body of the live notification: recording status, the reason when not recording, a warning per evicted streamer, then the site.
+pub fn live_body(status: LiveStatus, site: &str, evicted: &[String]) -> String {
     let status = match status {
         LiveStatus::NotRecording(reason) => format!("\u{1F7E1} Status: Not recording\nReason: {reason}"),
         LiveStatus::Confirmed => "\u{1F534} Status: Recording (confirmed)".to_string(),
         LiveStatus::Unconfirmed => "\u{1F534} Status: Recording (unconfirmed)".to_string(),
     };
-    format!("{status}\nSite: {site}")
+    let warnings: String = evicted.iter().map(|name| format!("\n\u{1F7E1} Warning: evicted {name}")).collect();
+    format!("{status}{warnings}\nSite: {site}")
 }
 
 /// The message with the free space of the drive holding `folder` added to its body; blocks.
@@ -245,18 +253,36 @@ mod tests {
     #[test]
     fn live_body_reports_status_reason_and_site() {
         let not_recording = |r| LiveStatus::NotRecording(r);
-        let disabled = live_body(not_recording(NotRecordingReason::Disabled), "Twitch");
+        let disabled = live_body(not_recording(NotRecordingReason::Disabled), "Twitch", &[]);
         assert_eq!(disabled, "\u{1F7E1} Status: Not recording\nReason: Disabled\nSite: Twitch");
-        let delay = live_body(not_recording(NotRecordingReason::IntroDelay), "Twitch");
+        let delay = live_body(not_recording(NotRecordingReason::IntroDelay), "Twitch", &[]);
         assert_eq!(delay, "\u{1F7E1} Status: Not recording\nReason: Intro Delay\nSite: Twitch");
-        assert_eq!(live_body(LiveStatus::Confirmed, "Twitch"), "\u{1F534} Status: Recording (confirmed)\nSite: Twitch");
-        assert_eq!(live_body(LiveStatus::Unconfirmed, "Twitch"), "\u{1F534} Status: Recording (unconfirmed)\nSite: Twitch");
+        assert_eq!(live_body(LiveStatus::Confirmed, "Twitch", &[]), "\u{1F534} Status: Recording (confirmed)\nSite: Twitch");
+        assert_eq!(live_body(LiveStatus::Unconfirmed, "Twitch", &[]), "\u{1F534} Status: Recording (unconfirmed)\nSite: Twitch");
+        let low = live_body(not_recording(NotRecordingReason::LowerPriority), "Twitch", &[]);
+        assert_eq!(low, "\u{1F7E1} Status: Not recording\nReason: Lower priority\nSite: Twitch");
+    }
+
+    #[test]
+    fn live_body_warns_about_each_evicted_streamer() {
+        let evicted = ["amy".to_string(), "bo".to_string()];
+        let body = live_body(LiveStatus::Unconfirmed, "Twitch", &evicted);
+        let want = "\u{1F534} Status: Recording (unconfirmed)\n\u{1F7E1} Warning: evicted amy\n\u{1F7E1} Warning: evicted bo\nSite: Twitch";
+        assert_eq!(body, want);
     }
 
     #[test]
     fn only_the_intro_delay_just_delays_the_start() {
         assert!(NotRecordingReason::IntroDelay.only_delays_start());
         assert!(!NotRecordingReason::Disabled.only_delays_start());
+        assert!(!NotRecordingReason::LowerPriority.only_delays_start());
+    }
+
+    #[test]
+    fn delay_and_priority_defer_the_recording_notice() {
+        assert!(NotRecordingReason::IntroDelay.defers_notice());
+        assert!(NotRecordingReason::LowerPriority.defers_notice());
+        assert!(!NotRecordingReason::Disabled.defers_notice());
     }
 
     #[test]

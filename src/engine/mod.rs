@@ -642,6 +642,7 @@ mod e2e {
         let settings = Settings {
             next_id: 10,
             default_output_dir: dir.join("out").to_string_lossy().into(),
+            max_recordings: None,
             sites: vec![Site {
                 id: 1,
                 name: "Fake".into(),
@@ -811,6 +812,7 @@ mod e2e {
         let settings = Settings {
             next_id: 10,
             default_output_dir: sb.dir.join("out").to_string_lossy().into(),
+            max_recordings: None,
             sites: vec![Site {
                 id: 1,
                 name: "Fake".into(),
