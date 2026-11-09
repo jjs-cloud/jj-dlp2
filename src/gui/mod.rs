@@ -23,7 +23,7 @@ use crate::policy::notify::{self, Targets};
 use crate::policy::update::UpdateConfig;
 use crate::policy::{
     new_site, preset_for_name, NewSite, PolicyClient, PolicyCommand, PolicyEvent, Preset, RecordingFile, UpdateEvent,
-    Warnings, DEFAULT_SITE_COLOR,
+    WarningChip, Warnings, DEFAULT_SITE_COLOR,
 };
 use iced::futures::{SinkExt, Stream};
 use iced::{window, Size, Subscription, Task, Theme};
@@ -699,6 +699,7 @@ pub enum Msg {
     OpenGlobalOut,
     Recheck,
     ClearWarnings,
+    DismissWarning(StreamerId, WarningChip),
     CopyText(String),
     ToggleProc(RecorderId),
     SetWrapOutput(bool),
@@ -1410,6 +1411,7 @@ impl App {
             }
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
             Msg::ClearWarnings => self.client.send(PolicyCommand::ClearWarnings),
+            Msg::DismissWarning(id, chip) => self.client.send(PolicyCommand::DismissWarning(id, chip)),
             Msg::CopyText(text) => return iced::clipboard::write(text),
             Msg::SetCompact(on) => {
                 self.compact = on;

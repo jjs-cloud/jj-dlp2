@@ -59,6 +59,15 @@ impl RestartTracker {
         }
     }
 
+    /// Resets the streamer's restart count.
+    pub fn clear_one(&mut self, id: StreamerId) {
+        if let Some(e) = self.entries.get_mut(&id).filter(|e| e.count > 0) {
+            e.count = 0;
+            e.last_restart = None;
+            self.dirty = true;
+        }
+    }
+
     /// Resets counts whose latest restart is older than the streamer's auto-clear minutes; 0 never clears.
     pub fn expire(&mut self, now: Instant, clear_minutes: impl Fn(StreamerId) -> u64) {
         for (id, e) in self.entries.iter_mut() {
@@ -104,6 +113,20 @@ mod tests {
     use super::*;
 
     const WINDOW: Duration = Duration::from_secs(1800);
+
+    #[test]
+    fn clear_one_resets_only_that_streamer() {
+        let (mut t, t0) = (RestartTracker::default(), Instant::now());
+        for id in [1, 2] {
+            t.on_status(id, true, true, WINDOW, t0);
+            t.on_status(id, false, true, WINDOW, secs(t0, 5));
+            t.on_status(id, true, true, WINDOW, secs(t0, 65));
+        }
+        t.take_dirty();
+        t.clear_one(1);
+        assert_eq!((t.count(1), t.count(2)), (0, 1));
+        assert!(t.take_dirty());
+    }
 
     fn secs(t0: Instant, n: u64) -> Instant {
         t0 + Duration::from_secs(n)

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::api::*;
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use crate::policy::{layout, Preset, Warnings};
+use crate::policy::{layout, Preset, WarningChip, Warnings};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
@@ -62,6 +62,15 @@ fn rec_chip<'a>(s: Skin, label: &'static str, size: f32, pad: [f32; 2], open: Op
             .into(),
         None => container(text).padding(pad).style(skin::chip(s, s.accent)).into(),
     }
+}
+
+/// A glowing warning chip; clicking dismisses that warning for the streamer.
+fn warn_chip<'a>(s: Skin, label: impl IntoFragment<'a>, color: Color, size: f32, pad: [f32; 2], id: StreamerId, kind: WarningChip) -> Element<'a, Msg> {
+    button(iced::widget::text(label).font(s.font).size(size).color(color))
+        .on_press(Msg::DismissWarning(id, kind))
+        .padding(pad)
+        .style(skin::chip_btn(s, color))
+        .into()
 }
 
 fn dot<'a>(s: Skin, color: Color, glow: f32) -> Element<'a, Msg> {
@@ -209,7 +218,7 @@ fn compact_chips<'a>(
         chips = chips.push(rec_chip(s, "REC", m.chip, [m.chip_pad_v, m.chip_pad_h], open));
     }
     if stalled {
-        chips = chips.push(mini_chip(s, m, "STALLED", s.danger));
+        chips = chips.push(warn_chip(s, "STALLED", s.danger, m.chip, [m.chip_pad_v, m.chip_pad_h], st.id, WarningChip::Stalled));
     }
     if !st.enabled {
         chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
@@ -221,13 +230,13 @@ fn compact_chips<'a>(
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
     }
     if restarts > 0 {
-        chips = chips.push(mini_chip(s, m, format!("RESTARTED {restarts}×"), s.warn));
+        chips = chips.push(warn_chip(s, format!("RESTARTED {restarts}×"), s.warn, m.chip, [m.chip_pad_v, m.chip_pad_h], st.id, WarningChip::Restarted));
     }
     if warns.interrupts > 0 {
-        chips = chips.push(mini_chip(s, m, format!("INTERRUPT {}×", warns.interrupts), s.warn));
+        chips = chips.push(warn_chip(s, format!("INTERRUPT {}×", warns.interrupts), s.warn, m.chip, [m.chip_pad_v, m.chip_pad_h], st.id, WarningChip::Interrupt));
     }
     if warns.errors > 0 {
-        chips = chips.push(mini_chip(s, m, format!("ERROR {}×", warns.errors), s.warn));
+        chips = chips.push(warn_chip(s, format!("ERROR {}×", warns.errors), s.warn, m.chip, [m.chip_pad_v, m.chip_pad_h], st.id, WarningChip::Error));
     }
     if st.options.log_stdout || st.options.log_stderr {
         chips = chips.push(mini_chip(s, m, "LOG", s.muted));
@@ -1021,7 +1030,7 @@ impl App {
         let mut state_chips: Row<'a, Msg> =
             Row::new().spacing(6).align_y(Alignment::Center).push(chip(s, state_label, state_color));
         if stalled {
-            state_chips = state_chips.push(chip(s, "STALLED", s.danger));
+            state_chips = state_chips.push(warn_chip(s, "STALLED", s.danger, 11.0, [3.0, 10.0], p.streamer_id, WarningChip::Stalled));
         }
         let yt = p.ytdlp.as_ref().or(p.root.as_ref());
         let yt_text = yt.map_or("—".to_string(), |y| {
@@ -1258,7 +1267,7 @@ impl App {
             chips = chips.push(rec_chip(s, "RECORDING", 11.0, [3.0, 10.0], self.openable_recording(id)));
         }
         if self.streamer_stalled(id) {
-            chips = chips.push(chip(s, "STALLED", s.danger));
+            chips = chips.push(warn_chip(s, "STALLED", s.danger, 11.0, [3.0, 10.0], id, WarningChip::Stalled));
         }
         if status.live {
             chips = chips.push(chip(s, "LIVE", s.live));
@@ -1274,14 +1283,14 @@ impl App {
         }
         let restarts = self.shown_restarts(st);
         if restarts > 0 {
-            chips = chips.push(chip(s, format!("RESTARTED {restarts}×"), s.warn));
+            chips = chips.push(warn_chip(s, format!("RESTARTED {restarts}×"), s.warn, 11.0, [3.0, 10.0], id, WarningChip::Restarted));
         }
         let warns = self.warns(id);
         if warns.interrupts > 0 {
-            chips = chips.push(chip(s, format!("INTERRUPT {}×", warns.interrupts), s.warn));
+            chips = chips.push(warn_chip(s, format!("INTERRUPT {}×", warns.interrupts), s.warn, 11.0, [3.0, 10.0], id, WarningChip::Interrupt));
         }
         if warns.errors > 0 {
-            chips = chips.push(chip(s, format!("ERROR {}×", warns.errors), s.warn));
+            chips = chips.push(warn_chip(s, format!("ERROR {}×", warns.errors), s.warn, 11.0, [3.0, 10.0], id, WarningChip::Error));
         }
         if st.options.log_stdout || st.options.log_stderr {
             chips = chips.push(chip(s, "LOGGING", s.muted));

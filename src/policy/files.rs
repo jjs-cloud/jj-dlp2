@@ -357,6 +357,13 @@ impl FileTracker {
         }
     }
 
+    /// Hides the streamer's current stalls until their files recover.
+    pub fn dismiss_stalls_for(&mut self, id: StreamerId) {
+        for e in self.entries.values_mut().filter(|e| e.streamer_id == id && e.stall.is_some()) {
+            e.dismissed = true;
+        }
+    }
+
     /// Forgets a recording and returns its streamer.
     pub fn remove(&mut self, id: RecorderId) -> Option<StreamerId> {
         self.entries.remove(&id).map(|e| e.streamer_id)

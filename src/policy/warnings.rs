@@ -142,6 +142,22 @@ impl WarnTracker {
         self.counts.clear();
     }
 
+    /// Resets one kind of count for the streamer.
+    pub fn clear_kind(&mut self, id: StreamerId, kind: WarnKind) {
+        let Some(w) = self.counts.get_mut(&id) else { return };
+        let n = match kind {
+            WarnKind::Interrupt => &mut w.interrupts,
+            WarnKind::Error => &mut w.errors,
+        };
+        if *n > 0 {
+            *n = 0;
+            self.dirty = true;
+        }
+        if *w == Warnings::default() {
+            self.counts.remove(&id);
+        }
+    }
+
     /// Keeps only the streamers and sites the predicates accept.
     pub fn retain(&mut self, mut keep_streamer: impl FnMut(StreamerId) -> bool, mut keep_site: impl FnMut(SiteId) -> bool) {
         let before = self.counts.len();
@@ -201,6 +217,18 @@ mod tests {
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 2 }));
         assert_eq!(t.counts().get(&2), Some(&Warnings { interrupts: 0, errors: 1 }));
         assert!(t.take_dirty() && !t.take_dirty());
+    }
+
+    #[test]
+    fn clear_kind_resets_only_that_kind() {
+        let (mut t, site) = (WarnTracker::default(), twitch());
+        t.on_line(1, &site, "Packet corrupt in /ad/ segment");
+        t.take_dirty();
+        t.clear_kind(1, WarnKind::Error);
+        assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 0 }));
+        assert!(t.take_dirty());
+        t.clear_kind(1, WarnKind::Interrupt);
+        assert!(t.counts().is_empty());
     }
 
     #[test]

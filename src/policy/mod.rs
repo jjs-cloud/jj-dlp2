@@ -143,6 +143,15 @@ impl NewSite {
     }
 }
 
+/// A warning chip on a streamer's row that can be dismissed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningChip {
+    Restarted,
+    Interrupt,
+    Error,
+    Stalled,
+}
+
 #[derive(Debug, Clone)]
 pub enum PolicyCommand {
     RequestSnapshot,
@@ -169,6 +178,8 @@ pub enum PolicyCommand {
     Recheck,
     /// Resets every streamer's restart, interrupt and error counts and dismisses stall warnings.
     ClearWarnings,
+    /// Dismisses one warning chip on one streamer's row.
+    DismissWarning(StreamerId, WarningChip),
     /// Looks for a new release now, even when automatic checks are off.
     CheckForUpdate,
     /// Downloads the available update, then stops the engine and restarts into it.
@@ -1515,6 +1526,21 @@ impl Policy {
                 self.files.dismiss_stalls();
                 self.emit_files();
             }
+            PolicyCommand::DismissWarning(id, chip) => match chip {
+                WarningChip::Restarted => {
+                    self.restarts.clear_one(id);
+                    self.flush_restarts();
+                }
+                WarningChip::Interrupt | WarningChip::Error => {
+                    let kind = if chip == WarningChip::Interrupt { warnings::WarnKind::Interrupt } else { warnings::WarnKind::Error };
+                    self.warnings.clear_kind(id, kind);
+                    self.flush_warnings();
+                }
+                WarningChip::Stalled => {
+                    self.files.dismiss_stalls_for(id);
+                    self.emit_files();
+                }
+            },
             PolicyCommand::CheckForUpdate => self.run_check(true),
             PolicyCommand::InstallUpdate => self.install_update(),
             PolicyCommand::DiscardBrokenConfig => {
