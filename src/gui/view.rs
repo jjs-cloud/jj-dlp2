@@ -527,16 +527,8 @@ impl App {
             if self.settings.streamers.is_empty() {
                 col = col.push(muted(&s, "No streamers yet. Pick a site and add a username below."));
             }
-            let sites: Vec<&Site> = self
-                .settings
-                .sites
-                .iter()
-                .filter(|site| self.settings.streamers.iter().any(|x| x.site_id == site.id))
-                .collect();
-            if self.win_w >= self.full_two_col_w && sites.len() > 1 {
-                col = col.push(self.full_two_columns(s, &sites));
-            } else {
-                for site in sites {
+            for site in &self.settings.sites {
+                if self.settings.streamers.iter().any(|x| x.site_id == site.id) {
                     col = col.push(self.site_block(s, site));
                 }
             }
@@ -545,33 +537,6 @@ impl App {
             .spacing(12)
             .push(container(self.streamer_add_bar(s)).padding(iced::Padding { right: 8.0, ..Default::default() }))
             .into()
-    }
-
-    /// Splits the site blocks, in order, into two side-by-side columns of similar height.
-    fn full_two_columns<'a>(&'a self, s: Skin, sites: &[&'a Site]) -> Element<'a, Msg> {
-        let weight = |site: &Site| 2 + self.settings.streamers.iter().filter(|x| x.site_id == site.id).count();
-        let total: usize = sites.iter().map(|x| weight(*x)).sum();
-        let mut split = 1;
-        let mut best = usize::MAX;
-        let mut left = 0;
-        for (i, site) in sites.iter().enumerate().take(sites.len() - 1) {
-            left += weight(*site);
-            let diff = left.abs_diff(total - left);
-            if diff < best {
-                best = diff;
-                split = i + 1;
-            }
-        }
-        let mut a = Column::new().spacing(12).width(Length::Fill);
-        let mut b = Column::new().spacing(12).width(Length::Fill);
-        for (i, site) in sites.iter().enumerate() {
-            if i < split {
-                a = a.push(self.site_block(s, *site));
-            } else {
-                b = b.push(self.site_block(s, *site));
-            }
-        }
-        row![a, b].spacing(12).align_y(Alignment::Start).into()
     }
 
     /// Site selector, name and username boxes and Add button under the site panels.
@@ -1269,8 +1234,21 @@ impl App {
             .iter()
             .filter(|x| x.site_id == site.id)
             .collect();
-        for st in streamers {
-            top = top.push(self.streamer_row(s, st));
+        if self.win_w >= self.full_two_col_w && streamers.len() > 1 {
+            let per_col = streamers.len().div_ceil(2);
+            let mut grid = Row::new().spacing(12).align_y(Alignment::Start);
+            for chunk in streamers.chunks(per_col) {
+                let mut c = Column::new().spacing(8).width(Length::Fill);
+                for &st in chunk {
+                    c = c.push(self.streamer_row(s, st));
+                }
+                grid = grid.push(c);
+            }
+            top = top.push(grid);
+        } else {
+            for st in streamers {
+                top = top.push(self.streamer_row(s, st));
+            }
         }
         container(top)
             .padding(14)
