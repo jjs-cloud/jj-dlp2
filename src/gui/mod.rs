@@ -1091,7 +1091,7 @@ impl App {
     }
 
     fn push_log(&mut self, line: String) {
-        self.log.push_front(format!("{}  {line}", Local::now().format("%Y-%m-%d %H:%M:%S")));
+        self.log.push_front(format!("{}  {line}", crate::engine::logfile::stamp()));
         self.log.truncate(self.log_lines as usize);
     }
 
@@ -1521,7 +1521,7 @@ impl App {
             PolicyEvent::Posts(e) => self.posts_on_event(e),
             PolicyEvent::Log(line) => self.push_log(line),
             PolicyEvent::LogHistory(lines) => {
-                self.log.extend(lines.iter().rev().map(|l| crate::engine::logfile::to_local(l)));
+                self.log.extend(lines.into_iter().rev());
                 self.log.truncate(self.log_lines as usize);
             }
             PolicyEvent::Update(ev) => self.on_update_event(ev),

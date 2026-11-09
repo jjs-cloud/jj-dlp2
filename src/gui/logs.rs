@@ -137,8 +137,7 @@ impl LogsState {
         }
     }
 
-    fn apply(&mut self, mut chunk: logtail::Chunk) {
-        chunk.lines = chunk.lines.iter().map(|l| logfile::to_local(l)).collect();
+    fn apply(&mut self, chunk: logtail::Chunk) {
         self.missing = false;
         self.offset = Some(chunk.offset);
         if chunk.restart {

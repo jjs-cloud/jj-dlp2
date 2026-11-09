@@ -1,7 +1,6 @@
 //! Plain-text log files written to the `logs` folder inside the config directory.
 
 use super::template;
-use crate::api::now_secs;
 use crate::settings;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -102,51 +101,14 @@ pub fn line(path: &Path, text: &str) {
     append(path, &format!("{}  {text}\n", stamp()));
 }
 
-/// The current UTC time as `YYYY-MM-DD HH:MM:SS`.
+/// The current local time as `YYYY-MM-DD HH:MM:SS`.
 pub fn stamp() -> String {
-    fmt_utc(now_secs())
-}
-
-/// Rewrites a leading UTC `YYYY-MM-DD HH:MM:SS` stamp in a line as local time.
-pub fn to_local(line: &str) -> String {
-    let Some(head) = line.get(..19) else { return line.to_string() };
-    match chrono::NaiveDateTime::parse_from_str(head, "%Y-%m-%d %H:%M:%S") {
-        Ok(t) => format!("{}{}", t.and_utc().with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S"), &line[19..]),
-        Err(_) => line.to_string(),
-    }
-}
-
-fn fmt_utc(secs: u64) -> String {
-    let days = (secs / 86_400) as i64 + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    let rem = secs % 86_400;
-    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}", rem / 3600, (rem / 60) % 60, rem % 60)
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn formats_utc() {
-        assert_eq!(fmt_utc(0), "1970-01-01 00:00:00");
-        assert_eq!(fmt_utc(1_700_000_000), "2023-11-14 22:13:20");
-        assert_eq!(fmt_utc(1_782_259_199), "2026-06-23 23:59:59");
-        assert_eq!(fmt_utc(951_782_400), "2000-02-29 00:00:00");
-    }
-
-    #[test]
-    fn to_local_keeps_unstamped_lines() {
-        assert_eq!(to_local("plain output"), "plain output");
-        assert_eq!(to_local("2026-01-01 00:00:00  cmd").len(), "2026-01-01 00:00:00  cmd".len());
-    }
 
     #[test]
     fn names_are_lowercase_and_safe() {
