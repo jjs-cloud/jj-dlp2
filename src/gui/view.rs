@@ -642,8 +642,18 @@ impl App {
         col.push(grid)
     }
 
+    /// True when warnings picked by `on` show for the streamer's site; false while all warnings are disabled.
+    fn warn_shown(&self, streamer_id: StreamerId, on: impl Fn(&Site) -> bool) -> bool {
+        if self.settings.notifications.disable_warnings {
+            return false;
+        }
+        let st = self.settings.streamers.iter().find(|st| st.id == streamer_id);
+        st.and_then(|st| self.settings.sites.iter().find(|x| x.id == st.site_id)).is_none_or(on)
+    }
+
     fn recording_stalled(&self, id: RecorderId) -> bool {
         self.recording_files.get(&id).is_some_and(|f| f.stalled)
+            && self.processes.get(&id).is_none_or(|p| self.warn_shown(p.streamer_id, |x| x.warn_stalled))
     }
 
     fn recording_openable(&self, id: RecorderId) -> bool {
@@ -652,6 +662,9 @@ impl App {
 
     /// The streamer's restart count, or 0 while it is below the site's threshold.
     fn shown_restarts(&self, st: &Streamer) -> u32 {
+        if !self.warn_shown(st.id, |x| x.warn_restarts) {
+            return 0;
+        }
         let count = self.restarts.get(&st.id).copied().unwrap_or(0);
         let threshold = self.settings.sites.iter().find(|x| x.id == st.site_id).map_or(1, |x| x.restart_threshold_or_default());
         if count >= threshold { count } else { 0 }
@@ -659,7 +672,11 @@ impl App {
 
     /// The streamer's INTERRUPT and ERROR counts.
     fn warns(&self, id: StreamerId) -> Warnings {
-        self.warnings.get(&id).copied().unwrap_or_default()
+        let w = self.warnings.get(&id).copied().unwrap_or_default();
+        Warnings {
+            interrupts: if self.warn_shown(id, |x| x.warn_interrupts) { w.interrupts } else { 0 },
+            errors: if self.warn_shown(id, |x| x.warn_errors) { w.errors } else { 0 },
+        }
     }
 
     /// True when at least one RESTARTED, INTERRUPT or ERROR chip is showing.
@@ -1683,6 +1700,7 @@ impl App {
             switch("Livestreams", SettingsTab::Sites),
             switch("Posts", SettingsTab::Posts),
             switch("Priority", SettingsTab::Priority),
+            switch("Notifications", SettingsTab::Notifications),
             switch("General", SettingsTab::General)
         ]
         .spacing(8);
@@ -1690,6 +1708,7 @@ impl App {
             SettingsTab::Sites => self.settings_sites(s),
             SettingsTab::Posts => self.posts_settings(s),
             SettingsTab::Priority => self.priority_settings(s),
+            SettingsTab::Notifications => self.notifications_settings(s),
             SettingsTab::General => self.settings_general(s),
         };
         column![switcher, body].spacing(12).height(Length::Fill).into()
@@ -1959,7 +1978,7 @@ impl App {
         };
         let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
         let dirty = saved.is_none_or(|site| *d != SiteDraft::from_site(site));
-        let valid = d.to_new_site().is_some();
+        let valid = d.to_new_site(&self.settings.notifications.ntfy_topic).is_some();
 
         let identity = row![
             cell(
@@ -2037,64 +2056,15 @@ impl App {
                 ),
                 Length::FillPortion(1)
             ),
-            cell(
-                labeled(
-                    "Clear restart warnings after (minutes, 0 = never)",
-                    field(&DEFAULT_RESTART_CLEAR_MINUTES.to_string(), &d.restart_clear, DraftField::RestartClear)
-                ),
-                Length::FillPortion(1)
-            ),
-            cell(
-                labeled(
-                    "Warning threshold (restarts)",
-                    field(&DEFAULT_RESTART_THRESHOLD.to_string(), &d.restart_threshold, DraftField::RestartThreshold)
-                ),
-                Length::FillPortion(1)
-            ),
+            container(
+                toggler(d.auto_suffix)
+                    .label("Name restarted recordings _partN")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::AutoSuffix(v)))
+                    .text_size(12)
+            )
+            .width(Length::FillPortion(2)),
         ]
         .spacing(8)
-        .align_y(Alignment::End);
-
-        // Greyed, blank and non-editable while output forwarding or the kind's warning is off; the stored text is kept.
-        let pattern_field = |value: &'a str, warn: bool, f: fn(String) -> DraftField| -> Element<'a, Msg> {
-            if d.forward_output && warn {
-                field("", value, f)
-            } else {
-                text_input("", "").padding(5).size(13).style(skin::input(s)).into()
-            }
-        };
-        let patterns = row![
-            container(
-                toggler(d.forward_output)
-                    .label("Enable command output")
-                    .on_toggle(move |v| Msg::Draft(id, DraftField::ForwardOutput(v)))
-                    .text_size(12)
-            )
-            .width(Length::Shrink),
-            container(
-                toggler(d.warn_interrupts)
-                    .label("Warn on Interrupts")
-                    .on_toggle(move |v| Msg::Draft(id, DraftField::WarnInterrupts(v)))
-                    .text_size(12)
-            )
-            .width(Length::Shrink),
-            container(
-                toggler(d.warn_errors)
-                    .label("Warn on Errors")
-                    .on_toggle(move |v| Msg::Draft(id, DraftField::WarnErrors(v)))
-                    .text_size(12)
-            )
-            .width(Length::Shrink),
-            cell(
-                labeled("Interrupt patterns (separate with |)", pattern_field(&d.interrupt_patterns, d.warn_interrupts, DraftField::InterruptPatterns)),
-                Length::FillPortion(1)
-            ),
-            cell(
-                labeled("Error patterns (separate with |)", pattern_field(&d.error_patterns, d.warn_errors, DraftField::ErrorPatterns)),
-                Length::FillPortion(1)
-            ),
-        ]
-        .spacing(16)
         .align_y(Alignment::End);
 
         let split_input = text_input("", &d.split_minutes)
@@ -2114,41 +2084,6 @@ impl App {
         ]
         .spacing(24)
         .align_y(Alignment::End);
-
-        let file_checks = column![
-            row![
-                cell(
-                    labeled(
-                        "Warn if file doesn't exist after (seconds)",
-                        field(&DEFAULT_FILE_EXISTS_GRACE_SECS.to_string(), &d.file_exists_grace, DraftField::FileExistsGrace)
-                    ),
-                    Length::FillPortion(1)
-                ),
-                cell(
-                    labeled(
-                        "Warn if file doesn't start growing after (seconds)",
-                        field(&DEFAULT_GROWTH_GRACE_SECS.to_string(), &d.growth_grace, DraftField::GrowthGrace)
-                    ),
-                    Length::FillPortion(1)
-                ),
-                cell(
-                    labeled(
-                        "Warn if file stops growing for (seconds)",
-                        field(&DEFAULT_STALL_WINDOW_SECS.to_string(), &d.stall_window, DraftField::StallWindow)
-                    ),
-                    Length::FillPortion(1)
-                ),
-                cell(
-                    labeled(
-                        "Check for growth every (seconds)",
-                        field(&DEFAULT_FILE_CHECK_INTERVAL_SECS.to_string(), &d.file_check_interval, DraftField::FileCheckInterval)
-                    ),
-                    Length::FillPortion(1)
-                ),
-            ]
-            .spacing(8),
-        ]
-        .spacing(2);
 
         let swatch = if d.use_theme_color { s.accent2 } else { skin::parse_hex(&d.color).unwrap_or(s.muted) };
         let mut color_row: Row<'a, Msg> = row![
@@ -2232,59 +2167,6 @@ impl App {
                 .on_toggle(move |v| Msg::Draft(id, f(v)))
                 .text_size(12)
         };
-        let topic_input = text_input("", &d.ntfy_topic)
-            .on_input_maybe(d.notify_ntfy.then(|| move |v: String| Msg::Draft(id, DraftField::NtfyTopic(v))))
-            .padding(5)
-            .size(13)
-            .style(skin::input_required(s, !d.ntfy_ok()));
-        let can_test = d.ntfy_ok() && !d.test_targets().is_empty();
-        let sub_toggle = |label: &'static str, on: bool, f: fn(bool) -> DraftField| {
-            toggler(on && d.notify)
-                .label(label)
-                .on_toggle_maybe(d.notify.then(|| move |v: bool| Msg::Draft(id, f(v))))
-                .text_size(12)
-        };
-        let notifications = column![
-            row![
-                log("Notifications", d.notify, DraftField::Notify),
-                sub_toggle("Desktop", d.notify_desktop, DraftField::NotifyDesktop),
-                sub_toggle("Mobile (ntfy)", d.notify_ntfy, DraftField::NotifyNtfy),
-                Space::new().width(Length::Fill),
-                button(t(&s, "Send test").size(12))
-                    .on_press_maybe(can_test.then_some(Msg::TestNotify(id)))
-                    .padding([5.0, 10.0])
-                    .style(skin::btn(s, BtnKind::Ghost)),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-            row![
-                cell(
-                    labeled(
-                        "Notification Cooldown (minutes)",
-                        field(&DEFAULT_NOTIFY_COOLDOWN_MINUTES.to_string(), &d.notify_cooldown, DraftField::NotifyCooldown)
-                    ),
-                    Length::FillPortion(1)
-                ),
-                cell(
-                    labeled(
-                        "Notification Timeout (seconds)",
-                        field(&DEFAULT_NOTIFY_TIMEOUT_SECS.to_string(), &d.notify_timeout, DraftField::NotifyTimeout)
-                    ),
-                    Length::FillPortion(1)
-                ),
-                cell(labeled("NTFY topic (example: j73hd92xl)", topic_input.into()), Length::FillPortion(2)),
-            ]
-            .spacing(8),
-            row![
-                log("Wait for confirmed growth", d.notify_confirmed, DraftField::NotifyConfirmed),
-                log("Notify when stalled", d.notify_stalled, DraftField::NotifyStalled),
-                log("Notify on restarts", d.notify_restarted, DraftField::NotifyRestarted),
-                log("Notify when already live at launch", d.notify_on_launch, DraftField::NotifyOnLaunch),
-                log("Name restarted recordings _partN", d.auto_suffix, DraftField::AutoSuffix),
-            ]
-            .spacing(24),
-        ]
-        .spacing(6);
         let mut actions: Row<'a, Msg> = row![
             log("Pause checking", d.paused, DraftField::Paused),
             log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
@@ -2368,11 +2250,8 @@ impl App {
         }
         let form = form
             .push(timing)
-            .push(patterns)
             .push(splitting)
             .push(color_row)
-            .push(file_checks)
-            .push(notifications)
             .push(templates)
             .push(recorder_col)
             .push(actions);

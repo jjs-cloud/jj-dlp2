@@ -1,6 +1,6 @@
 //! Locating, loading and saving the config files in the OS-recommended config directory.
 
-use crate::api::{Settings, Site, Streamer};
+use crate::api::{GlobalNotify, Settings, Site, Streamer};
 use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -57,6 +57,8 @@ pub fn resume_saving() {
 struct Globals {
     default_output_dir: String,
     max_recordings: Option<u32>,
+    #[serde(default)]
+    notifications: GlobalNotify,
 }
 
 /// Contents of state.json.
@@ -110,6 +112,7 @@ pub fn default_settings() -> Settings {
         next_id: 1,
         default_output_dir: default_output_dir(),
         max_recordings: None,
+        notifications: GlobalNotify::default(),
         sites: Vec::new(),
         streamers: Vec::new(),
     }
@@ -131,6 +134,7 @@ pub fn try_load() -> Result<Settings, String> {
         next_id: state.next_id,
         default_output_dir: globals.default_output_dir,
         max_recordings: globals.max_recordings,
+        notifications: globals.notifications,
         sites,
         streamers,
     })
@@ -181,7 +185,12 @@ pub fn save(settings: &Settings) -> std::io::Result<()> {
     }
     std::fs::create_dir_all(config_dir())?;
     write_json(&state_path(), &State { next_id: settings.next_id })?;
-    write_json(&settings_path(), &Globals { default_output_dir: settings.default_output_dir.clone(), max_recordings: settings.max_recordings })?;
+    let globals = Globals {
+        default_output_dir: settings.default_output_dir.clone(),
+        max_recordings: settings.max_recordings,
+        notifications: settings.notifications.clone(),
+    };
+    write_json(&settings_path(), &globals)?;
     write_json(&sites_path(), &settings.sites)?;
     write_json(&streamers_path(), &settings.streamers)
 }

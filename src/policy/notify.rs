@@ -17,6 +17,8 @@ pub enum Kind {
     Live,
     Stalled,
     Restarted,
+    Interrupt,
+    Error,
 }
 
 /// The text of one notification.
@@ -47,6 +49,18 @@ impl Targets {
 pub fn topic_valid(topic: &str) -> bool {
     let t = topic.trim();
     !t.is_empty() && t.len() <= TOPIC_MAX && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The topic to publish to: the site's when usable, else the global one when the site's is blank.
+pub fn effective_topic(site_topic: &str, global_topic: &str) -> Option<String> {
+    let site = site_topic.trim();
+    let topic = if site.is_empty() { global_topic.trim() } else { site };
+    topic_valid(topic).then(|| topic.to_string())
+}
+
+/// True when the topic that would be used is a valid ntfy topic.
+pub fn topic_ok(site_topic: &str, global_topic: &str) -> bool {
+    effective_topic(site_topic, global_topic).is_some()
 }
 
 /// Why a streamer is not recording; more reasons can be added here.
@@ -248,6 +262,15 @@ mod tests {
         assert!(!topic_valid("a/b"));
         assert!(!topic_valid("a b"));
         assert!(!topic_valid(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn a_blank_site_topic_falls_back_to_the_global_one() {
+        assert_eq!(effective_topic("mine", "global").as_deref(), Some("mine"));
+        assert_eq!(effective_topic("  ", " global ").as_deref(), Some("global"));
+        assert_eq!(effective_topic("", ""), None);
+        assert_eq!(effective_topic("bad topic", "global"), None);
+        assert!(topic_ok("", "global") && !topic_ok("", "a/b"));
     }
 
     #[test]

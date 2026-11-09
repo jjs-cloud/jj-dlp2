@@ -3,7 +3,7 @@
 use super::runner::{self, CycleReport, DownloadOutcome};
 use super::store;
 use super::{AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, Preset, SiteId};
-use crate::api::{now_secs, DEFAULT_NOTIFY_TIMEOUT_SECS};
+use crate::api::{now_secs, GlobalNotify, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
 use std::collections::{HashMap, HashSet};
@@ -31,6 +31,7 @@ pub struct PostsMonitor {
     events: UnboundedSender<PolicyEvent>,
     tx: UnboundedSender<PostsMsg>,
     global_dir: String,
+    global_notify: GlobalNotify,
     /// Sites whose check is running.
     checking: HashSet<SiteId>,
     next_check: HashMap<SiteId, Instant>,
@@ -56,6 +57,7 @@ impl PostsMonitor {
             events,
             tx,
             global_dir,
+            global_notify: GlobalNotify::default(),
             checking: HashSet::new(),
             errors: HashMap::new(),
             no_video: HashSet::new(),
@@ -68,6 +70,10 @@ impl PostsMonitor {
 
     pub fn set_global_dir(&mut self, dir: &str) {
         self.global_dir = dir.to_string();
+    }
+
+    pub fn set_global_notify(&mut self, notify: &GlobalNotify) {
+        self.global_notify = notify.clone();
     }
 
     /// Sends the config, the whole library and the status.
@@ -334,10 +340,13 @@ impl PostsMonitor {
 
     /// Sends the desktop and ntfy notifications the site asks for.
     fn notify_new(&self, site_id: SiteId, account: &str, added: &[Post]) {
+        if self.global_notify.disable_notifications {
+            return;
+        }
         let Some(site) = self.cfg.site(site_id).filter(|s| s.notify) else { return };
         let targets = notify::Targets {
             desktop_timeout_secs: site.notify_desktop.then_some(DEFAULT_NOTIFY_TIMEOUT_SECS),
-            ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic)).then(|| site.ntfy_topic.trim().to_string()),
+            ntfy_topic: if site.notify_ntfy { notify::effective_topic(&site.ntfy_topic, &self.global_notify.ntfy_topic) } else { None },
         };
         if targets.is_empty() {
             return;

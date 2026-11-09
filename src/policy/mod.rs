@@ -1,7 +1,7 @@
 //! Policy layer: owns the config files, applies edits, tells the engine to reload and decides when it records.
 
 use crate::api::{
-    now_secs, Command, Control, EngineClient, Event, FolderLayout, ProcessInfo, RecorderId, RecorderState, Settings, Site,
+    now_secs, Command, Control, EngineClient, Event, FolderLayout, GlobalNotify, ProcessInfo, RecorderId, RecorderState, Settings, Site,
     SiteId, Streamer, StreamerId, StreamerOptions, StreamerStatus, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
@@ -83,6 +83,10 @@ pub struct NewSite {
     pub notify_stalled: bool,
     pub notify_restarted: bool,
     pub notify_on_launch: bool,
+    pub notify_interrupts: bool,
+    pub notify_errors: bool,
+    pub warn_stalled: bool,
+    pub warn_restarts: bool,
     pub split_enabled: bool,
     pub split_minutes: Option<u64>,
     pub auto_suffix: bool,
@@ -127,6 +131,10 @@ impl NewSite {
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
             notify_on_launch: self.notify_on_launch,
+            notify_interrupts: self.notify_interrupts,
+            notify_errors: self.notify_errors,
+            warn_stalled: self.warn_stalled,
+            warn_restarts: self.warn_restarts,
             split_enabled: self.split_enabled,
             split_minutes: self.split_minutes,
             auto_suffix: self.auto_suffix,
@@ -150,6 +158,8 @@ pub enum PolicyCommand {
     /// Saves the priority order (highest first), the always-record streamers and the recording limit.
     SetPriority { order: Vec<StreamerId>, always: HashSet<StreamerId>, max: Option<u32> },
     SetGlobalOutputDir(String),
+    /// Saves the global notification and warning settings.
+    SetGlobalNotify(GlobalNotify),
     OpenConfigDir,
     /// Opens the folder holding the recorder and checker logs.
     OpenLogsDir,
@@ -343,7 +353,8 @@ impl Policy {
     ) -> Self {
         let settings = settings::load_guarded();
         let live = LiveTracker::load(&settings, now_secs());
-        let posts = posts::PostsMonitor::new(events.clone(), posts_tx, settings.default_output_dir.clone());
+        let mut posts = posts::PostsMonitor::new(events.clone(), posts_tx, settings.default_output_dir.clone());
+        posts.set_global_notify(&settings.notifications);
         Self {
             settings,
             live,
@@ -558,12 +569,17 @@ impl Policy {
 
     /// The streamer and site when notifications of `kind` are on for the streamer.
     fn notify_target(&self, id: StreamerId, kind: Kind) -> Option<(Streamer, Site)> {
+        if self.settings.notifications.disable_notifications {
+            return None;
+        }
         let st = self.settings.streamers.iter().find(|s| s.id == id)?;
         let site = self.site_of(id)?;
         let kind_on = match kind {
             Kind::Live => true,
             Kind::Stalled => site.notify_stalled,
             Kind::Restarted => site.notify_restarted,
+            Kind::Interrupt => site.notify_interrupts,
+            Kind::Error => site.notify_errors,
         };
         (st.options.notify.unwrap_or(site.notify) && kind_on).then(|| (st.clone(), site.clone()))
     }
@@ -614,8 +630,7 @@ impl Policy {
     fn send_notification(&mut self, st: &Streamer, site: &Site, kind: Kind, restarts: u32, live: LiveStatus, evicted: &[String], now: Instant) {
         let targets = Targets {
             desktop_timeout_secs: site.notify_desktop.then(|| site.notify_timeout_or_default()),
-            ntfy_topic: (site.notify_ntfy && notify::topic_valid(&site.ntfy_topic))
-                .then(|| site.ntfy_topic.trim().to_string()),
+            ntfy_topic: if site.notify_ntfy { notify::effective_topic(&site.ntfy_topic, &self.settings.notifications.ntfy_topic) } else { None },
         };
         if targets.is_empty() {
             return;
@@ -635,6 +650,16 @@ impl Policy {
             Kind::Restarted => Message {
                 title: format!("{}: recording restarted", st.name),
                 body: format!("{}: restarted {restarts} time(s)", site.name),
+                click: Some(st.url.clone()),
+            },
+            Kind::Interrupt => Message {
+                title: format!("{}: recording interrupted", st.name),
+                body: format!("{}: the recorder output matched an interrupt pattern", site.name),
+                click: Some(st.url.clone()),
+            },
+            Kind::Error => Message {
+                title: format!("{}: recording error", st.name),
+                body: format!("{}: the recorder output matched an error pattern", site.name),
                 click: Some(st.url.clone()),
             },
         };
@@ -677,18 +702,25 @@ impl Policy {
         self.emit(PolicyEvent::Restarts(self.restarts.counts()));
     }
 
-    /// Matches a recorder output line against its site's patterns and logs the first hit of each kind per live span.
+    /// Matches a recorder output line against its site's patterns, logs the first hit of each kind per live span and notifies.
     fn on_output(&mut self, id: StreamerId, line: &str) {
         let settings = &self.settings;
         let site = settings.streamers.iter().find(|s| s.id == id).and_then(|st| settings.sites.iter().find(|x| x.id == st.site_id));
         let Some(site) = site else { return };
-        let fresh = self.warnings.on_line(id, site, line);
-        if fresh.is_empty() {
+        let hits = self.warnings.on_line(id, site, line);
+        if hits.is_empty() {
             return;
         }
         let name = self.settings.streamers.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
-        for (kind, pattern) in fresh {
-            self.log(format!("{name}: {}: {pattern}", kind.log_text()));
+        for hit in hits {
+            if hit.fresh {
+                self.log(format!("{name}: {}: {}", hit.kind.log_text(), hit.pattern));
+            }
+            let kind = match hit.kind {
+                warnings::WarnKind::Interrupt => Kind::Interrupt,
+                warnings::WarnKind::Error => Kind::Error,
+            };
+            self.notify_event(id, kind, 0);
         }
     }
 
@@ -1454,6 +1486,11 @@ impl Policy {
                 self.posts.set_global_dir(&self.settings.default_output_dir);
                 self.commit();
             }
+            PolicyCommand::SetGlobalNotify(n) => {
+                self.settings.notifications = GlobalNotify { ntfy_topic: n.ntfy_topic.trim().to_string(), ..n };
+                self.posts.set_global_notify(&self.settings.notifications);
+                self.commit();
+            }
             PolicyCommand::OpenConfigDir => {
                 let dir = settings::config_dir();
                 let _ = std::fs::create_dir_all(&dir);
@@ -1584,6 +1621,10 @@ mod tests {
             notify_stalled: true,
             notify_restarted: true,
             notify_on_launch: false,
+            notify_interrupts: false,
+            notify_errors: false,
+            warn_stalled: true,
+            warn_restarts: true,
             split_enabled: false,
             split_minutes: None,
             auto_suffix: true,
@@ -1597,6 +1638,7 @@ mod tests {
             next_id: 1,
             default_output_dir: "/global".into(),
             max_recordings: None,
+            notifications: Default::default(),
             sites: vec![site(1, " /custom "), site(2, "  ")],
             streamers: Vec::new(),
         };
@@ -1678,6 +1720,10 @@ mod e2e {
                 notify_stalled: true,
                 notify_restarted: true,
                 notify_on_launch: false,
+                notify_interrupts: false,
+                notify_errors: false,
+                warn_stalled: true,
+                warn_restarts: true,
                 split_enabled: false,
                 split_minutes: None,
                 auto_suffix: true,
@@ -1722,7 +1768,7 @@ mod e2e {
     fn one_streamer(p: &mut Policy, options: StreamerOptions, enabled: bool) {
         let site = new_site(Preset::Blank).into_site(1);
         let streamer = Streamer { id: 2, site_id: 1, name: "n".into(), url: "u".into(), enabled, options, schedule_runs: Default::default() };
-        p.settings = Settings { next_id: 10, default_output_dir: "out".into(), max_recordings: None, sites: vec![site], streamers: vec![streamer] };
+        p.settings = Settings { next_id: 10, default_output_dir: "out".into(), max_recordings: None, notifications: Default::default(), sites: vec![site], streamers: vec![streamer] };
     }
 
     fn live_status(p: &mut Policy, recording: bool, checked: u64) {
@@ -1774,6 +1820,7 @@ mod e2e {
             next_id: 10,
             default_output_dir: "out".into(),
             max_recordings: max,
+            notifications: Default::default(),
             sites: vec![site],
             streamers: vec![mk(2, "hi"), mk(3, "lo")],
         };

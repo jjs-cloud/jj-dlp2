@@ -5,6 +5,7 @@ mod files;
 mod files_view;
 mod logs;
 mod logs_view;
+mod notify_view;
 #[cfg(target_os = "linux")]
 mod desktop;
 mod posts;
@@ -115,6 +116,15 @@ pub enum SettingsTab {
     Sites,
     Posts,
     Priority,
+    Notifications,
+    General,
+}
+
+/// Sub-pages of the Settings > Notifications tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyTab {
+    Livestreams,
+    Posts,
     General,
 }
 
@@ -170,6 +180,10 @@ pub struct SiteDraft {
     pub notify_stalled: bool,
     pub notify_restarted: bool,
     pub notify_on_launch: bool,
+    pub notify_interrupts: bool,
+    pub notify_errors: bool,
+    pub warn_stalled: bool,
+    pub warn_restarts: bool,
     pub split_enabled: bool,
     pub split_minutes: String,
     pub auto_suffix: bool,
@@ -213,6 +227,10 @@ impl SiteDraft {
             notify_stalled: s.notify_stalled,
             notify_restarted: s.notify_restarted,
             notify_on_launch: s.notify_on_launch,
+            notify_interrupts: s.notify_interrupts,
+            notify_errors: s.notify_errors,
+            warn_stalled: s.warn_stalled,
+            warn_restarts: s.warn_restarts,
             split_enabled: s.split_enabled,
             split_minutes: opt_text(s.split_minutes),
             auto_suffix: s.auto_suffix,
@@ -258,6 +276,10 @@ impl SiteDraft {
             notify_stalled: n.notify_stalled,
             notify_restarted: n.notify_restarted,
             notify_on_launch: n.notify_on_launch,
+            notify_interrupts: n.notify_interrupts,
+            notify_errors: n.notify_errors,
+            warn_stalled: n.warn_stalled,
+            warn_restarts: n.warn_restarts,
             split_enabled: n.split_enabled,
             split_minutes: opt_text(n.split_minutes),
             auto_suffix: n.auto_suffix,
@@ -331,28 +353,27 @@ impl SiteDraft {
         }
     }
 
-    /// False while ntfy is on without a usable topic.
-    pub fn ntfy_ok(&self) -> bool {
-        !self.notify_ntfy || notify::topic_valid(&self.ntfy_topic)
+    /// False while ntfy is on without a usable topic, own or `global`.
+    pub fn ntfy_ok(&self, global: &str) -> bool {
+        !self.notify_ntfy || notify::topic_ok(&self.ntfy_topic, global)
     }
 
     /// The channels the draft has switched on, used by the test button.
-    pub fn test_targets(&self) -> Targets {
+    pub fn test_targets(&self, global: &str) -> Targets {
         Targets {
             desktop_timeout_secs: self
                 .notify_desktop
                 .then(|| self.notify_timeout_secs().flatten().unwrap_or(DEFAULT_NOTIFY_TIMEOUT_SECS)),
-            ntfy_topic: (self.notify_ntfy && notify::topic_valid(&self.ntfy_topic))
-                .then(|| self.ntfy_topic.trim().to_string()),
+            ntfy_topic: if self.notify_ntfy { notify::effective_topic(&self.ntfy_topic, global) } else { None },
         }
     }
 
     /// The site this draft describes, or `None` while the name or URL template is blank or a field is invalid.
-    pub fn to_new_site(&self) -> Option<NewSite> {
+    pub fn to_new_site(&self, global_topic: &str) -> Option<NewSite> {
         if self.name.trim().is_empty()
             || self.url_template.trim().is_empty()
             || !self.color_ok()
-            || !self.ntfy_ok()
+            || !self.ntfy_ok(global_topic)
             || self.split_invalid()
         {
             return None;
@@ -391,6 +412,10 @@ impl SiteDraft {
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
             notify_on_launch: self.notify_on_launch,
+            notify_interrupts: self.notify_interrupts,
+            notify_errors: self.notify_errors,
+            warn_stalled: self.warn_stalled,
+            warn_restarts: self.warn_restarts,
             split_enabled: self.split_enabled,
             split_minutes: self.split_minutes()?,
             auto_suffix: self.auto_suffix,
@@ -451,6 +476,10 @@ pub enum DraftField {
     NotifyStalled(bool),
     NotifyRestarted(bool),
     NotifyOnLaunch(bool),
+    NotifyInterrupts(bool),
+    NotifyErrors(bool),
+    WarnStalled(bool),
+    WarnRestarts(bool),
     SplitEnabled(bool),
     SplitMinutes(String),
     AutoSuffix(bool),
@@ -628,6 +657,13 @@ pub enum Msg {
     Posts(posts::PostsMsg),
     Priority(priority::PriorityMsg),
     SetSettingsTab(SettingsTab),
+    SetNotifyTab(NotifyTab),
+    PickNotifySite(SiteId),
+    PickNotifyPostSite(crate::policy::posts::SiteId),
+    SetDisableNotifications(bool),
+    SetDisableWarnings(bool),
+    GlobalNtfyEdit(String),
+    GlobalNtfySave,
     SetLogTab(LogTab),
     Logs(logs::LogsMsg),
     ThemeChosen(ThemeKind),
@@ -798,6 +834,10 @@ pub struct App {
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
+    notify_tab: NotifyTab,
+    notify_site: Option<SiteId>,
+    notify_post_site: Option<crate::policy::posts::SiteId>,
+    global_ntfy: String,
     log_tab: LogTab,
     logs: logs::LogsState,
     site_added: Option<(String, u64)>,
@@ -873,6 +913,10 @@ impl App {
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
+            notify_tab: NotifyTab::Livestreams,
+            notify_site: None,
+            notify_post_site: None,
+            global_ntfy: String::new(),
             log_tab: LogTab::Engine,
             logs: logs::LogsState::new(),
             site_added: None,
@@ -1108,6 +1152,22 @@ impl App {
             Msg::Posts(m) => return self.posts_update(m),
             Msg::Priority(m) => self.priority_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
+            Msg::SetNotifyTab(w) => self.notify_tab = w,
+            Msg::PickNotifySite(id) => self.notify_site = Some(id),
+            Msg::PickNotifyPostSite(id) => self.notify_post_site = Some(id),
+            Msg::SetDisableNotifications(v) => {
+                let n = GlobalNotify { disable_notifications: v, ..self.settings.notifications.clone() };
+                self.client.send(PolicyCommand::SetGlobalNotify(n));
+            }
+            Msg::SetDisableWarnings(v) => {
+                let n = GlobalNotify { disable_warnings: v, ..self.settings.notifications.clone() };
+                self.client.send(PolicyCommand::SetGlobalNotify(n));
+            }
+            Msg::GlobalNtfyEdit(v) => self.global_ntfy = v,
+            Msg::GlobalNtfySave => {
+                let n = GlobalNotify { ntfy_topic: self.global_ntfy.trim().to_string(), ..self.settings.notifications.clone() };
+                self.client.send(PolicyCommand::SetGlobalNotify(n));
+            }
             Msg::SetLogTab(w) => {
                 self.log_tab = w;
                 if w == LogTab::Output {
@@ -1270,6 +1330,10 @@ impl App {
                         DraftField::NotifyStalled(v) => d.notify_stalled = v,
                         DraftField::NotifyRestarted(v) => d.notify_restarted = v,
                         DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
+                        DraftField::NotifyInterrupts(v) => d.notify_interrupts = v,
+                        DraftField::NotifyErrors(v) => d.notify_errors = v,
+                        DraftField::WarnStalled(v) => d.warn_stalled = v,
+                        DraftField::WarnRestarts(v) => d.warn_restarts = v,
                         DraftField::SplitEnabled(v) => {
                             d.split_enabled = v;
                             if !v {
@@ -1287,7 +1351,8 @@ impl App {
                 }
             }
             Msg::SaveSite(id) => {
-                if let Some(site) = self.drafts.get(&id).and_then(SiteDraft::to_new_site) {
+                let topic = self.settings.notifications.ntfy_topic.as_str();
+                if let Some(site) = self.drafts.get(&id).and_then(|d| d.to_new_site(topic)) {
                     if id == NEW_SITE_ID {
                         self.drafts.remove(&NEW_SITE_ID);
                         self.pending_jump = Some(site.name.clone());
@@ -1304,8 +1369,9 @@ impl App {
             }
             Msg::TestNotify(id) => {
                 if let Some(d) = self.drafts.get(&id) {
-                    let targets = d.test_targets();
-                    if d.ntfy_ok() && !targets.is_empty() {
+                    let topic = self.settings.notifications.ntfy_topic.as_str();
+                    let targets = d.test_targets(topic);
+                    if d.ntfy_ok(topic) && !targets.is_empty() {
                         let site_name = if d.name.trim().is_empty() { "Site".to_string() } else { d.name.trim().to_string() };
                         let folder = PathBuf::from(crate::policy::layout::base_dir(&d.output, &self.settings.default_output_dir));
                         self.client.send(PolicyCommand::TestNotification { site_name, targets, folder });
@@ -1538,6 +1604,9 @@ impl App {
         self.disks_dirty = true;
         if self.global_out.is_empty() || self.global_out == self.settings.default_output_dir {
             self.global_out = s.default_output_dir.clone();
+        }
+        if self.global_ntfy == self.settings.notifications.ntfy_topic {
+            self.global_ntfy = s.notifications.ntfy_topic.clone();
         }
         self.drafts.retain(|id, _| *id == NEW_SITE_ID || s.sites.iter().any(|x| x.id == *id));
         for site in &s.sites {

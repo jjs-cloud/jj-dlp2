@@ -372,14 +372,10 @@ impl App {
         let toggle = |label: &'static str, on: bool, f: fn(bool) -> SiteField| -> Element<'a, Msg> {
             toggler(on).label(label).on_toggle(move |v| send(PostsMsg::Site(id, f(v)))).text_size(12).into()
         };
-        let sub_toggle = |label: &'static str, on: bool, f: fn(bool) -> SiteField| -> Element<'a, Msg> {
-            toggler(on && d.notify).label(label).on_toggle_maybe(d.notify.then(|| move |v: bool| send(PostsMsg::Site(id, f(v))))).text_size(12).into()
-        };
         let bad_number = |text: &str, min: u64| !text.trim().is_empty() && !text.trim().parse::<u64>().is_ok_and(|n| n >= min);
-        let topic_bad = d.notify && d.notify_ntfy && !crate::policy::notify::topic_valid(&d.ntfy_topic);
         let base = saved.cloned().unwrap_or_default();
         let dirty = saved.is_none() || d.differs_from(&base);
-        let valid = d.valid();
+        let valid = d.valid(&self.settings.notifications.ntfy_topic);
 
         let identity = row![
             cell(input("Site name (example: TikTok)", "", &d.name, SiteField::Name, d.name.trim().is_empty()), Length::FillPortion(1)),
@@ -413,22 +409,6 @@ impl App {
         let cleanup = row![
             cell(
                 input("Delete unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
-                Length::FillPortion(1),
-            ),
-            cell(column![muted(&s, " "), toggle("Notifications", d.notify, SiteField::Notify)].spacing(2).into(), Length::Shrink),
-            cell(column![muted(&s, " "), sub_toggle("Desktop", d.notify_desktop, SiteField::NotifyDesktop)].spacing(2).into(), Length::Shrink),
-            cell(column![muted(&s, " "), sub_toggle("Mobile (ntfy)", d.notify_ntfy, SiteField::NotifyNtfy)].spacing(2).into(), Length::Shrink),
-            cell(
-                column![
-                    muted(&s, "NTFY topic (example: j73hd92xl)"),
-                    text_input("", &d.ntfy_topic)
-                        .on_input_maybe(d.notify_ntfy.then(|| edit(SiteField::NtfyTopic)))
-                        .padding(5)
-                        .size(13)
-                        .style(skin::input_required(s, topic_bad)),
-                ]
-                .spacing(2)
-                .into(),
                 Length::FillPortion(1),
             ),
         ]

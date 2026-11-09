@@ -138,7 +138,7 @@ impl SiteDraft {
             "" => Some(None),
             t => t.parse::<u64>().ok().filter(|n| *n >= min).map(Some),
         };
-        if self.name.trim().is_empty() || self.url_template.trim().is_empty() || (self.notify && self.notify_ntfy && !crate::policy::notify::topic_valid(&self.ntfy_topic)) {
+        if self.name.trim().is_empty() || self.url_template.trim().is_empty() {
             return None;
         }
         Some(PostSite {
@@ -167,9 +167,14 @@ impl SiteDraft {
         })
     }
 
+    /// False while notifications and ntfy are on without a usable topic, own or `global`.
+    pub fn ntfy_ok(&self, global: &str) -> bool {
+        !(self.notify && self.notify_ntfy) || crate::policy::notify::topic_ok(&self.ntfy_topic, global)
+    }
+
     /// True when the edits are valid, or the site is unsaved.
-    pub fn valid(&self) -> bool {
-        self.build(&PostSite::default()).is_some()
+    pub fn valid(&self, global: &str) -> bool {
+        self.ntfy_ok(global) && self.build(&PostSite::default()).is_some()
     }
 
     /// True when the edits differ from the saved site.
@@ -623,7 +628,8 @@ impl App {
     /// Sends a site's draft to the policy layer: adds the unsaved blank site, or updates an existing one.
     fn posts_save_site(&mut self, id: SiteId) {
         let saved = self.posts.cfg.site(id).cloned().unwrap_or_default();
-        let Some(site) = self.posts.drafts.get(&id).and_then(|d| d.build(&saved)) else { return };
+        let topic = self.settings.notifications.ntfy_topic.as_str();
+        let Some(site) = self.posts.drafts.get(&id).filter(|d| d.ntfy_ok(topic)).and_then(|d| d.build(&saved)) else { return };
         if self.posts.cfg.sites.iter().any(|s| s.id != id && s.name.trim().eq_ignore_ascii_case(&site.name)) {
             self.posts.say(format!("A site named {} already exists", site.name));
             return;

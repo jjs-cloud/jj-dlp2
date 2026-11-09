@@ -27,26 +27,40 @@ impl WarnKind {
     }
 }
 
-/// A site's patterns as last parsed, with the field text they came from.
+/// One pattern match in a recorder output line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    pub kind: WarnKind,
+    pub pattern: String,
+    /// First of its kind in the live span, so worth a log line.
+    pub fresh: bool,
+}
+
+/// A site's patterns as last parsed, with the field text and switches they came from.
 #[derive(Default)]
 struct Compiled {
     interrupt_raw: String,
     error_raw: String,
     warn_interrupts: bool,
     warn_errors: bool,
+    notify_interrupts: bool,
+    notify_errors: bool,
     interrupt: Vec<String>,
     error: Vec<String>,
 }
 
 impl Compiled {
     fn of(site: &Site) -> Self {
+        let patterns = |on: bool, text: &str| if on { parse_patterns(text) } else { Vec::new() };
         Self {
             interrupt_raw: site.interrupt_patterns.clone(),
             error_raw: site.error_patterns.clone(),
             warn_interrupts: site.warn_interrupts,
             warn_errors: site.warn_errors,
-            interrupt: if site.warn_interrupts { parse_patterns(&site.interrupt_patterns) } else { Vec::new() },
-            error: if site.warn_errors { parse_patterns(&site.error_patterns) } else { Vec::new() },
+            notify_interrupts: site.notify_interrupts,
+            notify_errors: site.notify_errors,
+            interrupt: patterns(site.warn_interrupts || site.notify_interrupts, &site.interrupt_patterns),
+            error: patterns(site.warn_errors || site.notify_errors, &site.error_patterns),
         }
     }
 
@@ -55,6 +69,8 @@ impl Compiled {
             && self.error_raw == site.error_patterns
             && self.warn_interrupts == site.warn_interrupts
             && self.warn_errors == site.warn_errors
+            && self.notify_interrupts == site.notify_interrupts
+            && self.notify_errors == site.notify_errors
     }
 }
 
@@ -78,8 +94,8 @@ pub struct WarnTracker {
 }
 
 impl WarnTracker {
-    /// Counts the kinds `line` matches under the site's patterns; returns those not yet logged this live span, with the pattern hit.
-    pub fn on_line(&mut self, id: StreamerId, site: &Site, line: &str) -> Vec<(WarnKind, String)> {
+    /// Matches `line` against the site's patterns, counting each kind whose warning is on; returns every match.
+    pub fn on_line(&mut self, id: StreamerId, site: &Site, line: &str) -> Vec<Hit> {
         let c = self.compiled.entry(site.id).or_default();
         if !c.is_current(site) {
             *c = Compiled::of(site);
@@ -92,20 +108,25 @@ impl WarnTracker {
             (WarnKind::Interrupt, first_match(&low, &c.interrupt).map(str::to_string)),
             (WarnKind::Error, first_match(&low, &c.error).map(str::to_string)),
         ];
-        let mut fresh = Vec::new();
+        let mut found = Vec::new();
         for (kind, hit) in hits {
             let Some(pattern) = hit else { continue };
-            let w = self.counts.entry(id).or_default();
-            match kind {
-                WarnKind::Interrupt => w.interrupts += 1,
-                WarnKind::Error => w.errors += 1,
+            let counted = match kind {
+                WarnKind::Interrupt => c.warn_interrupts,
+                WarnKind::Error => c.warn_errors,
+            };
+            if counted {
+                let w = self.counts.entry(id).or_default();
+                match kind {
+                    WarnKind::Interrupt => w.interrupts += 1,
+                    WarnKind::Error => w.errors += 1,
+                }
+                self.dirty = true;
             }
-            self.dirty = true;
-            if self.logged.insert((id, kind)) {
-                fresh.push((kind, pattern));
-            }
+            let fresh = self.logged.insert((id, kind));
+            found.push(Hit { kind, pattern, fresh });
         }
-        fresh
+        found
     }
 
     /// Lets each kind be logged again for the streamer; called when its live span ends.
@@ -149,6 +170,11 @@ mod tests {
 
     fn twitch() -> Site {
         new_site(Preset::Twitch).into_site(1)
+    }
+
+    /// The matches that were new to their live span, as kind and pattern.
+    fn fresh(hits: Vec<Hit>) -> Vec<(WarnKind, String)> {
+        hits.into_iter().filter(|h| h.fresh).map(|h| (h.kind, h.pattern)).collect()
     }
 
     const PACKET: &str = "[mpegts @ 000002b60c2f6b80] Packet corrupt (stream = 1, dts = 835343848).";
@@ -207,6 +233,17 @@ mod tests {
     }
 
     #[test]
+    fn notify_alone_matches_without_counting() {
+        let (mut t, mut site) = (WarnTracker::default(), twitch());
+        site.warn_errors = false;
+        site.notify_errors = true;
+        let hits = t.on_line(1, &site, PACKET);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].kind, WarnKind::Error);
+        assert!(t.counts().is_empty() && !t.take_dirty());
+    }
+
+    #[test]
     fn edited_patterns_apply_to_the_next_line() {
         let (mut t, mut site) = (WarnTracker::default(), twitch());
         t.on_line(1, &site, "custom marker");
@@ -219,13 +256,13 @@ mod tests {
     #[test]
     fn each_kind_is_logged_once_per_live_span() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        assert_eq!(t.on_line(1, &site, PACKET), [(WarnKind::Error, "packet corrupt".to_string())]);
-        assert!(t.on_line(1, &site, DISCONT).is_empty());
-        assert_eq!(t.on_line(1, &site, AD_TAG), [(WarnKind::Interrupt, "ext-x-discontinuity".to_string())]);
-        assert_eq!(t.on_line(2, &site, PACKET), [(WarnKind::Error, "packet corrupt".to_string())]);
+        assert_eq!(fresh(t.on_line(1, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
+        assert!(fresh(t.on_line(1, &site, DISCONT)).is_empty());
+        assert_eq!(fresh(t.on_line(1, &site, AD_TAG)), [(WarnKind::Interrupt, "ext-x-discontinuity".to_string())]);
+        assert_eq!(fresh(t.on_line(2, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
         t.end_span(1);
-        assert_eq!(t.on_line(1, &site, PACKET), [(WarnKind::Error, "packet corrupt".to_string())]);
-        assert!(t.on_line(2, &site, PACKET).is_empty());
+        assert_eq!(fresh(t.on_line(1, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
+        assert!(fresh(t.on_line(2, &site, PACKET)).is_empty());
     }
 
     #[test]

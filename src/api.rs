@@ -156,6 +156,18 @@ pub struct Site {
     pub notify_restarted: bool,
     /// Also notify when a streamer is already live at their first check after launch.
     pub notify_on_launch: bool,
+    /// Notify when recorder output matches an interrupt pattern.
+    #[serde(default)]
+    pub notify_interrupts: bool,
+    /// Notify when recorder output matches an error pattern.
+    #[serde(default)]
+    pub notify_errors: bool,
+    /// Show the STALLED chip for this site's recordings.
+    #[serde(default)]
+    pub warn_stalled: bool,
+    /// Show the RESTARTED chip for this site's streamers.
+    #[serde(default)]
+    pub warn_restarts: bool,
     /// Split each recording into parts of `split_minutes`.
     pub split_enabled: bool,
     /// Minutes per part while splitting is on; blank until set.
@@ -336,6 +348,18 @@ impl StreamerOptions {
     }
 }
 
+/// Notification and warning settings that apply to every site.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlobalNotify {
+    /// Sends no notification of any kind.
+    pub disable_notifications: bool,
+    /// Shows no warning chips.
+    pub disable_warnings: bool,
+    /// ntfy topic used by sites whose own topic is blank.
+    pub ntfy_topic: String,
+}
+
 /// In-memory view of the config files (settings.json, sites.json, streamers.json, state.json).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -343,6 +367,8 @@ pub struct Settings {
     pub default_output_dir: String,
     /// Most streamers recorded at once; `None` is unlimited.
     pub max_recordings: Option<u32>,
+    /// Global notification and warning switches and the fallback ntfy topic.
+    pub notifications: GlobalNotify,
     pub sites: Vec<Site>,
     pub streamers: Vec<Streamer>,
 }
@@ -514,6 +540,10 @@ mod tests {
             notify_stalled: false,
             notify_restarted: false,
             notify_on_launch: false,
+            notify_interrupts: false,
+            notify_errors: false,
+            warn_stalled: true,
+            warn_restarts: true,
             split_enabled,
             split_minutes,
             auto_suffix: true,
@@ -569,6 +599,23 @@ mod tests {
         assert_eq!(CheckOutput::detect("-s --print x {urls}"), Some(CheckOutput::Simulate));
         assert_eq!(CheckOutput::detect("--simulate --dump-json {urls}"), Some(CheckOutput::Json));
         assert_eq!(CheckOutput::detect("--cookies-from-browser firefox {urls}"), None);
+    }
+
+    #[test]
+    fn site_deserializes_without_the_newer_notification_fields() {
+        let mut value = serde_json::to_value(site_with(false, None)).unwrap();
+        let map = value.as_object_mut().unwrap();
+        for key in ["notify_interrupts", "notify_errors", "warn_stalled", "warn_restarts"] {
+            map.remove(key);
+        }
+        let site: Site = serde_json::from_value(value).unwrap();
+        assert!(!site.notify_interrupts && !site.notify_errors && !site.warn_stalled && !site.warn_restarts);
+    }
+
+    #[test]
+    fn global_notify_fills_missing_fields_with_defaults() {
+        let g: GlobalNotify = serde_json::from_str("{}").unwrap();
+        assert_eq!(g, GlobalNotify::default());
     }
 
     #[test]
