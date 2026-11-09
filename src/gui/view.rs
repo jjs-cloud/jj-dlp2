@@ -527,8 +527,16 @@ impl App {
             if self.settings.streamers.is_empty() {
                 col = col.push(muted(&s, "No streamers yet. Pick a site and add a username below."));
             }
-            for site in &self.settings.sites {
-                if self.settings.streamers.iter().any(|x| x.site_id == site.id) {
+            let sites: Vec<&Site> = self
+                .settings
+                .sites
+                .iter()
+                .filter(|site| self.settings.streamers.iter().any(|x| x.site_id == site.id))
+                .collect();
+            if self.win_w >= self.full_two_col_w && sites.len() > 1 {
+                col = col.push(self.full_two_columns(s, &sites));
+            } else {
+                for site in sites {
                     col = col.push(self.site_block(s, site));
                 }
             }
@@ -537,6 +545,33 @@ impl App {
             .spacing(12)
             .push(container(self.streamer_add_bar(s)).padding(iced::Padding { right: 8.0, ..Default::default() }))
             .into()
+    }
+
+    /// Splits the site blocks, in order, into two side-by-side columns of similar height.
+    fn full_two_columns<'a>(&'a self, s: Skin, sites: &[&'a Site]) -> Element<'a, Msg> {
+        let weight = |site: &Site| 2 + self.settings.streamers.iter().filter(|x| x.site_id == site.id).count();
+        let total: usize = sites.iter().map(|x| weight(*x)).sum();
+        let mut split = 1;
+        let mut best = usize::MAX;
+        let mut left = 0;
+        for (i, site) in sites.iter().enumerate().take(sites.len() - 1) {
+            left += weight(*site);
+            let diff = left.abs_diff(total - left);
+            if diff < best {
+                best = diff;
+                split = i + 1;
+            }
+        }
+        let mut a = Column::new().spacing(12).width(Length::Fill);
+        let mut b = Column::new().spacing(12).width(Length::Fill);
+        for (i, site) in sites.iter().enumerate() {
+            if i < split {
+                a = a.push(self.site_block(s, *site));
+            } else {
+                b = b.push(self.site_block(s, *site));
+            }
+        }
+        row![a, b].spacing(12).align_y(Alignment::Start).into()
     }
 
     /// Site selector, name and username boxes and Add button under the site panels.
@@ -1867,7 +1902,32 @@ impl App {
         ]
         .spacing(12)
         .align_y(Alignment::Center);
+        let full_two_col = row![
+            t(&s, "Two column threshold").size(13).width(150),
+            slider(
+                prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
+                self.full_two_col_w,
+                Msg::SetFullTwoColWidth
+            )
+            .step(10.0_f32)
+            .on_release(Msg::SaveFullTwoColWidth)
+            .width(Length::Fill),
+            muted(&s, format!("{:.0} px", self.full_two_col_w)).width(90),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
         let compact = column![
+            row![
+                self.section_title(s, "FULL VIEW"),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Reset").size(12))
+                    .on_press(Msg::ResetFullView)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
+            full_two_col,
+            Space::new().height(8),
             row![
                 self.section_title(s, "COMPACT VIEW"),
                 Space::new().width(Length::Fill),

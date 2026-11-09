@@ -712,6 +712,9 @@ pub enum Msg {
     SaveTwoColWidth,
     SetThreeColWidth(f32),
     SaveThreeColWidth,
+    SetFullTwoColWidth(f32),
+    SaveFullTwoColWidth,
+    ResetFullView,
     SetNameClip(f32),
     SaveNameClip,
     SetLogLines(f32),
@@ -851,6 +854,7 @@ pub struct App {
     row_max: f32,
     two_col_w: f32,
     three_col_w: f32,
+    full_two_col_w: f32,
     name_clip: f32,
     log_lines: f32,
     remember_size: bool,
@@ -931,6 +935,7 @@ impl App {
             row_max,
             two_col_w: prefs::load_two_col_width(),
             three_col_w: prefs::load_three_col_width(),
+            full_two_col_w: prefs::load_full_two_col_width(),
             name_clip: prefs::load_name_clip(),
             log_lines: prefs::load_log_lines(),
             remember_size: prefs::load_remember_size(),
@@ -1434,6 +1439,14 @@ impl App {
                 self.three_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
             }
             Msg::SaveThreeColWidth => prefs::save_three_col_width(self.three_col_w),
+            Msg::SetFullTwoColWidth(v) => {
+                self.full_two_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
+            }
+            Msg::SaveFullTwoColWidth => prefs::save_full_two_col_width(self.full_two_col_w),
+            Msg::ResetFullView => {
+                self.full_two_col_w = prefs::FULL_TWO_COL_DEFAULT;
+                prefs::save_full_two_col_width(self.full_two_col_w);
+            }
             Msg::SetNameClip(v) => {
                 self.name_clip = v.round().clamp(prefs::NAME_CLIP_MIN_LIMIT, prefs::NAME_CLIP_MAX_LIMIT);
             }

@@ -12,6 +12,7 @@ pub const TWO_COL_MIN_LIMIT: f32 = 700.0;
 pub const TWO_COL_MAX_LIMIT: f32 = 2600.0;
 pub const TWO_COL_DEFAULT: f32 = 1100.0;
 pub const THREE_COL_DEFAULT: f32 = 1700.0;
+pub const FULL_TWO_COL_DEFAULT: f32 = 1700.0;
 pub const NAME_CLIP_MIN_LIMIT: f32 = 6.0;
 pub const NAME_CLIP_MAX_LIMIT: f32 = 30.0;
 pub const NAME_CLIP_DEFAULT: f32 = 16.0;
@@ -35,6 +36,7 @@ struct Prefs {
     row_max: f32,
     two_col_w: f32,
     three_col_w: f32,
+    full_two_col_w: f32,
     name_clip: f32,
     log_lines: f32,
     remember_size: bool,
@@ -85,6 +87,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs { theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
             three_col_w: THREE_COL_DEFAULT,
+            full_two_col_w: FULL_TWO_COL_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,
             log_lines: LOG_LINES_DEFAULT,
             remember_size: false,
@@ -286,6 +289,18 @@ pub fn load_three_col_width() -> f32 {
 pub fn save_three_col_width(width: f32) {
     let mut prefs = read();
     prefs.three_col_w = width;
+    write(&prefs);
+}
+
+/// Reads the saved window width from which full view uses two columns.
+pub fn load_full_two_col_width() -> f32 {
+    read().full_two_col_w.clamp(TWO_COL_MIN_LIMIT, TWO_COL_MAX_LIMIT)
+}
+
+/// Saves the window width from which full view uses two columns.
+pub fn save_full_two_col_width(width: f32) {
+    let mut prefs = read();
+    prefs.full_two_col_w = width;
     write(&prefs);
 }
 
