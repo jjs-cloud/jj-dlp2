@@ -1,7 +1,6 @@
 //! Locating, loading and saving the config files in the OS-recommended config directory.
 
 use crate::api::{Settings, Site, Streamer};
-use crate::policy::{new_site, Preset};
 use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -116,16 +115,6 @@ pub fn default_settings() -> Settings {
     }
 }
 
-/// Settings for a first launch: one site per named preset and no streamers.
-fn first_launch_settings() -> Settings {
-    let mut s = default_settings();
-    for preset in [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube] {
-        s.sites.push(new_site(preset).into_site(s.next_id));
-        s.next_id += 1;
-    }
-    s
-}
-
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {name}: {e}"))?;
@@ -155,21 +144,21 @@ pub fn any_config_exists() -> bool {
 /// Like `load`, but on a failure backs the files up as `.bad` and pauses saving.
 pub fn load_guarded() -> Settings {
     if !any_config_exists() {
-        return first_launch_settings();
+        return default_settings();
     }
     try_load().unwrap_or_else(|e| {
         for p in [settings_path(), sites_path(), streamers_path(), state_path()] {
             backup_bad(&p);
         }
         GUARD.block(format!("{e}; the old files were kept as .bad copies"));
-        first_launch_settings()
+        default_settings()
     })
 }
 
 /// Reads the config files, falling back to defaults if none exist or they are invalid.
 pub fn load() -> Settings {
     if !any_config_exists() {
-        return first_launch_settings();
+        return default_settings();
     }
     try_load().unwrap_or_else(|e| {
         eprintln!("{e}; starting with defaults");

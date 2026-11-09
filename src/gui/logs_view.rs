@@ -31,7 +31,7 @@ impl App {
     fn logs_list(&self, s: Skin) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(12).padding(Padding { right: 10.0, ..Padding::ZERO });
         if self.settings.sites.is_empty() && self.posts.cfg.sites.is_empty() {
-            col = col.push(muted(&s, "Add a site and streamers in Settings, or a Posts site, to see their logs."));
+            col = col.push(muted(&s, "Add a streamer on the Livestreams tab, or an account on the Posts tab, to see their logs."));
         }
         for site in &self.settings.sites {
             col = col.push(self.logs_site(s, site));

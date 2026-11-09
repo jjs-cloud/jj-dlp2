@@ -2,7 +2,7 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, StreamerDraft,
+    App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, SiteOption, StreamerDraft,
     LogTab, StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
@@ -32,7 +32,7 @@ pub(super) fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.text)
 }
 
-/// Width of the "Add streamer" button; "Remove site" is centered over it.
+/// Width of the "Add streamer" button.
 const STREAMER_BTN_W: f32 = 130.0;
 
 /// Button label that inherits the button style's text colour.
@@ -116,6 +116,8 @@ const ROW_FLOOR: f32 = 15.0;
 const ROW_CEIL: f32 = 34.0;
 const COMPACT_CHROME_H: f32 = 200.0;
 const COMPACT_SLACK_H: f32 = 16.0;
+/// Height of the add-streamer bar under the compact list, with its gap.
+const ADD_BAR_H: f32 = 48.0;
 const COLUMN_FRAME: f32 = 1.0;
 const COLUMN_GAP: f32 = 14.0;
 const SITE_CLIP_CHARS: usize = 12;
@@ -510,33 +512,54 @@ impl App {
         if !self.notices.is_empty() {
             col = col.push(self.setup_notices(s));
         }
-        if self.settings.sites.is_empty() {
-            col = col.push(
-                container(
-                    column![
-                        t(&s, "No sites configured yet."),
-                        button(btn_label(&s, "Add a site").size(13))
-                            .on_press(Msg::OpenAddSite)
-                            .padding([8.0, 14.0])
-                            .style(skin::btn(s, BtnKind::Primary)),
-                    ]
-                    .spacing(10),
-                )
-                .padding(16)
-                .width(Length::Fill)
-                .style(skin::card(s, None)),
-            );
-        }
         if self.compact {
             col = self.compact_list(s, col);
         } else {
+            if self.settings.streamers.is_empty() {
+                col = col.push(muted(&s, "No streamers yet. Pick a site and add a username below."));
+            }
             for site in &self.settings.sites {
-                col = col.push(self.site_block(s, site));
+                if self.settings.streamers.iter().any(|x| x.site_id == site.id) {
+                    col = col.push(self.site_block(s, site));
+                }
             }
         }
         column![title, scrollable(col).height(Length::Fill)]
             .spacing(12)
+            .push(container(self.streamer_add_bar(s)).padding(iced::Padding { right: 8.0, ..Default::default() }))
             .into()
+    }
+
+    /// Site selector, name and username boxes and Add button under the site panels.
+    fn streamer_add_bar(&self, s: Skin) -> Element<'_, Msg> {
+        let choices = self.site_options();
+        let selected = self.add_choice();
+        let pulsing = self.settings.streamers.is_empty();
+        let (calm, glow) = (skin::input(s), skin::input_pulse(s, pulse(self.phase)));
+        row![
+            pick_list(choices, selected, |o: SiteOption| Msg::PickStreamerSite(o.target)).placeholder("Site").padding(8).text_size(13).width(150),
+            text_input("Display Name (optional)", &self.new_streamer.0)
+                .on_input(Msg::NewStreamerName)
+                .on_submit(Msg::AddStreamer)
+                .padding(8)
+                .width(230)
+                .style(skin::input(s)),
+            text_input("Streamer username", &self.new_streamer.1)
+                .id(super::username_input_id())
+                .on_input(Msg::NewStreamerUsername)
+                .on_submit(Msg::AddStreamer)
+                .padding(8)
+                .width(Length::Fill)
+                .style(move |th, st| if pulsing { glow(th, st) } else { calm(th, st) }),
+            button(btn_label(&s, "Add streamer").size(13).width(Length::Fill).align_x(Alignment::Center))
+                .on_press(Msg::AddStreamer)
+                .padding([8.0, 14.0])
+                .width(STREAMER_BTN_W)
+                .style(skin::btn(s, BtnKind::Primary)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     /// Picks three or two columns when the window is at least that threshold wide, else one; sizes rows to fit.
@@ -580,12 +603,7 @@ impl App {
             }
         }
         if entries.is_empty() {
-            if !self.settings.sites.is_empty() {
-                col = col.push(muted(
-                    &s,
-                    "No streamers yet. Turn off Compact view to add one.",
-                ));
-            }
+            col = col.push(muted(&s, "No streamers yet. Pick a site and add a username below."));
             return col;
         }
         let notices_h = if self.notices.is_empty() {
@@ -594,7 +612,7 @@ impl App {
             48.0 + 80.0 * self.notices.len() as f32
         };
         let banner_h = if self.update.is_some() { 70.0 } else { 0.0 };
-        let extra_h = problems.len() as f32 * 32.0 + notices_h + banner_h;
+        let extra_h = problems.len() as f32 * 32.0 + notices_h + banner_h + ADD_BAR_H;
         let (cols, row_h) = self.compact_layout(entries.len(), extra_h);
         let longest_site = entries
             .iter()
@@ -657,7 +675,8 @@ impl App {
             || crate::settings::load_problem().is_some()
             || crate::policy::posts::load_problem().is_some()
             || self.monitor_alert()
-            || (p.add_target().is_some() && p.cfg.sites.iter().all(|x| x.accounts.is_empty()))
+            || (p.add_choice().is_some() && p.cfg.sites.iter().all(|x| x.accounts.is_empty()))
+            || (self.tab == Tab::Livestreams && self.settings.streamers.is_empty())
     }
 
     fn monitor_alert(&self) -> bool {
@@ -1150,7 +1169,6 @@ impl App {
     }
 
     fn site_block<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
-        let has_streamers = self.settings.streamers.iter().any(|x| x.site_id == site.id);
         let check = match self.checks.get(&site.id) {
             Some(c) => {
                 let color = if c.ok { s.live } else { s.danger };
@@ -1164,7 +1182,6 @@ impl App {
                 .spacing(6)
                 .align_y(Alignment::Center)
             }
-            None if !has_streamers => Row::new(),
             None => row![muted(&s, "waiting for first check")],
         };
         let mut head: Row<'_, Msg> = Row::new().spacing(10).align_y(Alignment::Center).push(
@@ -1191,52 +1208,10 @@ impl App {
             .iter()
             .filter(|x| x.site_id == site.id)
             .collect();
-        if streamers.is_empty() {
-            top = top.push(
-                row![
-                    muted(&s, "No streamers yet; add one below."),
-                    Space::new().width(Length::Fill),
-                    container(
-                        button(btn_label(&s, "Remove site").size(11))
-                            .on_press(Msg::ConfirmRemoveSite(site.id))
-                            .padding([0.0, 10.0])
-                            .style(skin::btn(s, BtnKind::Danger)),
-                    )
-                    .width(STREAMER_BTN_W)
-                    .align_x(iced::alignment::Horizontal::Center),
-                ]
-                .align_y(Alignment::Center),
-            );
-        }
         for st in streamers {
             top = top.push(self.streamer_row(s, st));
         }
-        let (name, username) = self.new_streamer.get(&site.id).cloned().unwrap_or_default();
-        let id = site.id;
-        let add = row![
-            text_input("Display Name (optional)", &name)
-                .on_input(move |v| Msg::NewStreamerName(id, v))
-                .on_submit(Msg::AddStreamer(id))
-                .padding(8)
-                .width(230)
-                .style(skin::input(s)),
-            text_input("Streamer username", &username)
-                .id(super::username_input_id(id))
-                .on_input(move |v| Msg::NewStreamerUsername(id, v))
-                .on_submit(Msg::AddStreamer(id))
-                .padding(8)
-                .width(Length::Fill)
-                .style(skin::input(s)),
-            button(btn_label(&s, "Add streamer").size(13).width(Length::Fill).align_x(Alignment::Center))
-                .on_press(Msg::AddStreamer(id))
-                .padding([8.0, 14.0])
-                .width(STREAMER_BTN_W)
-                .style(skin::btn(s, BtnKind::Primary)),
-        ]
-        .spacing(8);
-        // Add row sits at a fixed index so its input keeps focus when streamers are added.
-        let col = Column::new().spacing(8).push(top).push(add);
-        container(col)
+        container(top)
             .padding(14)
             .width(Length::Fill)
             .style(skin::card(s, None))
@@ -1731,11 +1706,9 @@ impl App {
             ("Chaturbate", Preset::Chaturbate),
             ("Kick", Preset::Kick),
             ("Youtube", Preset::Youtube),
-            ("Blank", Preset::Blank),
+            ("New Site", Preset::Blank),
         ];
-        let mut add = row![self.section_title(s, "ADD SITE")]
-            .spacing(10)
-            .align_y(Alignment::Center);
+        let mut add = Row::new().spacing(10).align_y(Alignment::Center);
         for (label, preset) in presets {
             add = add.push(
                 button(t(&s, label).size(13))
@@ -1751,7 +1724,7 @@ impl App {
         }
         let new_draft = self.drafts.get(&NEW_SITE_ID);
         if self.settings.sites.is_empty() && new_draft.is_none() {
-            col = col.push(muted(&s, "Pick a preset to start; every field stays editable afterwards."));
+            col = col.push(muted(&s, "Pick a site above to edit its settings; sites are also created when you add a streamer."));
         }
         if let Some(d) = new_draft {
             col = col.push(self.site_editor(s, NEW_SITE_ID, None, d));

@@ -14,7 +14,7 @@ const TWITCH_INTERRUPT_PATTERNS: &str =
     "EXT-X-DISCONTINUITY|amazon|twitch-ad|/ad/|admanifest|/ads/|EXT-X-TWITCH-AD|twitch-stitched-ad";
 
 /// Starting point for a new site.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
     Twitch,
     Tiktok,
@@ -24,9 +24,14 @@ pub enum Preset {
     Blank,
 }
 
+impl Preset {
+    /// Every named preset, in dropdown order.
+    pub const NAMED: [Preset; 5] = [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube];
+}
+
 /// The named preset whose site name matches `name` (ignoring case), else `Blank`.
 pub fn preset_for_name(name: &str) -> Preset {
-    [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube]
+    Preset::NAMED
         .into_iter()
         .find(|p| new_site(*p).name.eq_ignore_ascii_case(name.trim()))
         .unwrap_or(Preset::Blank)

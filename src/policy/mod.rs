@@ -142,6 +142,8 @@ pub enum PolicyCommand {
     UpdateSite(Site),
     RemoveSite(SiteId),
     AddStreamer { site_id: SiteId, name: String, username: String },
+    /// Adds a streamer to the site named like `preset`, creating that site first when it does not exist.
+    AddStreamerToPreset { preset: Preset, name: String, username: String },
     RemoveStreamer(StreamerId),
     SetStreamerEnabled { id: StreamerId, enabled: bool },
     SetStreamerOptions { id: StreamerId, options: StreamerOptions },
@@ -1332,6 +1334,38 @@ impl Policy {
         self.reconcile_all();
     }
 
+    /// Adds a streamer to a site and commits; false when nothing was added.
+    fn add_streamer(&mut self, site_id: SiteId, name: String, username: String) -> bool {
+        let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else {
+            return false;
+        };
+        if username.trim().trim_start_matches('@').is_empty() {
+            return false;
+        }
+        if site.url_template.trim().is_empty() {
+            self.log(format!("Set a URL template for {} before adding streamers", site.name));
+            return false;
+        }
+        let url = build_url(&site.url_template, &username);
+        if self.settings.streamers.iter().any(|s| s.site_id == site_id && s.url == url) {
+            self.log(format!("{url} is already monitored"));
+            return false;
+        }
+        let name = if name.trim().is_empty() { derive_name(&url) } else { name.trim().to_string() };
+        let id = self.alloc_id();
+        self.settings.streamers.push(Streamer {
+            id,
+            site_id,
+            name,
+            url,
+            enabled: true,
+            options: StreamerOptions::default(),
+            schedule_runs: Default::default(),
+        });
+        self.commit();
+        true
+    }
+
     fn handle(&mut self, cmd: PolicyCommand) {
         match cmd {
             PolicyCommand::RequestSnapshot => {
@@ -1364,33 +1398,25 @@ impl Policy {
                 self.prune_live();
             }
             PolicyCommand::AddStreamer { site_id, name, username } => {
-                let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else {
-                    return;
-                };
+                self.add_streamer(site_id, name, username);
+            }
+            PolicyCommand::AddStreamerToPreset { preset, name, username } => {
                 if username.trim().trim_start_matches('@').is_empty() {
                     return;
                 }
-                if site.url_template.trim().is_empty() {
-                    self.log(format!("Set a URL template for {} before adding streamers", site.name));
-                    return;
+                let template = new_site(preset);
+                let existing = self.settings.sites.iter().find(|s| s.name.eq_ignore_ascii_case(&template.name)).map(|s| s.id);
+                let (site_id, created) = match existing {
+                    Some(id) => (id, false),
+                    None => {
+                        let id = self.alloc_id();
+                        self.settings.sites.push(template.into_site(id));
+                        (id, true)
+                    }
+                };
+                if !self.add_streamer(site_id, name, username) && created {
+                    self.commit();
                 }
-                let url = build_url(&site.url_template, &username);
-                if self.settings.streamers.iter().any(|s| s.site_id == site_id && s.url == url) {
-                    self.log(format!("{url} is already monitored"));
-                    return;
-                }
-                let name = if name.trim().is_empty() { derive_name(&url) } else { name.trim().to_string() };
-                let id = self.alloc_id();
-                self.settings.streamers.push(Streamer {
-                    id,
-                    site_id,
-                    name,
-                    url,
-                    enabled: true,
-                    options: StreamerOptions::default(),
-                    schedule_runs: Default::default(),
-                });
-                self.commit();
             }
             PolicyCommand::RemoveStreamer(id) => {
                 self.settings.streamers.retain(|s| s.id != id);

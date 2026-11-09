@@ -156,7 +156,7 @@ impl App {
 
         let mut list = Column::new().padding(iced::Padding { right: 8.0, ..Default::default() });
         if self.settings.sites.is_empty() {
-            list = list.push(container(muted(&s, "No sites yet. Add one in Settings to see its recordings here.")).padding(16));
+            list = list.push(container(muted(&s, "No sites yet. Add a streamer on the Livestreams tab to see its recordings here.")).padding(16));
         }
         let now = Instant::now();
         for (i, r) in f.rows.iter().enumerate() {

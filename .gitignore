@@ -1,4 +1,4 @@
 /target
-/dev
+/dev*
 *.lock
 jj-dlp.zip

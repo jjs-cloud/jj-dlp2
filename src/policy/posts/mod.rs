@@ -39,6 +39,8 @@ pub enum PostsCommand {
     /// Removes a site with its accounts and posts.
     RemoveSite(SiteId),
     AddAccount { site_id: SiteId, input: String },
+    /// Adds an account to the site named like `preset`, creating that site first when it does not exist.
+    AddAccountToPreset { preset: Preset, input: String },
     /// Removes an account with its posts.
     RemoveAccount { site_id: SiteId, name: String },
     /// Opens a site's download folder, creating it when missing.

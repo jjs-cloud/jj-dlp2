@@ -1,6 +1,6 @@
 //! Views of the Posts monitor and its settings.
 
-use super::posts::{PostsMsg, Section, SiteDraft, SiteField, NEW_SITE};
+use super::posts::{AddOption, PostsMsg, Section, SiteDraft, SiteField, NEW_SITE};
 use super::prefs;
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, card_box, chip, clip, fmt_ago, muted, t, warn_text};
@@ -68,19 +68,6 @@ fn card_btn<'a>(s: Skin, label: &'static str, msg: PostsMsg, kind: BtnKind) -> E
         .width(Length::Fill)
         .style(skin::btn(s, kind))
         .into()
-}
-
-/// One entry of the site selector.
-#[derive(Debug, Clone, PartialEq)]
-struct SiteChoice {
-    id: posts::SiteId,
-    name: String,
-}
-
-impl std::fmt::Display for SiteChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.name)
-    }
 }
 
 fn flag<'a>(label: &'static str, on: bool, make: fn(bool) -> PostsMsg) -> Element<'a, Msg> {
@@ -213,13 +200,13 @@ impl App {
     /// Site selector, username box and Add button under the posts.
     fn posts_add_bar(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
-        let choices: Vec<SiteChoice> = p.cfg.sites.iter().map(|x| SiteChoice { id: x.id, name: x.name.clone() }).collect();
-        let selected = p.add_target().and_then(|id| choices.iter().find(|c| c.id == id).cloned());
+        let choices = p.add_options();
+        let selected = p.add_choice();
         let can_add = selected.is_some() && !p.add_name.trim().is_empty();
         let pulsing = selected.is_some() && p.cfg.sites.iter().all(|x| x.accounts.is_empty());
         let (calm, pulse) = (skin::input(s), skin::input_pulse(s, skin::pulse(self.phase)));
         row![
-            pick_list(choices, selected, |c: SiteChoice| send(PostsMsg::PickAddSite(c.id))).placeholder("Site").padding(6).text_size(13).width(150),
+            pick_list(choices, selected, |c: AddOption| send(PostsMsg::PickAddSite(c.target))).placeholder("Site").padding(6).text_size(13).width(150),
             text_input("Username", &p.add_name)
                 .on_input(|v| send(PostsMsg::AddName(v)))
                 .on_submit_maybe(can_add.then(|| send(PostsMsg::AddAccount)))
@@ -239,21 +226,8 @@ impl App {
 
     fn posts_empty(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
-        if p.cfg.sites.is_empty() {
-            return card_box(
-                s,
-                column![
-                    t(&s, "No sites configured yet."),
-                    button(btn_label(&s, "Add a site").size(13))
-                        .on_press(send(PostsMsg::OpenSettings))
-                        .padding([8.0, 14.0])
-                        .style(skin::btn(s, BtnKind::Primary)),
-                ]
-                .spacing(10),
-            );
-        }
         if p.cfg.sites.iter().all(|x| x.accounts.is_empty()) {
-            return muted(&s, "No accounts yet. Add a username below.").into();
+            return muted(&s, "No accounts yet. Pick a site and add a username below.").into();
         }
         let text = match p.section {
             Section::Unviewed => "You're all caught up.",
@@ -351,7 +325,7 @@ impl App {
 
     pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
-        let mut add = row![self.section_title(s, "ADD SITE")].spacing(10).align_y(Alignment::Center);
+        let mut add = Row::new().spacing(10).align_y(Alignment::Center);
         for preset in Preset::ALL {
             add = add.push(
                 button(t(&s, preset.label()).size(13))
@@ -370,7 +344,7 @@ impl App {
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
         let new_draft = p.drafts.get(&NEW_SITE);
         if p.cfg.sites.is_empty() && new_draft.is_none() {
-            col = col.push(muted(&s, "Pick a preset to start; every field stays editable afterwards."));
+            col = col.push(muted(&s, "Pick a site above to edit its settings; sites are also created when you add a username."));
         }
         if let Some(d) = new_draft {
             col = col.push(self.post_site_editor(s, NEW_SITE, None, d));

@@ -2,7 +2,7 @@
 
 use super::runner::{self, CycleReport, DownloadOutcome};
 use super::store;
-use super::{AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, SiteId};
+use super::{AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, Preset, SiteId};
 use crate::api::{now_secs, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
@@ -462,6 +462,7 @@ impl PostsMonitor {
             PostsCommand::UpdateSite(site) => self.update_site(site),
             PostsCommand::RemoveSite(id) => self.remove_site(id),
             PostsCommand::AddAccount { site_id, input } => self.add_account(site_id, &input),
+            PostsCommand::AddAccountToPreset { preset, input } => self.add_account_to_preset(preset, &input),
             PostsCommand::RemoveAccount { site_id, name } => self.remove_account(site_id, &name),
             PostsCommand::SetLog { site_id, target, stderr, on } => self.set_log(site_id, &target, stderr, on),
             PostsCommand::OpenOutputDir(id) => {
@@ -549,6 +550,26 @@ impl PostsMonitor {
         self.emit_config();
         self.emit_status();
         self.notice(format!("Added @{name}"));
+    }
+
+    /// Adds an account to the preset's site, creating the site first when it is missing.
+    fn add_account_to_preset(&mut self, preset: Preset, input: &str) {
+        let template = PostSite::from_preset(preset);
+        let existing = self.cfg.sites.iter().find(|s| s.name.trim().eq_ignore_ascii_case(template.name.trim())).map(|s| s.id);
+        let id = match existing {
+            Some(id) => id,
+            None => {
+                if template.account_from_input(input).is_none() {
+                    self.notice("Enter a new username or profile URL");
+                    return;
+                }
+                match self.cfg.add_site(template) {
+                    Some(id) => id,
+                    None => return,
+                }
+            }
+        };
+        self.add_account(id, input);
     }
 
     fn remove_account(&mut self, site_id: SiteId, name: &str) {

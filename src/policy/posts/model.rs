@@ -33,7 +33,7 @@ pub const MAX_ATTEMPTS: u8 = 3;
 
 pub type SiteId = u64;
 
-/// Starting points offered by the Add site row.
+/// Starting points offered by the site buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
     Tiktok,
@@ -44,8 +44,11 @@ pub enum Preset {
 }
 
 impl Preset {
-    /// Every preset, in the order the Add site row shows them.
+    /// Every preset, in the order the site buttons show them.
     pub const ALL: [Preset; 5] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods, Preset::TwitterX, Preset::Blank];
+
+    /// Every named preset, in dropdown order.
+    pub const NAMED: [Preset; 4] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods, Preset::TwitterX];
 
     /// The button label, which is also the site name.
     pub fn label(self) -> &'static str {
@@ -54,13 +57,13 @@ impl Preset {
             Preset::YoutubeShorts => "Youtube Shorts",
             Preset::TwitchVods => "Twitch Vods",
             Preset::TwitterX => "Twitter/X",
-            Preset::Blank => "Blank",
+            Preset::Blank => "New Site",
         }
     }
 
     /// The preset whose label is `name`, else blank.
     pub fn from_name(name: &str) -> Preset {
-        Preset::ALL.into_iter().find(|p| *p != Preset::Blank && p.label().eq_ignore_ascii_case(name.trim())).unwrap_or(Preset::Blank)
+        Preset::NAMED.into_iter().find(|p| p.label().eq_ignore_ascii_case(name.trim())).unwrap_or(Preset::Blank)
     }
 }
 
@@ -278,15 +281,6 @@ impl Default for PostsConfig {
 }
 
 impl PostsConfig {
-    /// The config of a first launch: one site per named preset.
-    pub(super) fn first_launch() -> Self {
-        let mut cfg = PostsConfig::default();
-        for preset in Preset::ALL.into_iter().filter(|p| *p != Preset::Blank) {
-            cfg.add_site(PostSite::from_preset(preset));
-        }
-        cfg
-    }
-
     pub fn site(&self, id: SiteId) -> Option<&PostSite> {
         self.sites.iter().find(|s| s.id == id)
     }
@@ -571,9 +565,10 @@ mod tests {
     }
 
     #[test]
-    fn first_launch_has_every_named_site() {
-        let names: Vec<String> = PostsConfig::first_launch().sites.into_iter().map(|s| s.name).collect();
+    fn named_presets_are_every_preset_but_blank() {
+        let names: Vec<&str> = Preset::NAMED.into_iter().map(Preset::label).collect();
         assert_eq!(names, ["TikTok", "Youtube Shorts", "Twitch Vods", "Twitter/X"]);
+        assert!(!Preset::NAMED.contains(&Preset::Blank));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Posts monitor front end: the library view, filters and site drafts; the monitor itself runs in the policy layer.
 
-use super::{prefs, App, Msg, SettingsTab, Tab};
+use super::{prefs, App, Msg};
 use crate::api::now_secs;
 use crate::policy::posts::{Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, Preset, SiteId, MIN_INTERVAL_SECS};
 use crate::policy::PolicyCommand;
@@ -17,6 +17,26 @@ pub const NEW_SITE: SiteId = 0;
 
 /// Identifies an account: its site and name.
 pub type AccountKey = (SiteId, String);
+
+/// What the add-account dropdown can point at: an existing site, or a preset that has no site yet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AddTarget {
+    Site(SiteId),
+    Template(Preset),
+}
+
+/// One entry of the add-account dropdown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddOption {
+    pub target: AddTarget,
+    pub name: String,
+}
+
+impl std::fmt::Display for AddOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
 
 /// Which slice of the library the main area shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,7 +188,7 @@ pub struct PostsState {
     pub search: String,
     pub shown: usize,
     pub drafts: HashMap<SiteId, SiteDraft>,
-    pub add_site: Option<SiteId>,
+    pub add_site: Option<AddTarget>,
     pub add_name: String,
     pub added: Option<(String, u64)>,
     pub confirm_remove: Option<SiteId>,
@@ -253,12 +273,34 @@ impl PostsState {
         self.pending_jump.is_some()
     }
 
-    /// The site the username box adds to: the chosen one, else TikTok, else the first.
-    pub fn add_target(&self) -> Option<SiteId> {
-        let chosen = self.add_site.filter(|id| self.cfg.site(*id).is_some());
-        chosen
-            .or_else(|| self.cfg.sites.iter().find(|s| s.name.eq_ignore_ascii_case("tiktok")).map(|s| s.id))
-            .or_else(|| self.cfg.sites.first().map(|s| s.id))
+    /// The dropdown entries: each named preset (its site once created), then custom sites.
+    pub fn add_options(&self) -> Vec<AddOption> {
+        let mut out: Vec<AddOption> = Vec::new();
+        for preset in Preset::NAMED {
+            let name = preset.label();
+            let found = self.cfg.sites.iter().find(|s| s.name.trim().eq_ignore_ascii_case(name));
+            out.push(match found {
+                Some(site) => AddOption { target: AddTarget::Site(site.id), name: site.name.clone() },
+                None => AddOption { target: AddTarget::Template(preset), name: name.to_string() },
+            });
+        }
+        for site in &self.cfg.sites {
+            if !out.iter().any(|o| o.target == AddTarget::Site(site.id)) {
+                out.push(AddOption { target: AddTarget::Site(site.id), name: site.name.clone() });
+            }
+        }
+        out
+    }
+
+    /// The dropdown entry the username box adds to: the picked one, else the first.
+    pub fn add_choice(&self) -> Option<AddOption> {
+        let opts = self.add_options();
+        let picked = self.add_site.and_then(|t| match t {
+            AddTarget::Site(_) => opts.iter().find(|o| o.target == t),
+            AddTarget::Template(p) => opts.iter().find(|o| o.target == t || o.name.trim().eq_ignore_ascii_case(p.label())),
+        });
+        let choice = picked.or_else(|| opts.first()).cloned();
+        choice
     }
 
     /// The site's check countdown for the sidebar: paused, checking or seconds left.
@@ -373,7 +415,6 @@ pub enum PostsMsg {
     NewestFirst(bool),
     CardWidth(f32),
     CardWidthSave,
-    OpenSettings,
     AddSite(Preset),
     SaveSite(SiteId),
     RevertSite(SiteId),
@@ -383,7 +424,7 @@ pub enum PostsMsg {
     CancelRemoveSite,
     Site(SiteId, SiteField),
     RemoveAccount(SiteId, String),
-    PickAddSite(SiteId),
+    PickAddSite(AddTarget),
     AddName(String),
     AddAccount,
     BrowseOutput(SiteId),
@@ -468,10 +509,6 @@ impl App {
             PostsMsg::CardWidthSave => {
                 prefs::save_posts(&prefs::PostsPrefs { newest_first: self.posts.newest_first, card_w: self.posts.card_w });
             }
-            PostsMsg::OpenSettings => {
-                self.tab = Tab::Settings;
-                self.settings_tab = SettingsTab::Posts;
-            }
             PostsMsg::AddSite(Preset::Blank) => {
                 self.posts.drafts.entry(NEW_SITE).or_insert_with(|| SiteDraft::from_site(&PostSite::from_preset(Preset::Blank)));
                 return iced::widget::operation::snap_to(super::posts_scroll_id(), iced::widget::scrollable::RelativeOffset { x: 0.0, y: 0.0 });
@@ -501,7 +538,7 @@ impl App {
             PostsMsg::CancelRemoveSite => self.posts.confirm_remove = None,
             PostsMsg::ConfirmRemoveSite(id) => {
                 self.posts.confirm_remove = None;
-                if self.posts.add_site == Some(id) {
+                if self.posts.add_site == Some(AddTarget::Site(id)) {
                     self.posts.add_site = None;
                 }
                 if self.posts.account.as_ref().is_some_and(|(sid, _)| *sid == id) {
@@ -516,7 +553,7 @@ impl App {
                 }
                 self.posts_send(PostsCommand::RemoveAccount { site_id: id, name });
             }
-            PostsMsg::PickAddSite(id) => self.posts.add_site = Some(id),
+            PostsMsg::PickAddSite(target) => self.posts.add_site = Some(target),
             PostsMsg::AddName(v) => self.posts.add_name = v,
             PostsMsg::AddAccount => self.posts_add_account(),
             PostsMsg::BrowseOutput(id) => {
@@ -597,14 +634,21 @@ impl App {
 
     /// Sends the typed username or profile URL for the site chosen under the posts grid.
     fn posts_add_account(&mut self) {
-        let Some(id) = self.posts.add_target() else { return };
-        let valid = self.posts.cfg.site(id).and_then(|s| s.account_from_input(&self.posts.add_name)).is_some();
+        let Some(choice) = self.posts.add_choice() else { return };
+        let valid = match choice.target {
+            AddTarget::Site(id) => self.posts.cfg.site(id).and_then(|s| s.account_from_input(&self.posts.add_name)).is_some(),
+            AddTarget::Template(preset) => PostSite::from_preset(preset).account_from_input(&self.posts.add_name).is_some(),
+        };
         if !valid {
             self.posts.say("Enter a new username or profile URL");
             return;
         }
         let input = std::mem::take(&mut self.posts.add_name);
-        self.posts_send(PostsCommand::AddAccount { site_id: id, input });
+        self.posts.add_site = Some(choice.target);
+        self.posts_send(match choice.target {
+            AddTarget::Site(site_id) => PostsCommand::AddAccount { site_id, input },
+            AddTarget::Template(preset) => PostsCommand::AddAccountToPreset { preset, input },
+        });
     }
 
     /// Label of the Posts tab, with the unviewed count.

@@ -630,14 +630,14 @@ pub enum Msg {
     SetSettingsTab(SettingsTab),
     SetLogTab(LogTab),
     Logs(logs::LogsMsg),
-    OpenAddSite,
     ThemeChosen(ThemeKind),
     OpenConfigDir,
     OpenLogsDir,
     OpenRecording(RecorderId),
-    NewStreamerName(SiteId, String),
-    NewStreamerUsername(SiteId, String),
-    AddStreamer(SiteId),
+    NewStreamerName(String),
+    NewStreamerUsername(String),
+    PickStreamerSite(SiteTarget),
+    AddStreamer,
     RemoveStreamer(StreamerId),
     ToggleStreamer(StreamerId, bool),
     ToggleStreamerSettings(StreamerId),
@@ -737,9 +737,29 @@ pub struct CheckInfo {
     pub problem: Option<String>,
 }
 
-/// Widget id of a site's "Streamer username" input.
-pub(crate) fn username_input_id(id: SiteId) -> iced::widget::Id {
-    iced::widget::Id::from(format!("streamer-username-{:?}", id))
+/// Widget id of the "Streamer username" input.
+pub(crate) fn username_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("streamer-username")
+}
+
+/// What the add-streamer dropdown can point at: an existing site, or a preset that has no site yet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SiteTarget {
+    Site(SiteId),
+    Template(Preset),
+}
+
+/// One entry of the add-streamer dropdown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SiteOption {
+    pub target: SiteTarget,
+    pub name: String,
+}
+
+impl std::fmt::Display for SiteOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
 }
 
 /// Scrollable id of the Posts settings site list.
@@ -771,7 +791,8 @@ pub struct App {
     recording_files: HashMap<RecorderId, RecordingFile>,
     log: VecDeque<String>,
     drafts: HashMap<SiteId, SiteDraft>,
-    new_streamer: HashMap<SiteId, (String, String)>,
+    new_streamer: (String, String),
+    add_site: Option<SiteTarget>,
     open_streamer_settings: HashSet<StreamerId>,
     confirm_remove_site: Option<SiteId>,
     schedule_picker: Option<(StreamerId, PickerTarget)>,
@@ -844,7 +865,8 @@ impl App {
             recording_files: HashMap::new(),
             log: VecDeque::new(),
             drafts: HashMap::new(),
-            new_streamer: HashMap::new(),
+            new_streamer: (String::new(), String::new()),
+            add_site: None,
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
             confirm_remove_site: None,
@@ -983,6 +1005,39 @@ impl App {
         self.client.send(PolicyCommand::SetStreamerOptions { id, options: d.to_options() });
     }
 
+    /// The add-streamer dropdown entries: each named preset (its site once created), then custom sites.
+    pub(crate) fn site_options(&self) -> Vec<SiteOption> {
+        let mut out: Vec<SiteOption> = Vec::new();
+        for preset in Preset::NAMED {
+            let name = new_site(preset).name;
+            let found = self.settings.sites.iter().find(|s| s.name.eq_ignore_ascii_case(&name));
+            out.push(match found {
+                Some(site) => SiteOption { target: SiteTarget::Site(site.id), name: site.name.clone() },
+                None => SiteOption { target: SiteTarget::Template(preset), name },
+            });
+        }
+        for site in &self.settings.sites {
+            if !out.iter().any(|o| o.target == SiteTarget::Site(site.id)) {
+                out.push(SiteOption { target: SiteTarget::Site(site.id), name: site.name.clone() });
+            }
+        }
+        out
+    }
+
+    /// The dropdown entry streamers are added to: the picked one, else the first.
+    pub(crate) fn add_choice(&self) -> Option<SiteOption> {
+        let opts = self.site_options();
+        let picked = self.add_site.and_then(|t| match t {
+            SiteTarget::Site(_) => opts.iter().find(|o| o.target == t),
+            SiteTarget::Template(p) => {
+                let name = new_site(p).name;
+                opts.iter().find(|o| o.target == t || o.name.eq_ignore_ascii_case(&name))
+            }
+        });
+        let choice = picked.or_else(|| opts.first()).cloned();
+        choice
+    }
+
     /// Scrolls the Sites list to the named site, if it exists.
     fn jump_to_site(&self, name: &str) -> Option<Task<Msg>> {
         let sites = &self.settings.sites;
@@ -1059,13 +1114,6 @@ impl App {
                     return self.logs_tick();
                 }
             }
-            Msg::OpenAddSite => {
-                if self.tab == Tab::Processes {
-                    self.expanded_procs.clear();
-                }
-                self.tab = Tab::Settings;
-                self.settings_tab = SettingsTab::Sites;
-            }
             Msg::ThemeChosen(k) => {
                 self.kind = k;
                 prefs::save_theme(k);
@@ -1081,17 +1129,23 @@ impl App {
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenLogsDir => self.client.send(PolicyCommand::OpenLogsDir),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
-            Msg::NewStreamerName(id, v) => self.new_streamer.entry(id).or_default().0 = v,
-            Msg::NewStreamerUsername(id, v) => self.new_streamer.entry(id).or_default().1 = v,
-            Msg::AddStreamer(id) => {
-                if let Some((name, username)) = self.new_streamer.remove(&id) {
-                    if !username.trim().is_empty() {
-                        self.client.send(PolicyCommand::AddStreamer { site_id: id, name, username });
+            Msg::NewStreamerName(v) => self.new_streamer.0 = v,
+            Msg::NewStreamerUsername(v) => self.new_streamer.1 = v,
+            Msg::PickStreamerSite(target) => self.add_site = Some(target),
+            Msg::AddStreamer => {
+                if let Some(choice) = self.add_choice() {
+                    let (name, username) = std::mem::take(&mut self.new_streamer);
+                    if username.trim().is_empty() {
+                        self.new_streamer = (name, username);
                     } else {
-                        self.new_streamer.insert(id, (name, username));
+                        self.add_site = Some(choice.target);
+                        self.client.send(match choice.target {
+                            SiteTarget::Site(site_id) => PolicyCommand::AddStreamer { site_id, name, username },
+                            SiteTarget::Template(preset) => PolicyCommand::AddStreamerToPreset { preset, name, username },
+                        });
                     }
                 }
-                return iced::widget::operation::focus(username_input_id(id));
+                return iced::widget::operation::focus(username_input_id());
             }
             Msg::RemoveStreamer(id) => self.client.send(PolicyCommand::RemoveStreamer(id)),
             Msg::ToggleStreamer(id, enabled) => self.client.send(PolicyCommand::SetStreamerEnabled { id, enabled }),

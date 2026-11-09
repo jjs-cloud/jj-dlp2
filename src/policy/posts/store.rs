@@ -58,9 +58,9 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 pub fn load_config() -> PostsConfig {
     let path = path_in_config("posts.json");
     if !path.exists() {
-        return PostsConfig::first_launch();
+        return PostsConfig::default();
     }
-    read_json(&path).unwrap_or_else(PostsConfig::first_launch)
+    read_json(&path).unwrap_or_default()
 }
 
 pub fn save_config(cfg: &PostsConfig) {
