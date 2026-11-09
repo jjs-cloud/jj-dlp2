@@ -697,7 +697,7 @@ impl App {
                 let (Outcome::Done(msg) | Outcome::Cancelled(msg) | Outcome::Failed(msg)) = outcome;
                 self.files.say(msg.clone());
                 self.files.last_scan = None;
-                self.push_log(format!("Files: {msg}"));
+                self.note(format!("Files: {msg}"));
             }
         }
         task

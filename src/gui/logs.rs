@@ -254,7 +254,7 @@ impl App {
                     None => open::that_detached(&dir).map_err(|e| e.to_string()),
                 };
                 if let Err(e) = result {
-                    self.push_log(format!("could not open {}: {e}", dir.display()));
+                    self.note(format!("could not open {}: {e}", dir.display()));
                 }
             }
             LogsMsg::ToggleStreamer(id, kind, on) => self.toggle_streamer_log(id, kind, on),

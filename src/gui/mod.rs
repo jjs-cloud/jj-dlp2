@@ -955,7 +955,7 @@ impl App {
         };
         disks::set_limits(app.disk_limits);
         if let Some(e) = crate::policy::update::take_last_error() {
-            app.push_log(e);
+            app.note(e);
         }
         (app, Task::none())
     }
@@ -1088,6 +1088,12 @@ impl App {
             sites_scroll_id(),
             iced::widget::scrollable::RelativeOffset { x: 0.0, y },
         ))
+    }
+
+    /// Shows a GUI-originated line in the Log tab and saves it to ui.log.
+    fn note(&mut self, line: String) {
+        crate::policy::uilog::append(&line);
+        self.push_log(line);
     }
 
     fn push_log(&mut self, line: String) {
