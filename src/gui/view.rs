@@ -514,6 +514,18 @@ impl App {
             );
         }
         title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
+        title = title.push(toggler(self.live_first).label("Live first").on_toggle(Msg::SetLiveFirst).text_size(12));
+        title = title.push(
+            pick_list(prefs::SortKey::ALL.to_vec(), Some(self.sort_key), Msg::SetSortKey)
+                .padding([3.0, 8.0])
+                .text_size(12),
+        );
+        title = title.push(
+            button(self.sort_dir_icon(s))
+                .on_press(Msg::ToggleSortDir)
+                .padding([5.0, 8.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        );
         let mut col = Column::new().spacing(12).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
@@ -527,9 +539,14 @@ impl App {
             if self.settings.streamers.is_empty() {
                 col = col.push(muted(&s, "No streamers yet. Pick a site and add a username below."));
             }
+            let (live, rest) = self.split_live();
+            if !live.is_empty() {
+                col = col.push(self.live_block(s, live));
+            }
             for site in &self.settings.sites {
-                if self.settings.streamers.iter().any(|x| x.site_id == site.id) {
-                    col = col.push(self.site_block(s, site));
+                let list: Vec<&Streamer> = rest.iter().copied().filter(|x| x.site_id == site.id).collect();
+                if !list.is_empty() {
+                    col = col.push(self.site_block(s, site, list));
                 }
             }
         }
@@ -537,6 +554,75 @@ impl App {
             .spacing(12)
             .push(container(self.streamer_add_bar(s)).padding(iced::Padding { right: 8.0, ..Default::default() }))
             .into()
+    }
+
+    /// Sort-direction icon: an arrow beside horizontal lines, longest at the top for ascending.
+    fn sort_dir_icon(&self, s: Skin) -> Element<'_, Msg> {
+        let bar = move |w: f32| -> Element<'static, Msg> {
+            container(Space::new())
+                .width(w)
+                .height(2.0)
+                .style(move |_| container::Style { background: Some(s.text.into()), ..Default::default() })
+                .into()
+        };
+        let widths = if self.sort_asc { [14.0, 10.0, 6.0] } else { [6.0, 10.0, 14.0] };
+        let bars = column![bar(widths[0]), bar(widths[1]), bar(widths[2])].spacing(2);
+        row![iced::widget::text(if self.sort_asc { "▲" } else { "▼" }).font(s.font).size(10).color(s.text), bars]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
+    }
+
+    /// Streamers in the chosen sort order, in settings (priority) order for ties.
+    fn sorted_streamers(&self) -> Vec<&Streamer> {
+        let mut v: Vec<(usize, &Streamer)> = self.settings.streamers.iter().enumerate().collect();
+        v.sort_by(|(ia, a), (ib, b)| {
+            let o = match self.sort_key {
+                prefs::SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                prefs::SortKey::Added => a.id.cmp(&b.id),
+                prefs::SortKey::LastLive => self.last_live.get(&a.id).cmp(&self.last_live.get(&b.id)),
+                prefs::SortKey::Priority => ia.cmp(ib),
+            };
+            (if self.sort_asc { o } else { o.reverse() }).then(ia.cmp(ib))
+        });
+        v.into_iter().map(|(_, st)| st).collect()
+    }
+
+    /// Splits the sorted streamers into the currently live ones (only with Live first on) and the rest.
+    fn split_live(&self) -> (Vec<&Streamer>, Vec<&Streamer>) {
+        let sorted = self.sorted_streamers();
+        if !self.live_first {
+            return (Vec::new(), sorted);
+        }
+        sorted.into_iter().partition(|st| self.statuses.get(&st.id).is_some_and(|x| x.live))
+    }
+
+    /// The "Currently Live" panel shown above the site panels.
+    fn live_block<'a>(&'a self, s: Skin, streamers: Vec<&'a Streamer>) -> Element<'a, Msg> {
+        let head = iced::widget::text("Currently Live").font(s.font).size(18).color(s.live);
+        let top = self.push_streamers(s, Column::new().spacing(8).push(head), streamers);
+        container(top).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
+    }
+
+    /// Adds the streamer rows to a panel, in two columns when the window is wide enough.
+    fn push_streamers<'a>(&'a self, s: Skin, mut top: Column<'a, Msg>, streamers: Vec<&'a Streamer>) -> Column<'a, Msg> {
+        if self.win_w >= self.full_two_col_w && streamers.len() > 1 {
+            let per_col = streamers.len().div_ceil(2);
+            let mut grid = Row::new().spacing(12).align_y(Alignment::Start);
+            for chunk in streamers.chunks(per_col) {
+                let mut c = Column::new().spacing(8).width(Length::Fill);
+                for &st in chunk {
+                    c = c.push(self.streamer_row(s, st));
+                }
+                grid = grid.push(c);
+            }
+            top = top.push(grid);
+        } else {
+            for st in streamers {
+                top = top.push(self.streamer_row(s, st));
+            }
+        }
+        top
     }
 
     /// Site selector, name and username boxes and Add button under the site panels.
@@ -601,13 +687,14 @@ impl App {
             col = col.push(self.warning_line(s, p));
         }
         let mut entries: Vec<(&'a Site, &'a Streamer)> = Vec::new();
+        let (live, rest) = self.split_live();
+        for st in live {
+            if let Some(site) = self.settings.sites.iter().find(|x| x.id == st.site_id) {
+                entries.push((site, st));
+            }
+        }
         for site in &self.settings.sites {
-            for st in self
-                .settings
-                .streamers
-                .iter()
-                .filter(|x| x.site_id == site.id)
-            {
+            for st in rest.iter().copied().filter(|x| x.site_id == site.id) {
                 entries.push((site, st));
             }
         }
@@ -1194,7 +1281,7 @@ impl App {
             .into()
     }
 
-    fn site_block<'a>(&'a self, s: Skin, site: &'a Site) -> Element<'a, Msg> {
+    fn site_block<'a>(&'a self, s: Skin, site: &'a Site, streamers: Vec<&'a Streamer>) -> Element<'a, Msg> {
         let check = match self.checks.get(&site.id) {
             Some(c) => {
                 let color = if c.ok { s.live } else { s.danger };
@@ -1228,28 +1315,7 @@ impl App {
         if let Some(p) = self.checks.get(&site.id).and_then(|c| c.problem.as_deref()) {
             top = top.push(self.warning_line(s, p));
         }
-        let streamers: Vec<&Streamer> = self
-            .settings
-            .streamers
-            .iter()
-            .filter(|x| x.site_id == site.id)
-            .collect();
-        if self.win_w >= self.full_two_col_w && streamers.len() > 1 {
-            let per_col = streamers.len().div_ceil(2);
-            let mut grid = Row::new().spacing(12).align_y(Alignment::Start);
-            for chunk in streamers.chunks(per_col) {
-                let mut c = Column::new().spacing(8).width(Length::Fill);
-                for &st in chunk {
-                    c = c.push(self.streamer_row(s, st));
-                }
-                grid = grid.push(c);
-            }
-            top = top.push(grid);
-        } else {
-            for st in streamers {
-                top = top.push(self.streamer_row(s, st));
-            }
-        }
+        let top = self.push_streamers(s, top, streamers);
         container(top)
             .padding(14)
             .width(Length::Fill)

@@ -16,7 +16,7 @@ const COL_W: f32 = 80.0;
 const GAP: f32 = 6.0;
 const PICKER_W: f32 = 240.0;
 /// Example shown in every ntfy topic label.
-const TOPIC_LABEL: &str = "ntfy topic (example: j73hd92xl)";
+const TOPIC_LABEL: &str = "ntfy topic";
 
 /// One entry in a site picker.
 #[derive(Clone, PartialEq)]
@@ -396,7 +396,7 @@ impl App {
         ]
         .spacing(8);
         let topic = column![
-            muted(&s, "Global ntfy topic (example: j73hd92xl)"),
+            muted(&s, "Global ntfy topic"),
             row![
                 text_input("", &self.global_ntfy)
                     .on_input(Msg::GlobalNtfyEdit)

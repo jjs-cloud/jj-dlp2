@@ -705,6 +705,9 @@ pub enum Msg {
     SetWrapOutput(bool),
     CopyOutput(RecorderId),
     SetCompact(bool),
+    SetLiveFirst(bool),
+    SetSortKey(prefs::SortKey),
+    ToggleSortDir,
     SetRowMin(f32),
     SetRowMax(f32),
     SaveRowRange,
@@ -850,6 +853,9 @@ pub struct App {
     output: HashMap<RecorderId, OutputLog>,
     wrap_output: bool,
     compact: bool,
+    live_first: bool,
+    sort_key: prefs::SortKey,
+    sort_asc: bool,
     row_min: f32,
     row_max: f32,
     two_col_w: f32,
@@ -931,6 +937,9 @@ impl App {
             output: HashMap::new(),
             wrap_output: prefs::load_wrap_output(),
             compact: prefs::load_compact(),
+            live_first: prefs::load_sort().0,
+            sort_key: prefs::load_sort().1,
+            sort_asc: prefs::load_sort().2,
             row_min,
             row_max,
             two_col_w: prefs::load_two_col_width(),
@@ -1418,6 +1427,18 @@ impl App {
             Msg::ClearWarnings => self.client.send(PolicyCommand::ClearWarnings),
             Msg::DismissWarning(id, chip) => self.client.send(PolicyCommand::DismissWarning(id, chip)),
             Msg::CopyText(text) => return iced::clipboard::write(text),
+            Msg::SetLiveFirst(on) => {
+                self.live_first = on;
+                prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
+            }
+            Msg::SetSortKey(k) => {
+                self.sort_key = k;
+                prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
+            }
+            Msg::ToggleSortDir => {
+                self.sort_asc = !self.sort_asc;
+                prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
+            }
             Msg::SetCompact(on) => {
                 self.compact = on;
                 prefs::save_compact(on);

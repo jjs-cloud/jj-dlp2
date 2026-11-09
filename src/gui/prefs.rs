@@ -27,9 +27,50 @@ pub const WIN_DEFAULT_H: f32 = 845.0;
 const WIN_MIN_W: f32 = 640.0;
 const WIN_MIN_H: f32 = 420.0;
 
+/// How streamers are ordered within a site (and within the live group).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortKey {
+    Name,
+    Added,
+    LastLive,
+    #[default]
+    Priority,
+}
+
+impl SortKey {
+    pub const ALL: [SortKey; 4] = [SortKey::Name, SortKey::Added, SortKey::LastLive, SortKey::Priority];
+
+    fn id(self) -> &'static str {
+        match self {
+            SortKey::Name => "name",
+            SortKey::Added => "added",
+            SortKey::LastLive => "last_live",
+            SortKey::Priority => "priority",
+        }
+    }
+
+    fn from_id(id: &str) -> Self {
+        Self::ALL.into_iter().find(|k| k.id() == id).unwrap_or_default()
+    }
+}
+
+impl std::fmt::Display for SortKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SortKey::Name => "Name",
+            SortKey::Added => "Added",
+            SortKey::LastLive => "Last live",
+            SortKey::Priority => "Priority",
+        })
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Prefs {
+    live_first: bool,
+    sort_key: String,
+    sort_asc: bool,
     theme: String,
     compact: bool,
     row_min: f32,
@@ -85,7 +126,7 @@ impl Default for FilesPrefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
+        Prefs { live_first: false, sort_key: SortKey::Priority.id().to_string(), sort_asc: true, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
             three_col_w: THREE_COL_DEFAULT,
             full_two_col_w: FULL_TWO_COL_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,
@@ -238,6 +279,21 @@ pub fn load_disk_limits() -> crate::policy::disks::Limits {
 pub fn save_disk_limits(limits: crate::policy::disks::Limits) {
     let mut prefs = read();
     prefs.disk_limits = limits;
+    write(&prefs);
+}
+
+/// Reads the saved Live first, sort key and ascending settings.
+pub fn load_sort() -> (bool, SortKey, bool) {
+    let p = read();
+    (p.live_first, SortKey::from_id(&p.sort_key), p.sort_asc)
+}
+
+/// Saves the Live first, sort key and ascending settings.
+pub fn save_sort(live_first: bool, key: SortKey, asc: bool) {
+    let mut prefs = read();
+    prefs.live_first = live_first;
+    prefs.sort_key = key.id().to_string();
+    prefs.sort_asc = asc;
     write(&prefs);
 }
 
