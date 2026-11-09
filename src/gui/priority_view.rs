@@ -1,10 +1,10 @@
 //! View of the Priority settings tab.
 
-use super::priority::PriorityMsg;
+use super::priority::{PriorityMsg, ROW_GAP, ROW_H, scroll_id};
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, card_box, chip, muted, t};
 use super::{App, Msg};
-use iced::widget::{Column, Space, button, column, row, scrollable, text_input, toggler};
+use iced::widget::{Column, Space, button, column, container, row, scrollable, text_input, toggler};
 use iced::{Alignment, Element, Length};
 
 fn send(m: PriorityMsg) -> Msg {
@@ -58,7 +58,7 @@ impl App {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        let mut list: Column<'_, Msg> = Column::new().spacing(6);
+        let mut list: Column<'_, Msg> = Column::new().spacing(ROW_GAP).padding(iced::Padding { right: 8.0, ..Default::default() });
         if d.order.is_empty() {
             list = list.push(muted(&s, "No streamers yet."));
         }
@@ -77,7 +77,7 @@ impl App {
             .align_y(Alignment::Center);
             list = list.push(
                 row![
-                    button(label).on_press(send(PriorityMsg::Select(id))).width(Length::Fill).padding([6.0, 10.0]).style(skin::btn(s, kind)),
+                    button(label).on_press(send(PriorityMsg::Select(id))).width(Length::Fill).height(Length::Fill).padding([6.0, 10.0]).style(skin::btn(s, kind)),
                     toggler(d.always.contains(&id))
                         .label("Always record")
                         .on_toggle(move |on| send(PriorityMsg::ToggleAlways(id, on)))
@@ -85,21 +85,24 @@ impl App {
                         .width(150),
                 ]
                 .spacing(10)
+                .height(ROW_H)
                 .align_y(Alignment::Center),
             );
         }
         let list_card = column![
             controls,
             muted(&s, "Top is the highest priority. Select a streamer, then move it. Always record streamers move to the top and are never stopped for others."),
-            list,
+            scrollable(list).id(scroll_id()).on_scroll(|v| send(PriorityMsg::Scrolled(v))).height(Length::Fill),
         ]
         .spacing(8);
+        let list_card = container(list_card).padding(14).width(Length::Fill).height(Length::Fill).style(skin::card(s, None));
 
-        let col = Column::new()
+        Column::new()
             .spacing(12)
             .padding(iced::Padding { right: 8.0, ..Default::default() })
             .push(card_box(s, limit))
-            .push(card_box(s, list_card));
-        scrollable(col).height(Length::Fill).into()
+            .push(list_card)
+            .height(Length::Fill)
+            .into()
     }
 }

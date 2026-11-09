@@ -1153,7 +1153,7 @@ impl App {
             Msg::Files(m) => return self.files_update(m),
             Msg::Logs(m) => return self.logs_update(m),
             Msg::Posts(m) => return self.posts_update(m),
-            Msg::Priority(m) => self.priority_update(m),
+            Msg::Priority(m) => return self.priority_update(m),
             Msg::SetSettingsTab(w) => self.settings_tab = w,
             Msg::SetNotifyTab(w) => self.notify_tab = w,
             Msg::PickNotifySite(id) => self.notify_site = Some(id),

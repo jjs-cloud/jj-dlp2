@@ -1,9 +1,20 @@
 //! Priority tab state: an unsaved copy of the priority order, always-record flags and recording limit.
 
-use super::App;
+use super::{App, Msg};
 use crate::api::{Settings, StreamerId};
 use crate::policy::PolicyCommand;
+use iced::Task;
+use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use std::collections::HashSet;
+
+/// Height of one priority row and the gap between rows.
+pub const ROW_H: f32 = 36.0;
+pub const ROW_GAP: f32 = 6.0;
+
+/// Scrollable id of the priority list.
+pub fn scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("priority-scroll")
+}
 
 /// The unsaved priority edits.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -66,6 +77,9 @@ impl PriorityDraft {
 pub struct PriorityState {
     pub draft: PriorityDraft,
     pub selected: Option<StreamerId>,
+    /// Scroll offset and height of the list as last reported.
+    scroll_y: f32,
+    view_h: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -77,10 +91,11 @@ pub enum PriorityMsg {
     MaxEdit(String),
     Save,
     Revert,
+    Scrolled(Viewport),
 }
 
 impl App {
-    pub(super) fn priority_update(&mut self, m: PriorityMsg) {
+    pub(super) fn priority_update(&mut self, m: PriorityMsg) -> Task<Msg> {
         let st = &mut self.priority;
         match m {
             PriorityMsg::Select(id) => st.selected = Some(id),
@@ -88,11 +103,13 @@ impl App {
                 if let Some(id) = st.selected {
                     st.draft.move_by(id, -1);
                 }
+                return self.priority_reveal();
             }
             PriorityMsg::MoveDown => {
                 if let Some(id) = st.selected {
                     st.draft.move_by(id, 1);
                 }
+                return self.priority_reveal();
             }
             PriorityMsg::ToggleAlways(id, on) => st.draft.set_always(id, on),
             PriorityMsg::MaxEdit(v) => st.draft.max = v.chars().filter(char::is_ascii_digit).collect(),
@@ -101,7 +118,29 @@ impl App {
                 self.client.send(PolicyCommand::SetPriority { order: d.order.clone(), always: d.always.clone(), max: d.max_value() });
             }
             PriorityMsg::Revert => st.draft = PriorityDraft::from_settings(&self.settings),
+            PriorityMsg::Scrolled(v) => {
+                st.scroll_y = v.absolute_offset().y;
+                st.view_h = v.bounds().height;
+            }
         }
+        Task::none()
+    }
+
+    /// Scrolls the list so the selected row is inside the visible part.
+    fn priority_reveal(&mut self) -> Task<Msg> {
+        let st = &mut self.priority;
+        let Some(i) = st.selected.and_then(|id| st.draft.order.iter().position(|x| *x == id)) else { return Task::none() };
+        let h = if st.view_h > 0.0 { st.view_h } else { (self.win_h - 420.0).max(ROW_H * 4.0) };
+        let (top, off) = (i as f32 * (ROW_H + ROW_GAP), st.scroll_y);
+        let y = if top < off {
+            top
+        } else if top + ROW_H > off + h {
+            top + ROW_H - h
+        } else {
+            return Task::none();
+        };
+        st.scroll_y = y;
+        iced::widget::operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y })
     }
 
     /// Refreshes the draft for `new` settings, keeping unsaved edits; call before `self.settings` is replaced.
