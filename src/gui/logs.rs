@@ -2,6 +2,8 @@
 
 use super::{App, Msg, prefs};
 use crate::api::{SiteId, StreamerId};
+use crate::engine::logfile;
+use crate::filemgr::ops;
 use crate::policy::posts::{LogTarget, PostsCommand};
 use crate::policy::{PolicyCommand, logtail};
 use iced::Task;
@@ -44,6 +46,7 @@ pub enum LogsMsg {
     SetFollow(bool),
     SetWrap(bool),
     Copy,
+    RevealFolder,
     ToggleStreamer(StreamerId, LogKind, bool),
     ToggleChecker(SiteId, LogKind, bool),
     TogglePostChecker(SiteId, String, LogKind, bool),
@@ -134,7 +137,8 @@ impl LogsState {
         }
     }
 
-    fn apply(&mut self, chunk: logtail::Chunk) {
+    fn apply(&mut self, mut chunk: logtail::Chunk) {
+        chunk.lines = chunk.lines.iter().map(|l| logfile::to_local(l)).collect();
         self.missing = false;
         self.offset = Some(chunk.offset);
         if chunk.restart {
@@ -242,6 +246,17 @@ impl App {
             LogsMsg::Copy => {
                 let text = self.logs.content.selection().unwrap_or_else(|| self.logs.content.text());
                 return iced::clipboard::write(text);
+            }
+            LogsMsg::RevealFolder => {
+                let dir = logfile::logs_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                let result = match &self.logs.open {
+                    Some((file, _)) => ops::reveal(file),
+                    None => open::that_detached(&dir).map_err(|e| e.to_string()),
+                };
+                if let Err(e) = result {
+                    self.push_log(format!("could not open {}: {e}", dir.display()));
+                }
             }
             LogsMsg::ToggleStreamer(id, kind, on) => self.toggle_streamer_log(id, kind, on),
             LogsMsg::ToggleChecker(id, kind, on) => self.toggle_checker_log(id, kind, on),

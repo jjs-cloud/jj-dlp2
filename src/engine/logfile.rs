@@ -107,6 +107,15 @@ pub fn stamp() -> String {
     fmt_utc(now_secs())
 }
 
+/// Rewrites a leading UTC `YYYY-MM-DD HH:MM:SS` stamp in a line as local time.
+pub fn to_local(line: &str) -> String {
+    let Some(head) = line.get(..19) else { return line.to_string() };
+    match chrono::NaiveDateTime::parse_from_str(head, "%Y-%m-%d %H:%M:%S") {
+        Ok(t) => format!("{}{}", t.and_utc().with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S"), &line[19..]),
+        Err(_) => line.to_string(),
+    }
+}
+
 fn fmt_utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64 + 719_468;
     let era = days.div_euclid(146_097);
@@ -131,6 +140,12 @@ mod tests {
         assert_eq!(fmt_utc(1_700_000_000), "2023-11-14 22:13:20");
         assert_eq!(fmt_utc(1_782_259_199), "2026-06-23 23:59:59");
         assert_eq!(fmt_utc(951_782_400), "2000-02-29 00:00:00");
+    }
+
+    #[test]
+    fn to_local_keeps_unstamped_lines() {
+        assert_eq!(to_local("plain output"), "plain output");
+        assert_eq!(to_local("2026-01-01 00:00:00  cmd").len(), "2026-01-01 00:00:00  cmd".len());
     }
 
     #[test]

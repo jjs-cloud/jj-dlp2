@@ -23,6 +23,7 @@ pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-pl
 pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
 const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
 const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
+const YOUTUBE_SHORTS_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
 const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
 const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
@@ -173,6 +174,7 @@ impl PostSite {
             },
             Preset::YoutubeShorts => PostSite {
                 name: Preset::YoutubeShorts.label().into(),
+                download_args: YOUTUBE_SHORTS_DOWNLOAD_ARGS.into(),
                 url_template: YOUTUBE_SHORTS_URL_TEMPLATE.into(),
                 ..Default::default()
             },

@@ -403,6 +403,14 @@ impl App {
                     .on_submit(Msg::GlobalNtfySave)
                     .padding(8)
                     .style(skin::input_required(s, !topic_ok)),
+                button(btn_label(&s, "Randomize").size(13))
+                    .on_press(Msg::GlobalNtfyRandomize)
+                    .padding([8.0, 16.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+                button(btn_label(&s, "Revert").size(13))
+                    .on_press_maybe(dirty.then_some(Msg::GlobalNtfyRevert))
+                    .padding([8.0, 16.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
                 button(btn_label(&s, "Save").size(13))
                     .on_press_maybe((dirty && topic_ok).then_some(Msg::GlobalNtfySave))
                     .padding([8.0, 16.0])

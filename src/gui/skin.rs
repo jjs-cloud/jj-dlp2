@@ -217,7 +217,7 @@ pub fn chip(_s: Skin, color: Color) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
-/// A pill-shaped chip that works as a button.
+/// A glowing pill-shaped chip that works as a button.
 pub fn chip_btn(_s: Skin, color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -225,6 +225,7 @@ pub fn chip_btn(_s: Skin, color: Color) -> impl Fn(&Theme, button::Status) -> bu
             background: Some(Background::Color(with_alpha(color, if hovered { 0.30 } else { 0.14 }))),
             border: Border { color: with_alpha(color, if hovered { 0.95 } else { 0.65 }), width: 1.0, radius: Radius::from(999.0) },
             text_color: color,
+            shadow: Shadow { color: with_alpha(color, if hovered { 0.95 } else { 0.7 }), offset: Vector::ZERO, blur_radius: if hovered { 14.0 } else { 10.0 } },
             ..Default::default()
         }
     }

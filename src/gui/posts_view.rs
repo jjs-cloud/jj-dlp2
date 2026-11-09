@@ -90,8 +90,9 @@ impl App {
         if failed > 0 {
             nav = nav.push(nav_item(s, "Failed".into(), failed, p.section == Section::Failed, PostsMsg::SetSection(Section::Failed)));
         }
+        let counted = if matches!(p.section, Section::Viewed | Section::Starred) { p.section } else { Section::Unviewed };
         nav = nav.push(Space::new().height(8)).push(self.section_title(s, "ACCOUNTS"));
-        nav = nav.push(nav_item(s, "All accounts".into(), p.count(Section::Unviewed, None), acct.is_none(), PostsMsg::SetAccount(None)));
+        nav = nav.push(nav_item(s, "All accounts".into(), p.count(counted, None), acct.is_none(), PostsMsg::SetAccount(None)));
         for site in &p.cfg.sites {
             if !site.accounts.is_empty() {
                 let name = clip(&site.name, 16);
@@ -106,8 +107,8 @@ impl App {
                 let off = if a.enabled { "" } else { " (off)" };
                 let label = format!("{mark}@{}{off}", clip(&a.name, 16));
                 let selected = p.account.as_ref().is_some_and(|(sid, n)| *sid == site.id && n.eq_ignore_ascii_case(&a.name));
-                let unviewed = p.count(Section::Unviewed, Some((site.id, a.name.as_str())));
-                nav = nav.push(nav_item(s, label, unviewed, selected, PostsMsg::SetAccount(Some((site.id, a.name.clone())))));
+                let shown = p.count(counted, Some((site.id, a.name.as_str())));
+                nav = nav.push(nav_item(s, label, shown, selected, PostsMsg::SetAccount(Some((site.id, a.name.clone())))));
             }
         }
         let controls = column![

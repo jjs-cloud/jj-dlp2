@@ -20,7 +20,6 @@ use crate::api::*;
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
 use crate::policy::disks;
 use crate::policy::notify::{self, Targets};
-use crate::policy::uilog;
 use crate::policy::update::UpdateConfig;
 use crate::policy::{
     new_site, preset_for_name, NewSite, PolicyClient, PolicyCommand, PolicyEvent, Preset, RecordingFile, UpdateEvent,
@@ -461,8 +460,6 @@ pub enum DraftField {
     Output(String),
     Paused(bool),
     FolderLayout(FolderLayout),
-    LogStdout(bool),
-    LogStderr(bool),
     Color(String),
     UseThemeColor(bool),
     PickColor(String),
@@ -488,8 +485,6 @@ pub enum DraftField {
 /// A single field edited in a streamer's settings panel.
 #[derive(Debug, Clone)]
 pub enum StreamerField {
-    LogStdout(bool),
-    LogStderr(bool),
     FolderLayout(Option<FolderLayout>),
     Notify(Option<bool>),
     AutoSuffix(Option<bool>),
@@ -664,11 +659,12 @@ pub enum Msg {
     SetDisableWarnings(bool),
     GlobalNtfyEdit(String),
     GlobalNtfySave,
+    GlobalNtfyRandomize,
+    GlobalNtfyRevert,
     SetLogTab(LogTab),
     Logs(logs::LogsMsg),
     ThemeChosen(ThemeKind),
     OpenConfigDir,
-    OpenLogsDir,
     OpenRecording(RecorderId),
     NewStreamerName(String),
     NewStreamerUsername(String),
@@ -838,6 +834,8 @@ pub struct App {
     notify_site: Option<SiteId>,
     notify_post_site: Option<crate::policy::posts::SiteId>,
     global_ntfy: String,
+    /// A random topic has been offered in the global topic box this session.
+    ntfy_seeded: bool,
     log_tab: LogTab,
     logs: logs::LogsState,
     site_added: Option<(String, u64)>,
@@ -917,6 +915,7 @@ impl App {
             notify_site: None,
             notify_post_site: None,
             global_ntfy: String::new(),
+            ntfy_seeded: false,
             log_tab: LogTab::Engine,
             logs: logs::LogsState::new(),
             site_added: None,
@@ -1000,8 +999,6 @@ impl App {
         let d = self.streamer_drafts.entry(id).or_insert_with(|| StreamerDraft::from_options(&st.options));
         let digits = |v: &str| v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit());
         match field {
-            StreamerField::LogStdout(v) => d.log_stdout = v,
-            StreamerField::LogStderr(v) => d.log_stderr = v,
             StreamerField::FolderLayout(v) => d.folder_layout = v,
             StreamerField::Notify(v) => d.notify = v,
             StreamerField::AutoSuffix(v) => d.auto_suffix = v,
@@ -1094,7 +1091,7 @@ impl App {
     }
 
     fn push_log(&mut self, line: String) {
-        self.log.push_front(format!("{}  {line}", uilog::stamp()));
+        self.log.push_front(format!("{}  {line}", Local::now().format("%Y-%m-%d %H:%M:%S")));
         self.log.truncate(self.log_lines as usize);
     }
 
@@ -1164,6 +1161,8 @@ impl App {
                 self.client.send(PolicyCommand::SetGlobalNotify(n));
             }
             Msg::GlobalNtfyEdit(v) => self.global_ntfy = v,
+            Msg::GlobalNtfyRandomize => self.global_ntfy = notify::random_topic(),
+            Msg::GlobalNtfyRevert => self.global_ntfy = self.settings.notifications.ntfy_topic.clone(),
             Msg::GlobalNtfySave => {
                 let n = GlobalNotify { ntfy_topic: self.global_ntfy.trim().to_string(), ..self.settings.notifications.clone() };
                 self.client.send(PolicyCommand::SetGlobalNotify(n));
@@ -1187,7 +1186,6 @@ impl App {
             Msg::DiskLowPercent(v) => self.edit_low_percent(v),
             Msg::DisksRefreshed(snap) => self.on_disks(snap),
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
-            Msg::OpenLogsDir => self.client.send(PolicyCommand::OpenLogsDir),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
             Msg::NewStreamerName(v) => self.new_streamer.0 = v,
             Msg::NewStreamerUsername(v) => self.new_streamer.1 = v,
@@ -1312,8 +1310,6 @@ impl App {
                         DraftField::Output(v) => d.output = v,
                         DraftField::Paused(v) => d.paused = v,
                         DraftField::FolderLayout(v) => d.folder_layout = v,
-                        DraftField::LogStdout(v) => d.log_stdout = v,
-                        DraftField::LogStderr(v) => d.log_stderr = v,
                         DraftField::Color(v) => d.color = v,
                         DraftField::UseThemeColor(v) => d.use_theme_color = v,
                         DraftField::PickColor(v) => {
@@ -1525,7 +1521,7 @@ impl App {
             PolicyEvent::Posts(e) => self.posts_on_event(e),
             PolicyEvent::Log(line) => self.push_log(line),
             PolicyEvent::LogHistory(lines) => {
-                self.log.extend(lines.into_iter().rev());
+                self.log.extend(lines.iter().rev().map(|l| crate::engine::logfile::to_local(l)));
                 self.log.truncate(self.log_lines as usize);
             }
             PolicyEvent::Update(ev) => self.on_update_event(ev),
@@ -1607,6 +1603,12 @@ impl App {
         }
         if self.global_ntfy == self.settings.notifications.ntfy_topic {
             self.global_ntfy = s.notifications.ntfy_topic.clone();
+        }
+        if !self.ntfy_seeded {
+            self.ntfy_seeded = true;
+            if s.notifications.ntfy_topic.trim().is_empty() {
+                self.global_ntfy = notify::random_topic();
+            }
         }
         self.drafts.retain(|id, _| *id == NEW_SITE_ID || s.sites.iter().any(|x| x.id == *id));
         for site in &s.sites {

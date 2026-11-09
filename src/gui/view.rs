@@ -1502,17 +1502,6 @@ impl App {
 
         let schedule = self.schedule_block(s, id, &d);
 
-        let logs = row![
-            toggle("Log recorder stdout", d.log_stdout, StreamerField::LogStdout),
-            toggle("Log recorder stderr", d.log_stderr, StreamerField::LogStderr),
-            button(t(&s, "Open logs folder").size(12))
-                .on_press(Msg::OpenLogsDir)
-                .padding([5.0, 10.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-        ]
-        .spacing(24)
-        .align_y(Alignment::Center);
-
         let dirty = d.differs_from(&st.options);
         let valid = !d.invalid();
         let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)]
@@ -1542,7 +1531,6 @@ impl App {
             );
 
         column![
-            logs,
             top,
             paths,
             splitting,
@@ -1880,11 +1868,6 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             ]
             .align_y(Alignment::Center),
-            muted(&s, "Row Size Max: The tallest a row can be; rows start here when there is room."),
-            muted(&s, "Row Size Min: The shortest a row can shrink to as streamers are added."),
-            muted(&s, "Two column threshold: The window width at which the list switches to two columns."),
-            muted(&s, "Three column threshold: The window width at which the list switches to three columns."),
-            muted(&s, "Name Length: Longer names are cut off with …; hover shows the full name."),
             row_size("Row Size Max", self.row_max, Msg::SetRowMax),
             row_size("Row Size Min", self.row_min, Msg::SetRowMin),
             two_col,
@@ -2169,12 +2152,6 @@ impl App {
         };
         let mut actions: Row<'a, Msg> = row![
             log("Pause checking", d.paused, DraftField::Paused),
-            log("Log checker stdout", d.log_stdout, DraftField::LogStdout),
-            log("Log checker stderr", d.log_stderr, DraftField::LogStderr),
-            button(t(&s, "Open logs folder").size(12))
-                .on_press(Msg::OpenLogsDir)
-                .padding([5.0, 10.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
             Space::new().width(Length::Fill),
         ]
         .spacing(10)
@@ -2292,7 +2269,7 @@ impl App {
                     .color(s.text),
             );
         }
-        let title = row![self.section_title(s, "ENGINE LOG (UTC)")];
+        let title = row![self.section_title(s, "ENGINE LOG")];
         container(column![title, scrollable(col).height(Length::Fill)].spacing(10))
             .padding(14)
             .width(Length::Fill)

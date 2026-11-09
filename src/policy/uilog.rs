@@ -12,11 +12,6 @@ fn path() -> PathBuf {
     settings::config_dir().join("ui.log")
 }
 
-/// The current UTC time as `YYYY-MM-DD HH:MM:SS`.
-pub fn stamp() -> String {
-    logfile::stamp()
-}
-
 /// Appends one timestamped line, then trims the file to its newest lines if it is too large.
 pub fn append(text: &str) {
     let path = path();

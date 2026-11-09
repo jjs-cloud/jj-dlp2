@@ -51,6 +51,20 @@ pub fn topic_valid(topic: &str) -> bool {
     !t.is_empty() && t.len() <= TOPIC_MAX && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// A random 12-character lowercase alphanumeric topic name.
+pub fn random_topic() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let state = std::collections::hash_map::RandomState::new();
+    (0..12u64)
+        .map(|i| {
+            let mut h = state.build_hasher();
+            h.write_u64(i);
+            CHARS[(h.finish() % CHARS.len() as u64) as usize] as char
+        })
+        .collect()
+}
+
 /// The topic to publish to: the site's when usable, else the global one when the site's is blank.
 pub fn effective_topic(site_topic: &str, global_topic: &str) -> Option<String> {
     let site = site_topic.trim();
@@ -252,6 +266,13 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn random_topics_are_valid_and_differ() {
+        let (a, b) = (random_topic(), random_topic());
+        assert!(topic_valid(&a) && a.len() == 12);
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn topics_allow_letters_digits_dash_and_underscore() {

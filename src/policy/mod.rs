@@ -161,8 +161,6 @@ pub enum PolicyCommand {
     /// Saves the global notification and warning settings.
     SetGlobalNotify(GlobalNotify),
     OpenConfigDir,
-    /// Opens the folder holding the recorder and checker logs.
-    OpenLogsDir,
     /// Opens the file a recorder is writing, once its path is verified.
     OpenRecording(RecorderId),
     /// Sends a test notification to the given targets, ignoring cooldowns.
@@ -1493,13 +1491,6 @@ impl Policy {
             }
             PolicyCommand::OpenConfigDir => {
                 let dir = settings::config_dir();
-                let _ = std::fs::create_dir_all(&dir);
-                if let Err(e) = open::that_detached(&dir) {
-                    self.log(format!("could not open {}: {e}", dir.display()));
-                }
-            }
-            PolicyCommand::OpenLogsDir => {
-                let dir = logfile::logs_dir();
                 let _ = std::fs::create_dir_all(&dir);
                 if let Err(e) = open::that_detached(&dir) {
                     self.log(format!("could not open {}: {e}", dir.display()));

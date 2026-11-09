@@ -143,6 +143,10 @@ impl App {
                 .on_press_maybe(l.open.is_some().then_some(Msg::Logs(LogsMsg::Copy)))
                 .padding([3.0, 10.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
+            button(btn_label(&s, "Open logs folder").size(12))
+                .on_press(Msg::Logs(LogsMsg::RevealFolder))
+                .padding([3.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
