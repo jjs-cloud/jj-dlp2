@@ -2,7 +2,7 @@
 
 use super::priority::{PriorityMsg, ROW_GAP, ROW_H, scroll_id};
 use super::skin::{self, BtnKind, Skin};
-use super::view::{btn_label, card_box, chip, muted, t};
+use super::view::{btn_label, card_box, chip, muted, t, warn_text};
 use super::{App, Msg};
 use iced::widget::{Column, Space, button, column, container, row, scrollable, text_input, toggler};
 use iced::{Alignment, Element, Length};
@@ -18,6 +18,12 @@ impl App {
         let dirty = d.dirty(&self.settings);
         let pos = st.selected.and_then(|id| d.order.iter().position(|x| *x == id));
 
+        let notice: Element<'_, Msg> = if dirty {
+            warn_text(&s, "⚠ Unsaved changes. Press Save changes to apply them.").size(13).width(Length::Fill).into()
+        } else {
+            Space::new().width(Length::Fill).into()
+        };
+
         let limit = column![
             self.section_title(s, "RECORDING LIMIT"),
             muted(&s, "Most streamers recorded at once; leave empty for unlimited. Changes apply when saved and can stop running recordings."),
@@ -28,7 +34,7 @@ impl App {
                     .padding(8)
                     .width(140)
                     .style(skin::input(s)),
-                Space::new().width(Length::Fill),
+                notice,
                 button(btn_label(&s, "Revert").size(13))
                     .on_press_maybe(dirty.then_some(send(PriorityMsg::Revert)))
                     .padding([8.0, 16.0])
