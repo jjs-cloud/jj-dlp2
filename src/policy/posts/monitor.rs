@@ -20,8 +20,8 @@ const SECS_PER_DAY: u64 = 86_400;
 const VIEW_DELAY: Duration = Duration::from_secs(2);
 /// Downloads that run at the same time.
 const MAX_DOWNLOADS: usize = 2;
-/// Seconds a failed manual download's error stays on its card.
-const ERROR_SHOW_SECS: u64 = 15;
+/// Seconds a post's error text is kept before it is cleared.
+const ERROR_SHOW_SECS: u64 = 10;
 
 type AccountKey = (SiteId, String);
 
@@ -180,7 +180,7 @@ impl PostsMonitor {
         }
     }
 
-    /// Clears the error of failed manual downloads once it has been shown long enough.
+    /// Clears post error text once it is older than `ERROR_SHOW_SECS`.
     fn clear_stale_errors(&mut self) {
         let now = now_secs();
         let ids: Vec<String> = self
@@ -245,6 +245,7 @@ impl PostsMonitor {
             post.state = PostState::Failed;
             post.attempts = super::MAX_ATTEMPTS;
             post.error = "Its site was removed".into();
+            post.error_at = Some(now_secs());
             self.save_lib();
             self.emit_changed(&[id]);
             return;
@@ -366,7 +367,6 @@ impl PostsMonitor {
         self.downloads = self.downloads.saturating_sub(1);
         let mut log = None;
         if let Some(p) = self.post_mut(id) {
-            let was_manual = p.manual;
             p.has_thumb = out.has_thumb;
             p.manual = false;
             if p.state != PostState::Removed {
@@ -375,7 +375,7 @@ impl PostsMonitor {
                         p.state = PostState::Remote;
                         log = Some(format!("Posts: {} skipped: {e}", p.id));
                         p.error = e;
-                        p.error_at = None;
+                        p.error_at = Some(now_secs());
                     }
                     Ok(path) => {
                         p.posted_at = p.posted_at.or(out.posted_at);
@@ -390,7 +390,7 @@ impl PostsMonitor {
                         p.attempts = p.attempts.saturating_add(1);
                         log = Some(format!("Posts: download of {} failed: {e}", p.id));
                         p.error = e;
-                        p.error_at = was_manual.then(now_secs);
+                        p.error_at = Some(now_secs());
                     }
                 }
             }
