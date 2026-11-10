@@ -198,14 +198,12 @@ pub struct PostsState {
     pub drafts: HashMap<SiteId, SiteDraft>,
     pub add_site: Option<AddTarget>,
     pub add_name: String,
-    pub added: Option<(String, u64)>,
-    pub confirm_remove: Option<SiteId>,
+    pub settings_site: Option<AddTarget>,
     pub errors: HashMap<AccountKey, String>,
     pub checking: HashSet<SiteId>,
     next_checks: HashMap<SiteId, u64>,
     pub newest_first: bool,
     pub card_w: f32,
-    pending_jump: Option<String>,
     status: Option<(String, u64)>,
 }
 
@@ -222,14 +220,12 @@ impl PostsState {
             drafts: HashMap::new(),
             add_site: None,
             add_name: String::new(),
-            added: None,
-            confirm_remove: None,
+            settings_site: None,
             errors: HashMap::new(),
             checking: HashSet::new(),
             next_checks: HashMap::new(),
             newest_first: prefs.newest_first,
             card_w: prefs.card_w,
-            pending_jump: None,
             status: None,
         }
     }
@@ -276,11 +272,6 @@ impl PostsState {
         live.peek().is_some() && live.all(|s| s.paused)
     }
 
-    /// True while a jump to a newly added site is waiting for the next tick.
-    pub fn jumping(&self) -> bool {
-        self.pending_jump.is_some()
-    }
-
     /// The dropdown entries: each named preset (its site once created), then custom sites.
     pub fn add_options(&self) -> Vec<AddOption> {
         let mut out: Vec<AddOption> = Vec::new();
@@ -309,6 +300,23 @@ impl PostsState {
         });
         let choice = picked.or_else(|| opts.first()).cloned();
         choice
+    }
+
+    /// The Settings > Posts dropdown entries: the add-account entries, then New site.
+    pub fn settings_options(&self) -> Vec<AddOption> {
+        let mut out = self.add_options();
+        out.push(AddOption { target: AddTarget::Template(Preset::Blank), name: "New site".to_string() });
+        out
+    }
+
+    /// The dropdown entry shown in Settings > Posts: the picked one, else the first.
+    pub fn settings_choice(&self, opts: &[AddOption]) -> Option<AddOption> {
+        let picked = self.settings_site.and_then(|t| match t {
+            AddTarget::Site(_) => opts.iter().find(|o| o.target == t),
+            AddTarget::Template(Preset::Blank) => opts.iter().find(|o| o.target == t),
+            AddTarget::Template(p) => opts.iter().find(|o| o.target == t || o.name.trim().eq_ignore_ascii_case(p.label())),
+        });
+        picked.or_else(|| opts.first()).cloned()
     }
 
     /// The site's check countdown for the sidebar: paused, checking or seconds left.
@@ -370,8 +378,10 @@ impl PostsState {
                 if let Some(site) = self.cfg.site(id) {
                     self.drafts.entry(id).or_insert_with(|| SiteDraft::from_site(site));
                 }
-                self.pending_jump = Some(name.clone());
-                self.added = Some((name, now_secs()));
+                let wanted = matches!(self.settings_site, Some(AddTarget::Template(p)) if p.label().eq_ignore_ascii_case(name.trim()));
+                if unsaved || wanted {
+                    self.settings_site = Some(AddTarget::Site(id));
+                }
             }
         }
     }
@@ -424,13 +434,11 @@ pub enum PostsMsg {
     NewestFirst(bool),
     CardWidth(f32),
     CardWidthSave,
-    AddSite(Preset),
+    PickSettingsSite(AddTarget),
     SaveSite(SiteId),
     RevertSite(SiteId),
     DefaultsSite(SiteId),
-    RemoveSite(SiteId),
-    ConfirmRemoveSite(SiteId),
-    CancelRemoveSite,
+    DiscardSite,
     Site(SiteId, SiteField),
     RemoveAccount(SiteId, String),
     PickAddSite(AddTarget),
@@ -449,14 +457,6 @@ impl App {
 
     fn posts_send(&self, cmd: PostsCommand) {
         self.client.send(PolicyCommand::Posts(cmd));
-    }
-
-    /// Scrolls to a newly added site once its card has been drawn; called on every tick.
-    pub(super) fn posts_tick(&mut self) -> Task<Msg> {
-        match self.posts.pending_jump.take() {
-            Some(name) => self.posts_jump(&name).unwrap_or_else(Task::none),
-            None => Task::none(),
-        }
     }
 
     /// Applies a state change reported by the policy layer.
@@ -518,17 +518,20 @@ impl App {
             PostsMsg::CardWidthSave => {
                 prefs::save_posts(&prefs::PostsPrefs { newest_first: self.posts.newest_first, card_w: self.posts.card_w });
             }
-            PostsMsg::AddSite(Preset::Blank) => {
+            PostsMsg::PickSettingsSite(AddTarget::Template(Preset::Blank)) => {
                 self.posts.drafts.entry(NEW_SITE).or_insert_with(|| SiteDraft::from_site(&PostSite::from_preset(Preset::Blank)));
-                return iced::widget::operation::snap_to(super::posts_scroll_id(), iced::widget::scrollable::RelativeOffset { x: 0.0, y: 0.0 });
+                self.posts.settings_site = Some(AddTarget::Template(Preset::Blank));
             }
-            PostsMsg::AddSite(preset) => {
+            PostsMsg::PickSettingsSite(AddTarget::Template(preset)) => {
                 let site = PostSite::from_preset(preset);
-                if self.posts.cfg.name_taken(&site.name) {
-                    return self.posts_jump(&site.name).unwrap_or_else(Task::none);
+                if let Some(found) = self.posts.cfg.sites.iter().find(|s| s.name.trim().eq_ignore_ascii_case(site.name.trim())) {
+                    self.posts.settings_site = Some(AddTarget::Site(found.id));
+                } else {
+                    self.posts.settings_site = Some(AddTarget::Template(preset));
+                    self.posts_send(PostsCommand::AddSite(site));
                 }
-                self.posts_send(PostsCommand::AddSite(site));
             }
+            PostsMsg::PickSettingsSite(target) => self.posts.settings_site = Some(target),
             PostsMsg::SaveSite(id) => self.posts_save_site(id),
             PostsMsg::RevertSite(id) => {
                 if let Some(site) = self.posts.cfg.site(id) {
@@ -540,20 +543,9 @@ impl App {
                 let name = self.posts.drafts.get(&id).map(|d| d.name.clone()).unwrap_or_default();
                 self.posts.drafts.insert(id, SiteDraft::from_defaults(&name));
             }
-            PostsMsg::RemoveSite(NEW_SITE) => {
+            PostsMsg::DiscardSite => {
                 self.posts.drafts.remove(&NEW_SITE);
-            }
-            PostsMsg::RemoveSite(id) => self.posts.confirm_remove = Some(id),
-            PostsMsg::CancelRemoveSite => self.posts.confirm_remove = None,
-            PostsMsg::ConfirmRemoveSite(id) => {
-                self.posts.confirm_remove = None;
-                if self.posts.add_site == Some(AddTarget::Site(id)) {
-                    self.posts.add_site = None;
-                }
-                if self.posts.account.as_ref().is_some_and(|(sid, _)| *sid == id) {
-                    self.posts.account = None;
-                }
-                self.posts_send(PostsCommand::RemoveSite(id));
+                self.posts.settings_site = None;
             }
             PostsMsg::Site(id, field) => self.posts_site_field(id, field),
             PostsMsg::RemoveAccount(id, name) => {
@@ -620,14 +612,6 @@ impl App {
             SiteField::Player(v) => d.player = v,
             SiteField::Checker(_) | SiteField::Download(_) => {}
         }
-    }
-
-    /// Scrolls the Posts site list to the named site, if it exists.
-    fn posts_jump(&self, name: &str) -> Option<Task<Msg>> {
-        let sites = &self.posts.cfg.sites;
-        let idx = sites.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
-        let y = if sites.len() > 1 { idx as f32 / (sites.len() - 1) as f32 } else { 0.0 };
-        Some(iced::widget::operation::snap_to(super::posts_scroll_id(), iced::widget::scrollable::RelativeOffset { x: 0.0, y }))
     }
 
     /// Sends a site's draft to the policy layer: adds the unsaved blank site, or updates an existing one.

@@ -36,8 +36,6 @@ pub enum PostsCommand {
     AddSite(PostSite),
     /// Replaces a site's settings; its accounts are left as they are.
     UpdateSite(PostSite),
-    /// Removes a site with its accounts and posts.
-    RemoveSite(SiteId),
     AddAccount { site_id: SiteId, input: String },
     /// Adds an account to the site named like `preset`, creating that site first when it does not exist.
     AddAccountToPreset { preset: Preset, input: String },

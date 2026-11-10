@@ -165,7 +165,8 @@ pub enum PolicyCommand {
     RequestSnapshot,
     AddSite(NewSite),
     UpdateSite(Site),
-    RemoveSite(SiteId),
+    /// Swaps two sites in the saved list, which sets their order in the full and compact views.
+    SwapSites(SiteId, SiteId),
     AddStreamer { site_id: SiteId, name: String, username: String },
     /// Adds a streamer to the site named like `preset`, creating that site first when it does not exist.
     AddStreamerToPreset { preset: Preset, name: String, username: String },
@@ -1523,11 +1524,12 @@ impl Policy {
                     self.commit();
                 }
             }
-            PolicyCommand::RemoveSite(id) => {
-                self.settings.streamers.retain(|s| s.site_id != id);
-                self.settings.sites.retain(|s| s.id != id);
-                self.commit();
-                self.prune_live();
+            PolicyCommand::SwapSites(a, b) => {
+                let sites = &mut self.settings.sites;
+                if let (Some(i), Some(j)) = (sites.iter().position(|s| s.id == a), sites.iter().position(|s| s.id == b)) {
+                    sites.swap(i, j);
+                    self.commit();
+                }
             }
             PolicyCommand::AddStreamer { site_id, name, username } => {
                 self.add_streamer(site_id, name, username);

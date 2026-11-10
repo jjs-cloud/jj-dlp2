@@ -2,12 +2,12 @@
 
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
-    App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, SiteOption, StreamerDraft,
+    App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, SiteOption, SiteSel, SiteSelOption, StreamerDraft,
     LogTab, StreamerField, Tab, UpdateStage, prefs,
 };
 use crate::api::*;
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use crate::policy::{layout, Preset, WarningChip, Warnings};
+use crate::policy::{layout, WarningChip, Warnings};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
     Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
@@ -17,9 +17,6 @@ use iced::{Alignment, Color, Element, Length};
 use iced_aw::date_picker::Date;
 use iced_aw::time_picker::{Period, Time};
 use iced_aw::{DatePicker, TimePicker};
-
-/// Seconds the "has been added!" message stays up.
-const SITE_ADDED_SECS: u64 = 15;
 
 const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -513,7 +510,6 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        title = title.push(toggler(self.compact).label("Compact view").on_toggle(Msg::SetCompact).text_size(12));
         title = title.push(toggler(self.live_first).label("Live first").on_toggle(Msg::SetLiveFirst).text_size(12));
         title = title.push(
             pick_list(prefs::SortKey::ALL.to_vec(), Some(self.sort_key), Msg::SetSortKey)
@@ -524,6 +520,12 @@ impl App {
             button(self.sort_dir_icon(s))
                 .on_press(Msg::ToggleSortDir)
                 .padding([5.0, 8.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        );
+        title = title.push(
+            button(btn_label(&s, if self.compact { "Full View" } else { "Compact View" }).size(12))
+                .on_press(Msg::SetCompact(!self.compact))
+                .padding([5.0, 10.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
         );
         let mut col = Column::new().spacing(12).padding(iced::Padding {
@@ -543,11 +545,18 @@ impl App {
             if !live.is_empty() {
                 col = col.push(self.live_block(s, live));
             }
-            for site in &self.settings.sites {
-                let list: Vec<&Streamer> = rest.iter().copied().filter(|x| x.site_id == site.id).collect();
-                if !list.is_empty() {
-                    col = col.push(self.site_block(s, site, list));
-                }
+            let shown: Vec<(&Site, Vec<&Streamer>)> = self
+                .settings
+                .sites
+                .iter()
+                .map(|site| (site, rest.iter().copied().filter(|x| x.site_id == site.id).collect::<Vec<_>>()))
+                .filter(|(_, list)| !list.is_empty())
+                .collect();
+            let ids: Vec<SiteId> = shown.iter().map(|(site, _)| site.id).collect();
+            for (i, (site, list)) in shown.into_iter().enumerate() {
+                let up = i.checked_sub(1).map(|k| ids[k]);
+                let down = ids.get(i + 1).copied();
+                col = col.push(self.site_block(s, site, list, up, down));
             }
         }
         column![title, scrollable(col).height(Length::Fill)]
@@ -597,9 +606,9 @@ impl App {
         sorted.into_iter().partition(|st| self.statuses.get(&st.id).is_some_and(|x| x.live))
     }
 
-    /// The "Currently Live" panel shown above the site panels.
+    /// The "Live" panel shown above the site panels.
     fn live_block<'a>(&'a self, s: Skin, streamers: Vec<&'a Streamer>) -> Element<'a, Msg> {
-        let head = iced::widget::text("Currently Live").font(s.font).size(18).color(s.live);
+        let head = iced::widget::text("Live").font(s.font).size(18).color(s.live);
         let top = self.push_streamers(s, Column::new().spacing(8).push(head), streamers);
         container(top).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
     }
@@ -778,7 +787,6 @@ impl App {
         !self.processes.is_empty()
             || self.statuses.values().any(|s| s.live || s.recording)
             || self.pending_jump.is_some()
-            || p.jumping()
             || self.update.is_some()
             || crate::settings::load_problem().is_some()
             || crate::policy::posts::load_problem().is_some()
@@ -888,7 +896,7 @@ impl App {
         };
         // Live duration while live, otherwise time since last live.
         let (time_text, time_color) = match self.live_for(id, status) {
-            Some(d) => (fmt_dur(d), s.live),
+            Some(d) => (format!("{:>12}", fmt_dur(d)), s.live),
             None => (self.last_live_ago(id, status).map(fmt_ago).unwrap_or_default(), s.muted),
         };
         let line = row![
@@ -1277,7 +1285,14 @@ impl App {
             .into()
     }
 
-    fn site_block<'a>(&'a self, s: Skin, site: &'a Site, streamers: Vec<&'a Streamer>) -> Element<'a, Msg> {
+    fn site_block<'a>(
+        &'a self,
+        s: Skin,
+        site: &'a Site,
+        streamers: Vec<&'a Streamer>,
+        up: Option<SiteId>,
+        down: Option<SiteId>,
+    ) -> Element<'a, Msg> {
         let check = match self.checks.get(&site.id) {
             Some(c) => {
                 let color = if c.ok { s.live } else { s.danger };
@@ -1305,7 +1320,13 @@ impl App {
         if site.paused {
             head = head.push(chip(s, "PAUSED", s.warn));
         }
-        let head = head.push(Space::new().width(Length::Fill)).push(check);
+        let arrow = |label: &'static str, other: Option<SiteId>| {
+            button(btn_label(&s, label).size(11))
+                .on_press_maybe(other.map(|o| Msg::SwapSites(site.id, o)))
+                .padding([2.0, 6.0])
+                .style(skin::btn(s, BtnKind::Ghost))
+        };
+        let head = head.push(Space::new().width(Length::Fill)).push(check).push(arrow("▲", up)).push(arrow("▼", down));
 
         let mut top = Column::new().spacing(8).push(head);
         if let Some(p) = self.checks.get(&site.id).and_then(|c| c.problem.as_deref()) {
@@ -1577,7 +1598,7 @@ impl App {
         let upgrade_row = row![
             cell(
                 labeled(
-                    "Upgrade Quality",
+                    "Upgrade quality when available",
                     inherit_pick(site_upgrade, d.upgrade_quality, StreamerField::UpgradeQuality).into()
                 ),
                 Length::FillPortion(1)
@@ -1821,46 +1842,32 @@ impl App {
     }
 
     fn settings_sites(&self, s: Skin) -> Element<'_, Msg> {
+        let options = self.settings_site_options();
+        let selected = self.settings_site_choice(&options);
+        let target = selected.as_ref().map(|o| o.target);
+        let picker = pick_list(options, selected, |o: SiteSelOption| Msg::PickSettingsSite(o.target))
+            .padding(8)
+            .text_size(13)
+            .width(240);
         let mut col = Column::new().spacing(10).padding(iced::Padding {
             right: 8.0,
             ..Default::default()
         });
-        let presets = [
-            ("Twitch", Preset::Twitch),
-            ("Tiktok", Preset::Tiktok),
-            ("Chaturbate", Preset::Chaturbate),
-            ("Kick", Preset::Kick),
-            ("Youtube", Preset::Youtube),
-            ("New Site", Preset::Blank),
-        ];
-        let mut add = Row::new().spacing(10).align_y(Alignment::Center);
-        for (label, preset) in presets {
-            add = add.push(
-                button(t(&s, label).size(13))
-                    .on_press(Msg::AddSite(preset))
-                    .padding([7.0, 14.0])
-                    .style(skin::btn(s, BtnKind::Ghost)),
-            );
-        }
-        if let Some((name, at)) = &self.site_added {
-            if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
-                add = add.push(t(&s, format!("{name} has been added! Switch to the Livestreams tab to add a username.")).size(13).color(s.live));
+        col = col.push(picker);
+        match target {
+            Some(SiteSel::New) => {
+                if let Some(d) = self.drafts.get(&NEW_SITE_ID) {
+                    col = col.push(self.site_editor(s, NEW_SITE_ID, None, d));
+                }
             }
-        }
-        let new_draft = self.drafts.get(&NEW_SITE_ID);
-        if self.settings.sites.is_empty() && new_draft.is_none() {
-            col = col.push(muted(&s, "Pick a site above to edit its settings; sites are also created when you add a streamer."));
-        }
-        if let Some(d) = new_draft {
-            col = col.push(self.site_editor(s, NEW_SITE_ID, None, d));
-        }
-        for site in &self.settings.sites {
-            if let Some(d) = self.drafts.get(&site.id) {
-                col = col.push(self.site_editor(s, site.id, Some(site), d));
+            Some(SiteSel::Site(id)) => {
+                if let (Some(site), Some(d)) = (self.settings.sites.iter().find(|x| x.id == id), self.drafts.get(&id)) {
+                    col = col.push(self.site_editor(s, id, Some(site), d));
+                }
             }
+            _ => {}
         }
-        let list = scrollable(col).id(super::sites_scroll_id()).height(Length::Fill);
-        column![add, list].spacing(12).height(Length::Fill).into()
+        scrollable(col).id(super::sites_scroll_id()).height(Length::Fill).into()
     }
 
     fn settings_general(&self, s: Skin) -> Element<'_, Msg> {
@@ -2330,29 +2337,6 @@ impl App {
                         .padding([5.0, 12.0])
                         .style(skin::btn(s, BtnKind::Ghost)),
                 );
-            if self.confirm_remove_site == Some(id) {
-                actions = actions
-                    .push(warn_text(&s, format!("Remove site and {count} streamers?")))
-                    .push(
-                        button(t(&s, "Confirm").size(13))
-                            .on_press(Msg::ConfirmRemoveSite(id))
-                            .padding([5.0, 12.0])
-                            .style(skin::btn(s, BtnKind::Danger)),
-                    )
-                    .push(
-                        button(t(&s, "Cancel").size(13))
-                            .on_press(Msg::CancelRemoveSite)
-                            .padding([5.0, 12.0])
-                            .style(skin::btn(s, BtnKind::Ghost)),
-                    );
-            } else {
-                actions = actions.push(
-                    button(t(&s, "Remove site").size(13))
-                        .on_press(Msg::RemoveSite(id))
-                        .padding([5.0, 12.0])
-                        .style(skin::btn(s, BtnKind::Danger)),
-                );
-            }
         } else {
             actions = actions
                 .push(
@@ -2363,7 +2347,7 @@ impl App {
                 )
                 .push(
                     button(t(&s, "Discard").size(13))
-                        .on_press(Msg::RemoveSite(id))
+                        .on_press(Msg::DiscardSite)
                         .padding([5.0, 12.0])
                         .style(skin::btn(s, BtnKind::Ghost)),
                 );

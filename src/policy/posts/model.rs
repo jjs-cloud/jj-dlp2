@@ -45,9 +45,6 @@ pub enum Preset {
 }
 
 impl Preset {
-    /// Every preset, in the order the site buttons show them.
-    pub const ALL: [Preset; 5] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods, Preset::TwitterX, Preset::Blank];
-
     /// Every named preset, in dropdown order.
     pub const NAMED: [Preset; 4] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods, Preset::TwitterX];
 
@@ -643,7 +640,7 @@ mod tests {
 
     #[test]
     fn auto_download_limits_default_everywhere_and_size_becomes_an_argument() {
-        for preset in Preset::ALL {
+        for preset in Preset::NAMED.into_iter().chain([Preset::Blank]) {
             let site = PostSite::from_preset(preset);
             assert_eq!((site.auto_download_limit_mb, site.auto_download_secs), (Some(15), Some(30)));
         }

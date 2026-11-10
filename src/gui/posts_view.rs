@@ -1,6 +1,6 @@
 //! Views of the Posts monitor and its settings.
 
-use super::posts::{AddOption, PostsMsg, Section, SiteDraft, SiteField, NEW_SITE};
+use super::posts::{AddOption, AddTarget, PostsMsg, Section, SiteDraft, SiteField, NEW_SITE};
 use super::prefs;
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, card_box, chip, clip, fmt_ago, muted, t, warn_text};
@@ -12,8 +12,6 @@ use iced::widget::{Column, Row, Space, button, column, container, pick_list, row
 use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
 
 const SIDEBAR_W: f32 = 210.0;
-/// Seconds the "has been added!" message stays up.
-const SITE_ADDED_SECS: u64 = 15;
 const GAP: f32 = 10.0;
 const CARD_PAD: f32 = 8.0;
 /// Two 13px lines at the default 1.3 line height plus 8px padding top and bottom.
@@ -326,36 +324,28 @@ impl App {
 
     pub(super) fn posts_settings(&self, s: Skin) -> Element<'_, Msg> {
         let p = &self.posts;
-        let mut add = Row::new().spacing(10).align_y(Alignment::Center);
-        for preset in Preset::ALL {
-            add = add.push(
-                button(t(&s, preset.label()).size(13))
-                    .on_press(send(PostsMsg::AddSite(preset)))
-                    .padding([7.0, 14.0])
-                    .style(skin::btn(s, BtnKind::Ghost)),
-            );
-        }
-        if let Some((name, at)) = &p.added {
-            if self.now.saturating_sub(*at) < SITE_ADDED_SECS {
-                add = add.push(t(&s, format!("{name} has been added! Switch to the Posts tab to add a username.")).size(13).color(s.live));
-            }
-        }
-        add = add.push(muted(&s, p.status_text(self.now).unwrap_or("")));
+        let options = p.settings_options();
+        let selected = p.settings_choice(&options);
+        let target = selected.as_ref().map(|o| o.target);
+        let picker = pick_list(options, selected, |o: AddOption| send(PostsMsg::PickSettingsSite(o.target))).padding(8).text_size(13).width(240);
+        let status = muted(&s, p.status_text(self.now).unwrap_or(""));
 
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });
-        let new_draft = p.drafts.get(&NEW_SITE);
-        if p.cfg.sites.is_empty() && new_draft.is_none() {
-            col = col.push(muted(&s, "Pick a site above to edit its settings; sites are also created when you add a username."));
-        }
-        if let Some(d) = new_draft {
-            col = col.push(self.post_site_editor(s, NEW_SITE, None, d));
-        }
-        for site in &p.cfg.sites {
-            if let Some(d) = p.drafts.get(&site.id) {
-                col = col.push(self.post_site_editor(s, site.id, Some(site), d));
+        col = col.push(row![picker, status].spacing(10).align_y(Alignment::Center));
+        match target {
+            Some(AddTarget::Template(Preset::Blank)) => {
+                if let Some(d) = p.drafts.get(&NEW_SITE) {
+                    col = col.push(self.post_site_editor(s, NEW_SITE, None, d));
+                }
             }
+            Some(AddTarget::Site(id)) => {
+                if let (Some(site), Some(d)) = (p.cfg.site(id), p.drafts.get(&id)) {
+                    col = col.push(self.post_site_editor(s, id, Some(site), d));
+                }
+            }
+            _ => {}
         }
-        column![add, scrollable(col).id(super::posts_scroll_id()).height(Length::Fill)].spacing(12).height(Length::Fill).into()
+        scrollable(col).id(super::posts_scroll_id()).height(Length::Fill).into()
     }
 
     /// The settings card of one site; `saved` is `None` for the unsaved blank site.
@@ -469,18 +459,10 @@ impl App {
                 .push(action("Save changes", (dirty && valid).then_some(PostsMsg::SaveSite(id)), BtnKind::Primary))
                 .push(action("Revert", dirty.then_some(PostsMsg::RevertSite(id)), BtnKind::Ghost))
                 .push(action("Defaults", Some(PostsMsg::DefaultsSite(id)), BtnKind::Ghost));
-            if self.posts.confirm_remove == Some(id) {
-                actions = actions
-                    .push(warn_text(&s, "Remove site and its posts?"))
-                    .push(action("Confirm", Some(PostsMsg::ConfirmRemoveSite(id)), BtnKind::Danger))
-                    .push(action("Cancel", Some(PostsMsg::CancelRemoveSite), BtnKind::Ghost));
-            } else {
-                actions = actions.push(action("Remove site", Some(PostsMsg::RemoveSite(id)), BtnKind::Danger));
-            }
         } else {
             actions = actions
                 .push(action("Add site", valid.then_some(PostsMsg::SaveSite(id)), BtnKind::Primary))
-                .push(action("Discard", Some(PostsMsg::RemoveSite(id)), BtnKind::Ghost));
+                .push(action("Discard", Some(PostsMsg::DiscardSite), BtnKind::Ghost));
         }
 
         card_box(

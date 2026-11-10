@@ -97,7 +97,7 @@ impl App {
         }
         let list_card = column![
             controls,
-            muted(&s, "Top is the highest priority. Select a streamer, then move it. Always record streamers move to the top and are never stopped for others."),
+            muted(&s, "Top is the highest priority. Select a streamer, then move them up or down. \"Always record\" streamers will always record, even if the recording limit has already been reached."),
             scrollable(list).id(scroll_id()).on_scroll(|v| send(PriorityMsg::Scrolled(v))).height(Length::Fill),
         ]
         .spacing(8);

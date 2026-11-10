@@ -473,7 +473,6 @@ impl PostsMonitor {
             }
             PostsCommand::AddSite(site) => self.add_site(site),
             PostsCommand::UpdateSite(site) => self.update_site(site),
-            PostsCommand::RemoveSite(id) => self.remove_site(id),
             PostsCommand::AddAccount { site_id, input } => self.add_account(site_id, &input),
             PostsCommand::AddAccountToPreset { preset, input } => self.add_account_to_preset(preset, &input),
             PostsCommand::RemoveAccount { site_id, name } => self.remove_account(site_id, &name),
@@ -535,18 +534,6 @@ impl PostsMonitor {
         *flag = on;
         self.save_cfg();
         self.emit_config();
-    }
-
-    fn remove_site(&mut self, id: SiteId) {
-        self.cfg.sites.retain(|s| s.id != id);
-        self.next_check.remove(&id);
-        self.errors.retain(|(sid, _), _| *sid != id);
-        let removed = self.take_posts(|p| p.site_id == id);
-        self.save_cfg();
-        self.save_lib();
-        self.emit_config();
-        self.emit(PostsEvent::Removed(removed));
-        self.emit_status();
     }
 
     fn add_account(&mut self, site_id: SiteId, input: &str) {

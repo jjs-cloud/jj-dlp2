@@ -366,6 +366,53 @@ impl SiteDraft {
         !self.notify_ntfy || notify::topic_ok(&self.ntfy_topic, global)
     }
 
+    /// True while command output parsing is on and an Interrupts toggle is on.
+    pub fn interrupts_active(&self) -> bool {
+        self.forward_output && (self.notify_interrupts || self.warn_interrupts)
+    }
+
+    /// True while command output parsing is on and an Errors toggle is on.
+    pub fn errors_active(&self) -> bool {
+        self.forward_output && (self.notify_errors || self.warn_errors)
+    }
+
+    /// True while an active pattern field is blank.
+    pub fn patterns_missing(&self) -> bool {
+        (self.interrupts_active() && self.interrupt_patterns.trim().is_empty())
+            || (self.errors_active() && self.error_patterns.trim().is_empty())
+    }
+
+    /// Takes every field shown on the Notifications tab from `d`, leaving the rest.
+    fn copy_notify_from(&mut self, d: &SiteDraft) {
+        self.notify = d.notify;
+        self.warnings_enabled = d.warnings_enabled;
+        self.notify_desktop = d.notify_desktop;
+        self.notify_ntfy = d.notify_ntfy;
+        self.ntfy_topic = d.ntfy_topic.clone();
+        self.notify_cooldown = d.notify_cooldown.clone();
+        self.notify_timeout = d.notify_timeout.clone();
+        self.notify_confirmed = d.notify_confirmed;
+        self.notify_on_launch = d.notify_on_launch;
+        self.notify_live = d.notify_live;
+        self.notify_stalled = d.notify_stalled;
+        self.notify_restarted = d.notify_restarted;
+        self.notify_interrupts = d.notify_interrupts;
+        self.notify_errors = d.notify_errors;
+        self.warn_stalled = d.warn_stalled;
+        self.warn_restarts = d.warn_restarts;
+        self.warn_interrupts = d.warn_interrupts;
+        self.warn_errors = d.warn_errors;
+        self.restart_clear = d.restart_clear.clone();
+        self.restart_threshold = d.restart_threshold.clone();
+        self.file_exists_grace = d.file_exists_grace.clone();
+        self.growth_grace = d.growth_grace.clone();
+        self.stall_window = d.stall_window.clone();
+        self.file_check_interval = d.file_check_interval.clone();
+        self.forward_output = d.forward_output;
+        self.interrupt_patterns = d.interrupt_patterns.clone();
+        self.error_patterns = d.error_patterns.clone();
+    }
+
     /// The channels the draft has switched on, used by the test button.
     pub fn test_targets(&self, global: &str) -> Targets {
         Targets {
@@ -383,6 +430,7 @@ impl SiteDraft {
             || !self.color_ok()
             || !self.ntfy_ok(global_topic)
             || self.split_invalid()
+            || self.patterns_missing()
         {
             return None;
         }
@@ -707,17 +755,17 @@ pub enum Msg {
     SaveStreamer(StreamerId),
     RevertStreamer(StreamerId),
     DefaultsStreamer(StreamerId),
-    AddSite(Preset),
-    RemoveSite(SiteId),
-    ConfirmRemoveSite(SiteId),
+    PickSettingsSite(SiteSel),
+    DiscardSite,
+    SwapSites(SiteId, SiteId),
     BrowseSiteOutput(SiteId),
     SiteOutputChosen(SiteId, Option<std::path::PathBuf>),
     OpenSiteOutput(SiteId),
-    CancelRemoveSite,
     Draft(SiteId, DraftField),
     SaveSite(SiteId),
     RevertSite(SiteId),
     DefaultsSite(SiteId),
+    DefaultsNotify(SiteId),
     TestNotify(SiteId),
     GlobalOutEdit(String),
     GlobalOutSave,
@@ -817,6 +865,27 @@ pub enum SiteTarget {
     Template(Preset),
 }
 
+/// What the Settings > Livestreams dropdown can point at: an existing site, a preset with no site yet, or a new blank site.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SiteSel {
+    Site(SiteId),
+    Template(Preset),
+    New,
+}
+
+/// One entry of the Settings > Livestreams site dropdown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SiteSelOption {
+    pub target: SiteSel,
+    pub name: String,
+}
+
+impl std::fmt::Display for SiteSelOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
 /// One entry of the add-streamer dropdown.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SiteOption {
@@ -862,19 +931,18 @@ pub struct App {
     new_streamer: String,
     add_site: Option<SiteTarget>,
     open_streamer_settings: HashSet<StreamerId>,
-    confirm_remove_site: Option<SiteId>,
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
     notify_tab: NotifyTab,
     notify_site: Option<SiteId>,
+    settings_site: Option<SiteSel>,
     notify_post_site: Option<crate::policy::posts::SiteId>,
     global_ntfy: String,
     /// A random topic has been offered in the global topic box this session.
     ntfy_seeded: bool,
     log_tab: LogTab,
     logs: logs::LogsState,
-    site_added: Option<(String, u64)>,
     global_out: String,
     phase: f32,
     now: u64,
@@ -947,18 +1015,17 @@ impl App {
             add_site: None,
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
-            confirm_remove_site: None,
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
             notify_tab: NotifyTab::Livestreams,
             notify_site: None,
+            settings_site: None,
             notify_post_site: None,
             global_ntfy: String::new(),
             ntfy_seeded: false,
             log_tab: LogTab::Engine,
             logs: logs::LogsState::new(),
-            site_added: None,
             global_out: String::new(),
             phase: 0.0,
             now: now_secs(),
@@ -1025,14 +1092,14 @@ impl App {
         ])
     }
 
-    /// Jumps to a newly added site's editor on a later tick, once the editor is laid out.
+    /// Selects a newly added site in the Settings > Livestreams dropdown once it exists.
     fn try_jump(&mut self) -> Option<Task<Msg>> {
         let name = self.pending_jump.clone()?;
-        let task = self.jump_to_site(&name)?;
+        let id = self.settings.sites.iter().find(|s| s.name.eq_ignore_ascii_case(&name))?.id;
         self.pending_jump = None;
+        self.settings_site = Some(SiteSel::Site(id));
         self.now = now_secs();
-        self.site_added = Some((name, self.now));
-        Some(task)
+        Some(Task::none())
     }
 
     /// The length a streamer inherits from its site, if splitting is on there.
@@ -1131,15 +1198,33 @@ impl App {
         choice
     }
 
-    /// Scrolls the Sites list to the named site, if it exists.
-    fn jump_to_site(&self, name: &str) -> Option<Task<Msg>> {
-        let sites = &self.settings.sites;
-        let idx = sites.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
-        let y = if sites.len() > 1 { idx as f32 / (sites.len() - 1) as f32 } else { 0.0 };
-        Some(iced::widget::operation::snap_to(
-            sites_scroll_id(),
-            iced::widget::scrollable::RelativeOffset { x: 0.0, y },
-        ))
+    /// The Settings > Livestreams dropdown entries: each named preset (its site once created), then custom sites, then New site.
+    pub(crate) fn settings_site_options(&self) -> Vec<SiteSelOption> {
+        let mut out: Vec<SiteSelOption> = self
+            .site_options()
+            .into_iter()
+            .map(|o| SiteSelOption {
+                target: match o.target {
+                    SiteTarget::Site(id) => SiteSel::Site(id),
+                    SiteTarget::Template(p) => SiteSel::Template(p),
+                },
+                name: o.name,
+            })
+            .collect();
+        out.push(SiteSelOption { target: SiteSel::New, name: "New site".to_string() });
+        out
+    }
+
+    /// The dropdown entry shown in Settings > Livestreams: the picked one, else the first.
+    pub(crate) fn settings_site_choice(&self, opts: &[SiteSelOption]) -> Option<SiteSelOption> {
+        let picked = self.settings_site.and_then(|t| match t {
+            SiteSel::Template(p) => {
+                let name = new_site(p).name;
+                opts.iter().find(|o| o.target == t || o.name.eq_ignore_ascii_case(&name))
+            }
+            _ => opts.iter().find(|o| o.target == t),
+        });
+        picked.or_else(|| opts.first()).cloned()
     }
 
     /// Shows a GUI-originated line in the Log tab and saves it to ui.log.
@@ -1175,7 +1260,7 @@ impl App {
                 if let Some(task) = self.try_jump() {
                     return task;
                 }
-                let posts = Task::batch([self.posts_tick(), self.disks_tick()]);
+                let posts = self.disks_tick();
                 if self.tab == Tab::Files {
                     return Task::batch([posts, self.files_tick()]);
                 }
@@ -1288,37 +1373,29 @@ impl App {
                 let name = self.streamer_drafts.get(&id).map(|d| d.name.clone()).unwrap_or_default();
                 self.streamer_drafts.insert(id, StreamerDraft { name, ..StreamerDraft::from_options(&StreamerOptions::default()) });
             }
-            Msg::AddSite(preset) => {
-                if matches!(preset, Preset::Blank) {
+            Msg::PickSettingsSite(target) => match target {
+                SiteSel::New => {
                     self.drafts.entry(NEW_SITE_ID).or_insert_with(|| SiteDraft::from_defaults("", Preset::Blank));
-                    return iced::widget::operation::snap_to(
-                        sites_scroll_id(),
-                        iced::widget::scrollable::RelativeOffset { x: 0.0, y: 0.0 },
-                    );
+                    self.settings_site = Some(SiteSel::New);
                 }
-                let site = new_site(preset);
-                // Named presets are added once.
-                if self.settings.sites.iter().any(|s| s.name.eq_ignore_ascii_case(&site.name)) {
-                    if let Some(task) = self.jump_to_site(&site.name) {
-                        return task;
+                SiteSel::Site(id) => self.settings_site = Some(SiteSel::Site(id)),
+                SiteSel::Template(preset) => {
+                    let site = new_site(preset);
+                    // Named presets are added once.
+                    if let Some(found) = self.settings.sites.iter().find(|s| s.name.eq_ignore_ascii_case(&site.name)) {
+                        self.settings_site = Some(SiteSel::Site(found.id));
+                    } else {
+                        self.settings_site = Some(SiteSel::Template(preset));
+                        self.pending_jump = Some(site.name.clone());
+                        self.client.send(PolicyCommand::AddSite(site));
                     }
-                } else {
-                    self.pending_jump = Some(site.name.clone());
-                    self.client.send(PolicyCommand::AddSite(site));
                 }
+            },
+            Msg::SwapSites(a, b) => self.client.send(PolicyCommand::SwapSites(a, b)),
+            Msg::DiscardSite => {
+                self.drafts.remove(&NEW_SITE_ID);
+                self.settings_site = None;
             }
-            Msg::RemoveSite(id) => {
-                if id == NEW_SITE_ID {
-                    self.drafts.remove(&id);
-                } else {
-                    self.confirm_remove_site = Some(id);
-                }
-            }
-            Msg::ConfirmRemoveSite(id) => {
-                self.confirm_remove_site = None;
-                self.client.send(PolicyCommand::RemoveSite(id));
-            }
-            Msg::CancelRemoveSite => self.confirm_remove_site = None,
             Msg::BrowseSiteOutput(id) => {
                 let global = &self.settings.default_output_dir;
                 let start = std::path::PathBuf::from(self.drafts.get(&id).map_or(global.trim(), |d| crate::policy::layout::base_dir(&d.output, global)));
@@ -1434,6 +1511,12 @@ impl App {
                         let folder = PathBuf::from(crate::policy::layout::base_dir(&d.output, &self.settings.default_output_dir));
                         self.client.send(PolicyCommand::TestNotification { site_name, targets, folder });
                     }
+                }
+            }
+            Msg::DefaultsNotify(id) => {
+                if let Some(d) = self.drafts.get_mut(&id) {
+                    let defaults = SiteDraft::from_defaults(&d.name, preset_for_name(&d.name));
+                    d.copy_notify_from(&defaults);
                 }
             }
             Msg::DefaultsSite(id) => {
@@ -1698,6 +1781,8 @@ impl App {
             self.ntfy_seeded = true;
             if s.notifications.ntfy_topic.trim().is_empty() {
                 self.global_ntfy = notify::random_topic();
+                let n = GlobalNotify { ntfy_topic: self.global_ntfy.clone(), ..s.notifications.clone() };
+                self.client.send(PolicyCommand::SetGlobalNotify(n));
             }
         }
         self.drafts.retain(|id, _| *id == NEW_SITE_ID || s.sites.iter().any(|x| x.id == *id));
@@ -1725,9 +1810,6 @@ impl App {
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.open_streamer_settings.retain(|id| s.streamers.iter().any(|x| x.id == *id));
         self.checks.retain(|id, _| s.sites.iter().any(|x| x.id == *id));
-        if self.confirm_remove_site.is_some_and(|id| !s.sites.iter().any(|x| x.id == id)) {
-            self.confirm_remove_site = None;
-        }
         self.issues.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));
         self.priority_on_settings(&s);
         self.settings = s;

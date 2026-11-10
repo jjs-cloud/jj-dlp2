@@ -125,6 +125,15 @@ impl App {
             .padding(5)
             .size(13)
             .style(skin::input_required(s, topic_on && !d.ntfy_ok(global_topic)));
+        let topic_row = row![
+            topic_input,
+            button(btn_label(&s, "Randomize").size(12))
+                .on_press_maybe(topic_on.then(|| Msg::Draft(id, DraftField::NtfyTopic(notify::random_topic()))))
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
 
         let channels = row![
             toggler(d.notify && !no_notify)
@@ -135,8 +144,8 @@ impl App {
                 .label(format!("Enable Warnings for {} Livestreams", site.name))
                 .on_toggle_maybe((!no_warn).then(|| move |v: bool| Msg::Draft(id, DraftField::WarningsEnabled(v))))
                 .text_size(12),
-            toggle("Desktop", d.notify_desktop, notify_on, DraftField::NotifyDesktop),
-            toggle("Mobile (ntfy)", d.notify_ntfy, notify_on, DraftField::NotifyNtfy),
+            toggle("Desktop Notifications", d.notify_desktop, notify_on, DraftField::NotifyDesktop),
+            toggle("Mobile Notifications (ntfy)", d.notify_ntfy, notify_on, DraftField::NotifyNtfy),
             Space::new().width(Length::Fill),
             button(t(&s, "Send test").size(12))
                 .on_press_maybe(can_test.then_some(Msg::TestNotify(id)))
@@ -161,7 +170,7 @@ impl App {
                 ),
                 Length::FillPortion(1)
             ),
-            cell(labeled(TOPIC_LABEL, topic_input.into()), Length::FillPortion(2)),
+            cell(labeled(TOPIC_LABEL, topic_row.into()), Length::FillPortion(2)),
         ]
         .spacing(8);
 
@@ -275,22 +284,24 @@ impl App {
         ]
         .spacing(8);
 
-        let interrupt_on = output_on && (d.warn_interrupts || d.notify_interrupts);
-        let error_on = output_on && (d.warn_errors || d.notify_errors);
+        let interrupt_on = d.interrupts_active();
+        let error_on = d.errors_active();
+        let pattern_field = |label: &'static str, value: &'a str, on: bool, f: fn(String) -> DraftField| -> Element<'a, Msg> {
+            let input = text_input("", if on { value } else { "" })
+                .on_input_maybe(on.then(|| move |v: String| Msg::Draft(id, f(v))))
+                .padding(5)
+                .size(13)
+                .style(skin::input_required(s, on && value.trim().is_empty()));
+            labeled(label, input.into())
+        };
         let patterns = row![
-            container(toggle("Enable command output", d.forward_output, true, DraftField::ForwardOutput)).width(Length::Shrink),
+            container(toggle("Enable command output parsing", d.forward_output, true, DraftField::ForwardOutput)).width(Length::Shrink),
             cell(
-                labeled(
-                    "Interrupt patterns (separate with |)",
-                    field("", if interrupt_on { d.interrupt_patterns.as_str() } else { "" }, DraftField::InterruptPatterns, interrupt_on)
-                ),
+                pattern_field("Interrupt patterns (separate with |)", &d.interrupt_patterns, interrupt_on, DraftField::InterruptPatterns),
                 Length::FillPortion(1)
             ),
             cell(
-                labeled(
-                    "Error patterns (separate with |)",
-                    field("", if error_on { d.error_patterns.as_str() } else { "" }, DraftField::ErrorPatterns, error_on)
-                ),
+                pattern_field("Error patterns (separate with |)", &d.error_patterns, error_on, DraftField::ErrorPatterns),
                 Length::FillPortion(1)
             ),
         ]
@@ -306,6 +317,10 @@ impl App {
                 .style(skin::btn(s, BtnKind::Primary)),
             button(t(&s, "Revert").size(13))
                 .on_press_maybe(dirty.then_some(Msg::RevertSite(id)))
+                .padding([5.0, 12.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+            button(t(&s, "Defaults").size(13))
+                .on_press(Msg::DefaultsNotify(id))
                 .padding([5.0, 12.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
         ]
@@ -362,13 +377,22 @@ impl App {
             .padding(5)
             .size(13)
             .style(skin::input_required(s, topic_bad));
+        let topic_row = row![
+            topic_input,
+            button(btn_label(&s, "Randomize").size(12))
+                .on_press_maybe(topic_on.then(|| send(SiteField::NtfyTopic(notify::random_topic()))))
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
         let channels = row![
             toggler(d.notify && !no_notify)
                 .label(format!("Enable Notifications for {} Posts", site.name))
                 .on_toggle_maybe((!no_notify).then(|| move |v: bool| send(SiteField::Notify(v))))
                 .text_size(12),
-            toggle("Desktop", d.notify_desktop, notify_on, SiteField::NotifyDesktop),
-            toggle("Mobile (ntfy)", d.notify_ntfy, notify_on, SiteField::NotifyNtfy),
+            toggle("Desktop Notifications", d.notify_desktop, notify_on, SiteField::NotifyDesktop),
+            toggle("Mobile Notifications (ntfy)", d.notify_ntfy, notify_on, SiteField::NotifyNtfy),
         ]
         .spacing(24);
         let actions = row![
@@ -390,7 +414,7 @@ impl App {
             column![
                 self.section_title(s, "NOTIFICATIONS"),
                 channels,
-                column![muted(&s, TOPIC_LABEL), topic_input].spacing(2),
+                column![muted(&s, TOPIC_LABEL), topic_row].spacing(2),
                 actions
             ]
             .spacing(10),

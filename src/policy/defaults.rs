@@ -98,7 +98,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         forward_output: true,
         interrupt_patterns: if matches!(preset, Preset::Twitch) { TWITCH_INTERRUPT_PATTERNS.into() } else { String::new() },
         error_patterns: DEFAULT_ERROR_PATTERNS.into(),
-        warn_interrupts: true,
+        warn_interrupts: matches!(preset, Preset::Twitch),
         warn_errors: true,
         color: Some(color.into()),
         notify: true,
@@ -144,6 +144,15 @@ mod tests {
         assert!(new_site(Preset::Twitch).interrupt_patterns.contains("twitch-stitched-ad"));
         assert!(new_site(Preset::Kick).interrupt_patterns.is_empty());
         assert!(new_site(Preset::Blank).error_patterns.contains("Packet corrupt"));
+    }
+
+    #[test]
+    fn interrupt_warnings_default_on_only_with_patterns() {
+        for preset in [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube, Preset::Blank] {
+            let site = new_site(preset);
+            assert_eq!(site.warn_interrupts, !site.interrupt_patterns.is_empty());
+            assert!(!site.notify_interrupts);
+        }
     }
 
     #[test]
