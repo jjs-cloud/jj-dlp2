@@ -633,13 +633,7 @@ impl App {
         let (calm, glow) = (skin::input(s), skin::input_pulse(s, pulse(self.phase)));
         row![
             pick_list(choices, selected, |o: SiteOption| Msg::PickStreamerSite(o.target)).placeholder("Site").padding(8).text_size(13).width(150),
-            text_input("Display Name (optional)", &self.new_streamer.0)
-                .on_input(Msg::NewStreamerName)
-                .on_submit(Msg::AddStreamer)
-                .padding(8)
-                .width(230)
-                .style(skin::input(s)),
-            text_input("Streamer username", &self.new_streamer.1)
+            text_input("Streamer username", &self.new_streamer)
                 .id(super::username_input_id())
                 .on_input(Msg::NewStreamerUsername)
                 .on_submit(Msg::AddStreamer)
@@ -740,6 +734,7 @@ impl App {
 
     /// True when warnings picked by `on` show for the streamer's site; false while all warnings are disabled.
     fn warn_shown(&self, streamer_id: StreamerId, on: impl Fn(&Site) -> bool) -> bool {
+        let on = |x: &Site| x.warnings_enabled && on(x);
         if self.settings.notifications.disable_warnings {
             return false;
         }
@@ -1443,7 +1438,7 @@ impl App {
             .streamer_drafts
             .get(&id)
             .cloned()
-            .unwrap_or_else(|| StreamerDraft::from_options(&st.options));
+            .unwrap_or_else(|| StreamerDraft::from_streamer(st));
         let labeled = |label: &'static str, input: Element<'a, Msg>| -> Element<'a, Msg> {
             column![muted(&s, label), input].spacing(2).into()
         };
@@ -1487,10 +1482,28 @@ impl App {
             site.map_or("", |x| x.output_dir.as_str()),
             &self.settings.default_output_dir,
         );
-        let path = layout::preview(base, effective_layout, site.map_or("", |x| x.name.as_str()), Some(&st.name));
+        let shown_name = if d.name.trim().is_empty() { st.name.as_str() } else { d.name.trim() };
+        let path = layout::preview(base, effective_layout, site.map_or("", |x| x.name.as_str()), Some(shown_name));
         let site_notify = site.is_some_and(|x| x.notify);
         let site_suffix = site.is_some_and(|x| x.auto_suffix);
         let site_upgrade = site.is_some_and(|x| x.upgrade_quality);
+
+        let name_row = row![
+            cell(
+                labeled(
+                    "Display Name",
+                    text_input("Defaults to the username", &d.name)
+                        .on_input(move |v| Msg::StreamerEdit(id, StreamerField::Name(v)))
+                        .padding(5)
+                        .size(13)
+                        .style(skin::input(s))
+                        .into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(Space::new().into(), Length::FillPortion(2)),
+        ]
+        .spacing(8);
 
         let top = row![
             cell(
@@ -1605,7 +1618,7 @@ impl App {
 
         let schedule = self.schedule_block(s, id, &d);
 
-        let dirty = d.differs_from(&st.options);
+        let dirty = d.differs_from(st);
         let valid = !d.invalid();
         let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)]
             .spacing(10)
@@ -1634,6 +1647,7 @@ impl App {
             );
 
         column![
+            name_row,
             top,
             paths,
             splitting,

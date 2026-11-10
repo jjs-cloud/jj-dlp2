@@ -85,6 +85,8 @@ pub struct NewSite {
     pub notify_stalled: bool,
     pub notify_restarted: bool,
     pub notify_on_launch: bool,
+    pub notify_live: bool,
+    pub warnings_enabled: bool,
     pub notify_interrupts: bool,
     pub notify_errors: bool,
     pub warn_stalled: bool,
@@ -134,6 +136,8 @@ impl NewSite {
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
             notify_on_launch: self.notify_on_launch,
+            notify_live: self.notify_live,
+            warnings_enabled: self.warnings_enabled,
             notify_interrupts: self.notify_interrupts,
             notify_errors: self.notify_errors,
             warn_stalled: self.warn_stalled,
@@ -168,6 +172,8 @@ pub enum PolicyCommand {
     RemoveStreamer(StreamerId),
     SetStreamerEnabled { id: StreamerId, enabled: bool },
     SetStreamerOptions { id: StreamerId, options: StreamerOptions },
+    /// Renames a streamer; a blank name uses the one derived from its URL.
+    SetStreamerName { id: StreamerId, name: String },
     /// Saves the priority order (highest first), the always-record streamers and the recording limit.
     SetPriority { order: Vec<StreamerId>, always: HashSet<StreamerId>, max: Option<u32> },
     SetGlobalOutputDir(String),
@@ -617,7 +623,7 @@ impl Policy {
         let st = self.settings.streamers.iter().find(|s| s.id == id)?;
         let site = self.site_of(id)?;
         let kind_on = match kind {
-            Kind::Live => true,
+            Kind::Live => site.notify_live,
             Kind::Stalled => site.notify_stalled,
             Kind::Restarted => site.notify_restarted,
             Kind::Interrupt => site.notify_interrupts,
@@ -1565,6 +1571,13 @@ impl Policy {
                     self.run_schedules();
                 }
             }
+            PolicyCommand::SetStreamerName { id, name } => {
+                if let Some(s) = self.settings.streamers.iter_mut().find(|s| s.id == id) {
+                    let name = name.trim();
+                    s.name = if name.is_empty() { derive_name(&s.url) } else { name.to_string() };
+                    self.commit();
+                }
+            }
             PolicyCommand::SetPriority { order, always, max } => {
                 let rank = |id: StreamerId| order.iter().position(|o| *o == id).unwrap_or(usize::MAX);
                 self.settings.streamers.sort_by_key(|s| rank(s.id));
@@ -1723,6 +1736,8 @@ mod tests {
             notify_stalled: true,
             notify_restarted: true,
             notify_on_launch: false,
+            notify_live: true,
+            warnings_enabled: true,
             notify_interrupts: false,
             notify_errors: false,
             warn_stalled: true,
@@ -1823,6 +1838,8 @@ mod e2e {
                 notify_stalled: true,
                 notify_restarted: true,
                 notify_on_launch: false,
+                notify_live: true,
+                warnings_enabled: true,
                 notify_interrupts: false,
                 notify_errors: false,
                 warn_stalled: true,

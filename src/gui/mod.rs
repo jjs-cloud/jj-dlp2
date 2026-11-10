@@ -26,7 +26,7 @@ use crate::policy::{
     WarningChip, Warnings, DEFAULT_SITE_COLOR,
 };
 use iced::futures::{SinkExt, Stream};
-use iced::{window, Size, Subscription, Task, Theme};
+use iced::{window, Point, Size, Subscription, Task, Theme};
 use skin::{Skin, ThemeKind};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -179,6 +179,8 @@ pub struct SiteDraft {
     pub notify_stalled: bool,
     pub notify_restarted: bool,
     pub notify_on_launch: bool,
+    pub notify_live: bool,
+    pub warnings_enabled: bool,
     pub notify_interrupts: bool,
     pub notify_errors: bool,
     pub warn_stalled: bool,
@@ -227,6 +229,8 @@ impl SiteDraft {
             notify_stalled: s.notify_stalled,
             notify_restarted: s.notify_restarted,
             notify_on_launch: s.notify_on_launch,
+            notify_live: s.notify_live,
+            warnings_enabled: s.warnings_enabled,
             notify_interrupts: s.notify_interrupts,
             notify_errors: s.notify_errors,
             warn_stalled: s.warn_stalled,
@@ -277,6 +281,8 @@ impl SiteDraft {
             notify_stalled: n.notify_stalled,
             notify_restarted: n.notify_restarted,
             notify_on_launch: n.notify_on_launch,
+            notify_live: n.notify_live,
+            warnings_enabled: n.warnings_enabled,
             notify_interrupts: n.notify_interrupts,
             notify_errors: n.notify_errors,
             warn_stalled: n.warn_stalled,
@@ -414,6 +420,8 @@ impl SiteDraft {
             notify_stalled: self.notify_stalled,
             notify_restarted: self.notify_restarted,
             notify_on_launch: self.notify_on_launch,
+            notify_live: self.notify_live,
+            warnings_enabled: self.warnings_enabled,
             notify_interrupts: self.notify_interrupts,
             notify_errors: self.notify_errors,
             warn_stalled: self.warn_stalled,
@@ -443,6 +451,8 @@ fn parse_opt<T: std::str::FromStr + PartialOrd>(text: &str, min: T) -> Option<Op
 
 #[derive(Debug, Clone)]
 pub enum DraftField {
+    NotifyLive(bool),
+    WarningsEnabled(bool),
     Name(String),
     Exe(String),
     Interval(String),
@@ -490,6 +500,7 @@ pub enum DraftField {
 /// A single field edited in a streamer's settings panel.
 #[derive(Debug, Clone)]
 pub enum StreamerField {
+    Name(String),
     FolderLayout(Option<FolderLayout>),
     Notify(Option<bool>),
     AutoSuffix(Option<bool>),
@@ -544,6 +555,7 @@ impl ScheduleIssue {
 /// Unsaved edits to one streamer's options.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StreamerDraft {
+    pub name: String,
     pub log_stdout: bool,
     pub log_stderr: bool,
     pub folder_layout: Option<FolderLayout>,
@@ -569,8 +581,14 @@ fn with_time(current: Option<NaiveDateTime>, time: NaiveTime) -> NaiveDateTime {
 }
 
 impl StreamerDraft {
+    /// A draft of a streamer's saved name and options.
+    pub fn from_streamer(st: &Streamer) -> Self {
+        Self { name: st.name.clone(), ..Self::from_options(&st.options) }
+    }
+
     pub fn from_options(o: &StreamerOptions) -> Self {
         Self {
+            name: String::new(),
             log_stdout: o.log_stdout,
             log_stderr: o.log_stderr,
             folder_layout: o.folder_layout,
@@ -645,9 +663,10 @@ impl StreamerDraft {
         self.intro_invalid() || self.split_invalid() || self.schedule_issue().is_some()
     }
 
-    /// True when saving would change `saved`.
-    pub fn differs_from(&self, saved: &StreamerOptions) -> bool {
-        self.to_options() != *saved
+    /// True when saving would change `saved`; always-record is owned by the Priority tab and ignored.
+    pub fn differs_from(&self, saved: &Streamer) -> bool {
+        let options = StreamerOptions { always_record: saved.options.always_record, ..self.to_options() };
+        options != saved.options || self.name.trim() != saved.name
     }
 }
 
@@ -675,7 +694,6 @@ pub enum Msg {
     ThemeChosen(ThemeKind),
     OpenConfigDir,
     OpenRecording(RecorderId),
-    NewStreamerName(String),
     NewStreamerUsername(String),
     PickStreamerSite(SiteTarget),
     AddStreamer,
@@ -735,6 +753,8 @@ pub enum Msg {
     ResetWindowSize,
     ResetRowRange,
     Resized(Size),
+    /// The monitor size and window position read at startup.
+    FitWindow(window::Id, Size, Point),
     UpdateClicked,
     UpdateCancel,
     UpdateConfirm,
@@ -839,7 +859,7 @@ pub struct App {
     recording_files: HashMap<RecorderId, RecordingFile>,
     log: VecDeque<String>,
     drafts: HashMap<SiteId, SiteDraft>,
-    new_streamer: (String, String),
+    new_streamer: String,
     add_site: Option<SiteTarget>,
     open_streamer_settings: HashSet<StreamerId>,
     confirm_remove_site: Option<SiteId>,
@@ -923,7 +943,7 @@ impl App {
             recording_files: HashMap::new(),
             log: VecDeque::new(),
             drafts: HashMap::new(),
-            new_streamer: (String::new(), String::new()),
+            new_streamer: String::new(),
             add_site: None,
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
@@ -981,7 +1001,10 @@ impl App {
         if let Some(e) = crate::policy::update::take_last_error() {
             app.note(e);
         }
-        (app, Task::none())
+        let fit = window::latest().and_then(|id| {
+            window::monitor_size(id).and_then(move |monitor| window::position(id).and_then(move |pos| Task::done(Msg::FitWindow(id, monitor, pos))))
+        });
+        (app, fit)
     }
 
     fn skin(&self) -> Skin {
@@ -1020,9 +1043,10 @@ impl App {
     /// Applies one edit to a streamer's draft.
     fn edit_streamer(&mut self, id: StreamerId, field: StreamerField) {
         let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
-        let d = self.streamer_drafts.entry(id).or_insert_with(|| StreamerDraft::from_options(&st.options));
+        let d = self.streamer_drafts.entry(id).or_insert_with(|| StreamerDraft::from_streamer(st));
         let digits = |v: &str| v.len() <= 6 && v.chars().all(|c| c.is_ascii_digit());
         match field {
+            StreamerField::Name(v) => d.name = v,
             StreamerField::FolderLayout(v) => d.folder_layout = v,
             StreamerField::Notify(v) => d.notify = v,
             StreamerField::AutoSuffix(v) => d.auto_suffix = v,
@@ -1067,6 +1091,9 @@ impl App {
         let Some(d) = self.streamer_drafts.get(&id) else { return };
         if d.invalid() {
             return;
+        }
+        if self.settings.streamers.iter().find(|s| s.id == id).is_some_and(|s| s.name != d.name.trim()) {
+            self.client.send(PolicyCommand::SetStreamerName { id, name: d.name.clone() });
         }
         self.client.send(PolicyCommand::SetStreamerOptions { id, options: d.to_options() });
     }
@@ -1218,14 +1245,14 @@ impl App {
             Msg::DisksRefreshed(snap) => self.on_disks(snap),
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
-            Msg::NewStreamerName(v) => self.new_streamer.0 = v,
-            Msg::NewStreamerUsername(v) => self.new_streamer.1 = v,
+            Msg::NewStreamerUsername(v) => self.new_streamer = v,
             Msg::PickStreamerSite(target) => self.add_site = Some(target),
             Msg::AddStreamer => {
                 if let Some(choice) = self.add_choice() {
-                    let (name, username) = std::mem::take(&mut self.new_streamer);
+                    let username = std::mem::take(&mut self.new_streamer);
+                    let name = String::new();
                     if username.trim().is_empty() {
-                        self.new_streamer = (name, username);
+                        self.new_streamer = username;
                     } else {
                         self.add_site = Some(choice.target);
                         self.client.send(match choice.target {
@@ -1254,11 +1281,12 @@ impl App {
             Msg::SaveStreamer(id) => self.save_streamer(id),
             Msg::RevertStreamer(id) => {
                 if let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) {
-                    self.streamer_drafts.insert(id, StreamerDraft::from_options(&st.options));
+                    self.streamer_drafts.insert(id, StreamerDraft::from_streamer(st));
                 }
             }
             Msg::DefaultsStreamer(id) => {
-                self.streamer_drafts.insert(id, StreamerDraft::from_options(&StreamerOptions::default()));
+                let name = self.streamer_drafts.get(&id).map(|d| d.name.clone()).unwrap_or_default();
+                self.streamer_drafts.insert(id, StreamerDraft { name, ..StreamerDraft::from_options(&StreamerOptions::default()) });
             }
             Msg::AddSite(preset) => {
                 if matches!(preset, Preset::Blank) {
@@ -1357,6 +1385,8 @@ impl App {
                         DraftField::NotifyStalled(v) => d.notify_stalled = v,
                         DraftField::NotifyRestarted(v) => d.notify_restarted = v,
                         DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
+                        DraftField::NotifyLive(v) => d.notify_live = v,
+                        DraftField::WarningsEnabled(v) => d.warnings_enabled = v,
                         DraftField::NotifyInterrupts(v) => d.notify_interrupts = v,
                         DraftField::NotifyErrors(v) => d.notify_errors = v,
                         DraftField::WarnStalled(v) => d.warn_stalled = v,
@@ -1518,6 +1548,13 @@ impl App {
                 prefs::save_three_col_width(self.three_col_w);
                 prefs::save_name_clip(self.name_clip);
             }
+            Msg::FitWindow(id, monitor, pos) => {
+                let (w, h) = prefs::fit_to_monitor(self.win_w, self.win_h, monitor.width, monitor.height);
+                if (w, h) != (self.win_w, self.win_h) {
+                    let moved = Point::new(pos.x + (self.win_w - w) / 2.0, pos.y + (self.win_h - h) / 2.0);
+                    return Task::batch([window::resize(id, Size::new(w, h)), window::move_to(id, moved)]);
+                }
+            }
             Msg::Resized(size) => {
                 self.win_w = size.width;
                 self.win_h = size.height;
@@ -1678,11 +1715,11 @@ impl App {
         for st in &s.streamers {
             let old = self.settings.streamers.iter().find(|o| o.id == st.id);
             let editing = match (self.streamer_drafts.get(&st.id), old) {
-                (Some(d), Some(old)) => d.differs_from(&old.options),
+                (Some(d), Some(old)) => d.differs_from(old),
                 _ => false,
             };
             if !editing {
-                self.streamer_drafts.insert(st.id, StreamerDraft::from_options(&st.options));
+                self.streamer_drafts.insert(st.id, StreamerDraft::from_streamer(st));
             }
         }
         self.statuses.retain(|id, _| s.streamers.iter().any(|x| x.id == *id));

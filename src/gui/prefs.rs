@@ -26,6 +26,9 @@ pub const WIN_DEFAULT_W: f32 = 1180.0;
 pub const WIN_DEFAULT_H: f32 = 845.0;
 const WIN_MIN_W: f32 = 640.0;
 const WIN_MIN_H: f32 = 420.0;
+/// Logical pixels kept free around the window for the title bar and taskbar.
+const FIT_MARGIN_W: f32 = 40.0;
+const FIT_MARGIN_H: f32 = 100.0;
 
 /// How streamers are ordered within a site (and within the live group).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -438,10 +441,24 @@ pub fn startup_window_size() -> (f32, f32) {
     }
 }
 
+/// The window size reduced to fit a monitor of `monitor_w` x `monitor_h` logical pixels.
+pub fn fit_to_monitor(w: f32, h: f32, monitor_w: f32, monitor_h: f32) -> (f32, f32) {
+    let max_w = (monitor_w - FIT_MARGIN_W).max(WIN_MIN_W);
+    let max_h = (monitor_h - FIT_MARGIN_H).max(WIN_MIN_H);
+    (w.min(max_w), h.min(max_h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::resets::Val;
+
+    #[test]
+    fn window_shrinks_to_fit_a_small_monitor() {
+        assert_eq!(fit_to_monitor(1180.0, 845.0, 1280.0, 720.0), (1180.0, 620.0));
+        assert_eq!(fit_to_monitor(1180.0, 845.0, 1920.0, 1080.0), (1180.0, 845.0));
+        assert_eq!(fit_to_monitor(1180.0, 845.0, 500.0, 300.0), (WIN_MIN_W, WIN_MIN_H));
+    }
 
     #[test]
     fn prefs_reset_to_defaults() {

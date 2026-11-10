@@ -8,8 +8,8 @@ use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use std::collections::HashSet;
 
 /// Height of one priority row and the gap between rows.
-pub const ROW_H: f32 = 36.0;
-pub const ROW_GAP: f32 = 6.0;
+pub const ROW_H: f32 = 26.0;
+pub const ROW_GAP: f32 = 3.0;
 
 /// Scrollable id of the priority list.
 pub fn scroll_id() -> iced::widget::Id {

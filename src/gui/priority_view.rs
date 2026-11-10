@@ -83,7 +83,7 @@ impl App {
             .align_y(Alignment::Center);
             list = list.push(
                 row![
-                    button(label).on_press(send(PriorityMsg::Select(id))).width(Length::Fill).height(Length::Fill).padding([6.0, 10.0]).style(skin::btn(s, kind)),
+                    button(label).on_press(send(PriorityMsg::Select(id))).width(Length::Fill).height(Length::Fill).padding([2.0, 10.0]).style(skin::btn(s, kind)),
                     toggler(d.always.contains(&id))
                         .label("Always record")
                         .on_toggle(move |on| send(PriorityMsg::ToggleAlways(id, on)))

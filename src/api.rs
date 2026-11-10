@@ -156,6 +156,12 @@ pub struct Site {
     pub notify_restarted: bool,
     /// Also notify when a streamer is already live at their first check after launch.
     pub notify_on_launch: bool,
+    /// Notify when a streamer goes live.
+    #[serde(default = "default_true")]
+    pub notify_live: bool,
+    /// Master switch for showing this site's warning chips.
+    #[serde(default = "default_true")]
+    pub warnings_enabled: bool,
     /// Notify when recorder output matches an interrupt pattern.
     #[serde(default)]
     pub notify_interrupts: bool,
@@ -179,6 +185,11 @@ pub struct Site {
     /// Restart a recording once per live span when the stream offers a higher quality than is being recorded.
     #[serde(default)]
     pub upgrade_quality: bool,
+}
+
+/// Serde default for fields that are on unless a saved file says otherwise.
+fn default_true() -> bool {
+    true
 }
 
 /// `text` trimmed, or `fallback` when it is blank.
@@ -588,6 +599,8 @@ mod tests {
             notify_stalled: false,
             notify_restarted: false,
             notify_on_launch: false,
+            notify_live: true,
+            warnings_enabled: true,
             notify_interrupts: false,
             notify_errors: false,
             warn_stalled: true,
@@ -659,6 +672,16 @@ mod tests {
         }
         let site: Site = serde_json::from_value(value).unwrap();
         assert!(!site.notify_interrupts && !site.notify_errors && !site.warn_stalled && !site.warn_restarts && !site.upgrade_quality);
+    }
+
+    #[test]
+    fn site_without_live_and_warning_switches_keeps_them_on() {
+        let mut value = serde_json::to_value(site_with(false, None)).unwrap();
+        for key in ["notify_live", "warnings_enabled"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let site: Site = serde_json::from_value(value).unwrap();
+        assert!(site.notify_live && site.warnings_enabled);
     }
 
     #[test]

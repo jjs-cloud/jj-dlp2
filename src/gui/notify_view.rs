@@ -117,15 +117,24 @@ impl App {
         let valid = d.to_new_site(global_topic).is_some();
         let can_test = d.ntfy_ok(global_topic) && !d.test_targets(global_topic).is_empty();
         let notify_on = d.notify && !no_notify;
+        let channels_on = d.notify_desktop || d.notify_ntfy;
+        let topic_on = notify_on && d.notify_ntfy;
 
-        let topic_input = text_input(global_topic, &d.ntfy_topic)
-            .on_input_maybe((d.notify_ntfy && !no_notify).then(|| move |v: String| Msg::Draft(id, DraftField::NtfyTopic(v))))
+        let topic_input = text_input(if topic_on { global_topic } else { "" }, &d.ntfy_topic)
+            .on_input_maybe(topic_on.then(|| move |v: String| Msg::Draft(id, DraftField::NtfyTopic(v))))
             .padding(5)
             .size(13)
-            .style(skin::input_required(s, !d.ntfy_ok(global_topic)));
+            .style(skin::input_required(s, topic_on && !d.ntfy_ok(global_topic)));
 
         let channels = row![
-            toggle("Notifications", d.notify, !no_notify, DraftField::Notify),
+            toggler(d.notify && !no_notify)
+                .label(format!("Enable Notifications for {} Livestreams", site.name))
+                .on_toggle_maybe((!no_notify).then(|| move |v: bool| Msg::Draft(id, DraftField::Notify(v))))
+                .text_size(12),
+            toggler(d.warnings_enabled && !no_warn)
+                .label(format!("Enable Warnings for {} Livestreams", site.name))
+                .on_toggle_maybe((!no_warn).then(|| move |v: bool| Msg::Draft(id, DraftField::WarningsEnabled(v))))
+                .text_size(12),
             toggle("Desktop", d.notify_desktop, notify_on, DraftField::NotifyDesktop),
             toggle("Mobile (ntfy)", d.notify_ntfy, notify_on, DraftField::NotifyNtfy),
             Space::new().width(Length::Fill),
@@ -178,28 +187,35 @@ impl App {
             container(muted(&s, "Warn")).width(COL_W).align_x(Horizontal::Center),
         ]
         .spacing(GAP);
+        let notify_cells = notify_on && channels_on;
+        let warn_cells = !no_warn && d.warnings_enabled;
         let matrix = column![
             self.section_title(s, "NOTIFICATIONS AND WARNINGS"),
             heads,
             matrix_line(
+                "Live",
+                matrix_cell(d.notify_live, notify_cells, DraftField::NotifyLive),
+                Space::new().width(COL_W).into(),
+            ),
+            matrix_line(
                 "Stalled",
-                matrix_cell(d.notify_stalled, notify_on, DraftField::NotifyStalled),
-                matrix_cell(d.warn_stalled, !no_warn, DraftField::WarnStalled),
+                matrix_cell(d.notify_stalled, notify_cells, DraftField::NotifyStalled),
+                matrix_cell(d.warn_stalled, warn_cells, DraftField::WarnStalled),
             ),
             matrix_line(
                 "Restarts",
-                matrix_cell(d.notify_restarted, notify_on, DraftField::NotifyRestarted),
-                matrix_cell(d.warn_restarts, !no_warn, DraftField::WarnRestarts),
+                matrix_cell(d.notify_restarted, notify_cells, DraftField::NotifyRestarted),
+                matrix_cell(d.warn_restarts, warn_cells, DraftField::WarnRestarts),
             ),
             matrix_line(
                 "Interrupts",
-                matrix_cell(d.notify_interrupts, notify_on && output_on, DraftField::NotifyInterrupts),
-                matrix_cell(d.warn_interrupts, !no_warn && output_on, DraftField::WarnInterrupts),
+                matrix_cell(d.notify_interrupts, notify_cells && output_on, DraftField::NotifyInterrupts),
+                matrix_cell(d.warn_interrupts, warn_cells && output_on, DraftField::WarnInterrupts),
             ),
             matrix_line(
                 "Errors",
-                matrix_cell(d.notify_errors, notify_on && output_on, DraftField::NotifyErrors),
-                matrix_cell(d.warn_errors, !no_warn && output_on, DraftField::WarnErrors),
+                matrix_cell(d.notify_errors, notify_cells && output_on, DraftField::NotifyErrors),
+                matrix_cell(d.warn_errors, warn_cells && output_on, DraftField::WarnErrors),
             ),
         ]
         .spacing(6);
@@ -223,7 +239,7 @@ impl App {
                 Space::new().width(Length::FillPortion(2)),
             ]
             .spacing(8),
-            muted(&s, "Restarts are counted using \"Consider a stream ended after (minutes)\", which stays in Settings > Livestreams."),
+            muted(&s, "Restarts are counted based on \"Consider a stream ended after (minutes)\" in Settings > Livestreams."),
         ]
         .spacing(2);
 
@@ -339,14 +355,18 @@ impl App {
         };
         let dirty = d.differs_from(site);
         let valid = d.valid(global_topic);
-        let topic_bad = !d.ntfy_ok(global_topic);
-        let topic_input = text_input(global_topic, &d.ntfy_topic)
-            .on_input_maybe((d.notify_ntfy && !no_notify).then(|| move |v: String| send(SiteField::NtfyTopic(v))))
+        let topic_on = notify_on && d.notify_ntfy;
+        let topic_bad = topic_on && !d.ntfy_ok(global_topic);
+        let topic_input = text_input(if topic_on { global_topic } else { "" }, &d.ntfy_topic)
+            .on_input_maybe(topic_on.then(|| move |v: String| send(SiteField::NtfyTopic(v))))
             .padding(5)
             .size(13)
             .style(skin::input_required(s, topic_bad));
         let channels = row![
-            toggle("Notifications", d.notify, !no_notify, SiteField::Notify),
+            toggler(d.notify && !no_notify)
+                .label(format!("Enable Notifications for {} Posts", site.name))
+                .on_toggle_maybe((!no_notify).then(|| move |v: bool| send(SiteField::Notify(v))))
+                .text_size(12),
             toggle("Desktop", d.notify_desktop, notify_on, SiteField::NotifyDesktop),
             toggle("Mobile (ntfy)", d.notify_ntfy, notify_on, SiteField::NotifyNtfy),
         ]
