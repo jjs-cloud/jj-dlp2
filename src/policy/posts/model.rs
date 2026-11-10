@@ -82,6 +82,41 @@ pub struct Account {
     /// Writes the checker's stderr to this account's log file.
     #[serde(default)]
     pub log_stderr: bool,
+    /// TikTok channel ID, used when the profile page cannot be resolved by username.
+    #[serde(default)]
+    pub channel_id: Option<String>,
+}
+
+/// Shown when TikTok will not resolve a username and no channel ID is stored.
+pub const ID_RESOLUTION_FAILED: &str = "Account ID resolution failed. To add this account, please enter a URL from any video from this TikTok channel.";
+
+/// Part of yt-dlp's error when it cannot resolve a TikTok username.
+pub const ID_ERROR_MARKER: &str = "Unable to extract secondary user ID";
+
+/// The username and profile URL of a TikTok video URL such as `https://www.tiktok.com/@name/video/123`.
+pub fn tiktok_video_owner(input: &str) -> Option<(String, String)> {
+    let input = input.trim();
+    let rest = input.strip_prefix("https://").or_else(|| input.strip_prefix("http://"))?;
+    let mut segs = rest.split(['?', '#']).next()?.split('/').filter(|s| !s.is_empty());
+    let host = segs.next()?.to_ascii_lowercase();
+    if host != "tiktok.com" && !host.ends_with(".tiktok.com") {
+        return None;
+    }
+    let user = segs.next()?.strip_prefix('@')?;
+    (segs.next()? == "video" && !user.is_empty()).then(|| (user.to_string(), format!("https://www.tiktok.com/@{user}")))
+}
+
+/// The `channel_id` of one line of yt-dlp `--dump-json` output.
+pub fn channel_id_of(line: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(line.trim()).ok()?;
+    v.get("channel_id")?.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+impl Account {
+    /// True for a TikTok profile.
+    pub fn is_tiktok(&self) -> bool {
+        self.url.to_ascii_lowercase().contains("tiktok.com")
+    }
 }
 
 /// A website whose accounts are checked, with its own commands and settings.
@@ -248,7 +283,9 @@ impl PostSite {
     /// An account from a username or profile URL; `None` when blank, malformed or already added.
     pub fn account_from_input(&self, input: &str) -> Option<Account> {
         let input = input.trim();
-        let (name, url) = if input.starts_with("http://") || input.starts_with("https://") {
+        let (name, url) = if let Some(owner) = tiktok_video_owner(input) {
+            owner
+        } else if input.starts_with("http://") || input.starts_with("https://") {
             let path = input.split(['?', '#']).next().unwrap_or(input).trim_end_matches('/');
             let mut segs = path.rsplit('/');
             let mut last = segs.next().unwrap_or("");
@@ -268,7 +305,7 @@ impl PostSite {
             return None;
         }
         let dup = self.accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name) || a.url == url);
-        (!dup).then_some(Account { name, url, enabled: true, baselined: false, log_stdout: false, log_stderr: false })
+        (!dup).then_some(Account { name, url, enabled: true, baselined: false, log_stdout: false, log_stderr: false, channel_id: None })
     }
 }
 
@@ -450,6 +487,13 @@ pub fn checker_cmd(site: &PostSite, url: &str) -> Vec<String> {
     expand(site.checker_or_default(), url, "")
 }
 
+/// The `--user-agent` value in the site's checker arguments, if it has one.
+pub fn checker_user_agent(site: &PostSite) -> Option<String> {
+    let args = checker_cmd(site, "");
+    let pos = args.iter().position(|a| a == "--user-agent");
+    pos.and_then(|i| args.get(i + 1).cloned()).or_else(|| args.iter().find_map(|a| a.strip_prefix("--user-agent=").map(str::to_string)))
+}
+
 /// Download arguments for one post into `dir`, plus options that write the final file path and the post time and duration to `sidecar` and cap the size at `max_mb`.
 pub fn download_cmd(site: &PostSite, url: &str, dir: &str, sidecar: &Path, max_mb: Option<u64>) -> Vec<String> {
     let mut args = expand(site.download_or_default(), url, dir);
@@ -484,6 +528,27 @@ pub fn new_posts_message(account: &str, posts: &[Post]) -> notify::Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tiktok_video_urls_give_their_owner() {
+        let owner = tiktok_video_owner("https://www.tiktok.com/@ash/video/77?lang=en");
+        assert_eq!(owner, Some(("ash".into(), "https://www.tiktok.com/@ash".into())));
+        assert_eq!(tiktok_video_owner("https://www.tiktok.com/@ash"), None);
+        assert_eq!(tiktok_video_owner("https://example.com/@ash/video/1"), None);
+    }
+
+    #[test]
+    fn checker_user_agent_is_read_from_the_arguments() {
+        let site = PostSite::from_preset(Preset::Tiktok);
+        assert!(checker_user_agent(&site).is_some_and(|ua| ua.starts_with("Mozilla/5.0")));
+        assert_eq!(checker_user_agent(&PostSite::from_preset(Preset::Blank)), None);
+    }
+
+    #[test]
+    fn channel_id_is_read_from_a_json_line() {
+        assert_eq!(channel_id_of(r#"{"id":"1","channel_id":"MS4w"}"#), Some("MS4w".into()));
+        assert_eq!(channel_id_of(r#"{"id":"1"}"#), None);
+    }
 
     #[test]
     fn entry_reads_core_fields() {

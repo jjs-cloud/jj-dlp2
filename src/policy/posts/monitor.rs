@@ -275,6 +275,7 @@ impl PostsMonitor {
                 self.log(format!("Posts: stream link failed: {e}"));
             }
             PostsMsg::Notified(lines) => lines.into_iter().for_each(|l| self.log(l)),
+            PostsMsg::ChannelResolved { site_id, user, profile, result } => self.on_channel_resolved(site_id, &user, &profile, result),
         }
         self.tick();
     }
@@ -303,6 +304,9 @@ impl PostsMonitor {
                 continue;
             }
             self.errors.remove(&key);
+            if ar.channel_id.is_some() {
+                acct.channel_id = ar.channel_id.clone();
+            }
             let first = !acct.baselined;
             acct.baselined = true;
             let mut added = Vec::new();
@@ -546,6 +550,16 @@ impl PostsMonitor {
     }
 
     fn add_account(&mut self, site_id: SiteId, input: &str) {
+        if let Some((user, profile)) = super::model::tiktok_video_owner(input) {
+            let Some((exe, ua)) = self.cfg.site(site_id).map(|s| (s.exe_or_default().to_string(), super::model::checker_user_agent(s))) else { return };
+            self.notice(format!("Resolving @{user}…"));
+            let (tx, video) = (self.tx.clone(), input.trim().to_string());
+            tokio::spawn(async move {
+                let result = runner::resolve_channel_id(exe, ua, video).await;
+                let _ = tx.send(PostsMsg::ChannelResolved { site_id, user, profile, result });
+            });
+            return;
+        }
         let Some(account) = self.cfg.site(site_id).and_then(|s| s.account_from_input(input)) else {
             self.notice("Enter a new username or profile URL");
             return;
@@ -554,6 +568,43 @@ impl PostsMonitor {
         if let Some(site) = self.cfg.site_mut(site_id) {
             site.accounts.push(account);
         }
+        self.next_check.insert(site_id, Instant::now());
+        self.save_cfg();
+        self.emit_config();
+        self.emit_status();
+        self.notice(format!("Added @{name}"));
+    }
+
+    /// Adds the account a video URL belongs to, or stores the channel ID on the existing one.
+    fn on_channel_resolved(&mut self, site_id: SiteId, user: &str, profile: &str, result: Result<String, String>) {
+        let id = match result {
+            Ok(id) => id,
+            Err(e) => {
+                self.log(format!("Posts: could not resolve @{user}: {e}"));
+                self.notice("Account ID resolution failed. Check that the video URL is public and try again.");
+                return;
+            }
+        };
+        let Some(site) = self.cfg.site_mut(site_id) else { return };
+        if let Some(acct) = site.accounts.iter_mut().find(|a| a.name.eq_ignore_ascii_case(user)) {
+            acct.channel_id = Some(id);
+            acct.enabled = true;
+            let name = acct.name.clone();
+            self.errors.remove(&(site_id, name.clone()));
+            self.next_check.insert(site_id, Instant::now());
+            self.save_cfg();
+            self.emit_config();
+            self.emit_status();
+            self.notice(format!("Updated @{name}"));
+            return;
+        }
+        let Some(mut account) = site.account_from_input(profile) else {
+            self.notice("Enter a new username or profile URL");
+            return;
+        };
+        account.channel_id = Some(id);
+        let name = account.name.clone();
+        site.accounts.push(account);
         self.next_check.insert(site_id, Instant::now());
         self.save_cfg();
         self.emit_config();

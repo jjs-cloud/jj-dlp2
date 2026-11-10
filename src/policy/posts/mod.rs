@@ -100,4 +100,5 @@ pub(crate) enum PostsMsg {
     Downloaded(String, DownloadOutcome),
     Stream { id: String, result: Result<String, String> },
     Notified(Vec<String>),
+    ChannelResolved { site_id: SiteId, user: String, profile: String, result: Result<String, String> },
 }

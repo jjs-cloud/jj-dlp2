@@ -2212,7 +2212,7 @@ impl App {
         .align_y(Alignment::End);
 
         let upgrade_quality = toggler(d.upgrade_quality)
-            .label("Upgrade Quality (restart the recording once if the stream offers a higher quality)")
+            .label("Upgrade quality when available")
             .on_toggle(move |v| Msg::Draft(id, DraftField::UpgradeQuality(v)))
             .text_size(12);
 

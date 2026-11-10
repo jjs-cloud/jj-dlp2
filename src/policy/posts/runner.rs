@@ -35,6 +35,8 @@ pub struct AccountReport {
     /// Ids of X posts that have no video.
     pub no_video: Vec<String>,
     pub error: Option<String>,
+    /// A TikTok channel ID that is new or changed, to be stored on the account.
+    pub channel_id: Option<String>,
     /// Log lines for posts whose details needed an extra yt-dlp call.
     pub lookups: Vec<String>,
 }
@@ -111,6 +113,21 @@ async fn run(exe: &str, args: &[String], limit: Duration, log: &CmdLog) -> Resul
     }
 }
 
+/// Looks up the channel ID of the TikTok account that posted the video at `url`.
+pub async fn resolve_channel_id(exe: String, user_agent: Option<String>, url: String) -> Result<String, String> {
+    let mut args = vec!["--no-warnings".to_string()];
+    args.extend(user_agent.into_iter().flat_map(|ua| ["--user-agent".to_string(), ua]));
+    args.extend(["--no-playlist", "--print", "channel_id"].map(String::from));
+    args.push(url);
+    let log = CmdLog::new(false, false, |_| PathBuf::new());
+    let out = run(&exe, &args, INFO_TIMEOUT, &log).await?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    match stdout.lines().map(str::trim).find(|l| !l.is_empty() && *l != "NA") {
+        Some(id) => Ok(id.to_string()),
+        None => Err(error_line(&String::from_utf8_lossy(&out.stderr)).unwrap_or_else(|| "no channel ID was returned".into())),
+    }
+}
+
 /// Checks every enabled account of the given sites once, sequentially.
 pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>, no_video: HashSet<String>) -> CycleReport {
     let mut accounts = Vec::new();
@@ -128,13 +145,24 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>,
     if let Some(user) = site.use_x_scraper.then(|| xprofile::profile_user(&acct.url)).flatten() {
         return check_x_account(site, acct, &user, known, no_video).await;
     }
-    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e), lookups: Vec::new() };
-    let out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT, &checker_log(site, acct)).await {
+    let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e), channel_id: None, lookups: Vec::new() };
+    let log = checker_log(site, acct);
+    let mut out = match run(site.exe_or_default(), &checker_cmd(site, &acct.url), LIST_TIMEOUT, &log).await {
         Ok(o) => o,
         Err(e) => return fail(e),
     };
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let entries: Vec<Entry> = stdout.lines().filter_map(parse_entry).collect();
+    let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut entries: Vec<Entry> = stdout.lines().filter_map(parse_entry).collect();
+    if entries.is_empty() && String::from_utf8_lossy(&out.stderr).contains(ID_ERROR_MARKER) {
+        let Some(id) = acct.channel_id.as_deref() else { return fail(ID_RESOLUTION_FAILED.into()) };
+        out = match run(site.exe_or_default(), &checker_cmd(site, &format!("tiktokuser:{id}")), LIST_TIMEOUT, &log).await {
+            Ok(o) => o,
+            Err(e) => return fail(e),
+        };
+        stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        entries = stdout.lines().filter_map(parse_entry).collect();
+    }
+    let channel_id = if acct.is_tiktok() { stdout.lines().find_map(channel_id_of).filter(|id| acct.channel_id.as_deref() != Some(id)) } else { None };
     if entries.is_empty() && !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return fail(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {}", out.status)));
@@ -145,12 +173,12 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>,
         new_posts.push(post);
         lookups.extend(lookup);
     }
-    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, no_video: Vec::new(), error: None, lookups }
+    AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, no_video: Vec::new(), error: None, channel_id, lookups }
 }
 
 /// Checks an X account: lists its recent posts from the profile page and keeps those yt-dlp finds a video in.
 async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
-    let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None, lookups: Vec::new() };
+    let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None, channel_id: None, lookups: Vec::new() };
     let html = match xprofile::fetch_profile(acct.url.clone(), site.user_agent()).await {
         Ok(h) => h,
         Err(e) => return AccountReport { error: Some(e), ..report },
