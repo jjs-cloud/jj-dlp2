@@ -125,7 +125,7 @@ pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>, no_vi
 }
 
 async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
-    if let Some(user) = xprofile::profile_user(&acct.url) {
+    if let Some(user) = site.use_x_scraper.then(|| xprofile::profile_user(&acct.url)).flatten() {
         return check_x_account(site, acct, &user, known, no_video).await;
     }
     let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e), lookups: Vec::new() };

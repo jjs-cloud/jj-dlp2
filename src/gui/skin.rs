@@ -433,6 +433,17 @@ pub fn input_required(s: Skin, invalid: bool) -> impl Fn(&Theme, text_input::Sta
     }
 }
 
+/// Dimmed, read-only look of a multi-line editor.
+pub fn editor_off(s: Skin) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style {
+    move |_, _| text_editor::Style {
+        background: Background::Color(with_alpha(s.bg, 0.35)),
+        border: Border { color: with_alpha(s.border, 0.5), width: 1.0, radius: Radius::from(s.radius * 0.6) },
+        placeholder: with_alpha(s.muted, 0.4),
+        value: with_alpha(s.muted, 0.6),
+        selection: with_alpha(s.muted, 0.2),
+    }
+}
+
 /// Multi-line editor style matching the text inputs.
 pub fn editor(s: Skin) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style {
     move |_, status| {

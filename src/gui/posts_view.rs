@@ -417,6 +417,7 @@ impl App {
 
         let toggles = column![
             toggle("Pause checking", d.paused, SiteField::Paused),
+            toggle("Use Twitter/X scraper", d.x_scraper, SiteField::XScraper),
             toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
             toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
             toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),
@@ -450,20 +451,10 @@ impl App {
         ]
         .spacing(8);
 
-        let args = |label: &'static str, hint: &'static str, content: &'a text_editor::Content, f: fn(Action) -> SiteField| -> Element<'a, Msg> {
-            column![
-                muted(&s, label),
-                editor(content)
-                    .placeholder(hint)
-                    .on_action(move |a| send(PostsMsg::Site(id, f(a))))
-                    .font(s.font)
-                    .size(13)
-                    .padding(8)
-                    .height(ARGS_BOX_H)
-                    .style(skin::editor(s)),
-            ]
-            .spacing(2)
-            .into()
+        let args = |label: &'static str, hint: &'static str, content: &'a text_editor::Content, f: fn(Action) -> SiteField, off: bool| -> Element<'a, Msg> {
+            let mut ed = editor(content).placeholder(if off { "" } else { hint }).font(s.font).size(13).padding(8).height(ARGS_BOX_H);
+            ed = if off { ed.style(skin::editor_off(s)) } else { ed.on_action(move |a| send(PostsMsg::Site(id, f(a)))).style(skin::editor(s)) };
+            column![muted(&s, label), ed].spacing(2).into()
         };
 
         let action = |label: &'static str, msg: Option<PostsMsg>, kind: BtnKind| -> Element<'a, Msg> {
@@ -500,8 +491,8 @@ impl App {
                 cleanup,
                 toggles,
                 stream,
-                args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker),
-                args("Downloader arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download),
+                args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker, d.x_scraper),
+                args("Downloader arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download, false),
                 actions,
             ]
             .spacing(10),

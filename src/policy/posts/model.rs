@@ -96,6 +96,8 @@ pub struct PostSite {
     pub interval_secs: Option<u64>,
     /// Blank uses `DEFAULT_CHECKER_ARGS`.
     pub checker_args: String,
+    /// Lists X/Twitter profiles from the profile page instead of the checker command.
+    pub use_x_scraper: bool,
     /// Blank uses `DEFAULT_DOWNLOAD_ARGS`.
     pub download_args: String,
     /// Profile URL pattern; `{username}` is replaced with the name typed when adding an account.
@@ -137,6 +139,7 @@ impl Default for PostSite {
             exe_path: String::new(),
             interval_secs: None,
             checker_args: String::new(),
+            use_x_scraper: false,
             download_args: String::new(),
             url_template: String::new(),
             output_dir: String::new(),
