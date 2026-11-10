@@ -186,6 +186,7 @@ pub struct SiteDraft {
     pub split_enabled: bool,
     pub split_minutes: String,
     pub auto_suffix: bool,
+    pub upgrade_quality: bool,
     pub paused: bool,
 }
 
@@ -233,6 +234,7 @@ impl SiteDraft {
             split_enabled: s.split_enabled,
             split_minutes: opt_text(s.split_minutes),
             auto_suffix: s.auto_suffix,
+            upgrade_quality: s.upgrade_quality,
             paused: s.paused,
         }
     }
@@ -282,6 +284,7 @@ impl SiteDraft {
             split_enabled: n.split_enabled,
             split_minutes: opt_text(n.split_minutes),
             auto_suffix: n.auto_suffix,
+            upgrade_quality: n.upgrade_quality,
             paused: n.paused,
         }
     }
@@ -418,6 +421,7 @@ impl SiteDraft {
             split_enabled: self.split_enabled,
             split_minutes: self.split_minutes()?,
             auto_suffix: self.auto_suffix,
+            upgrade_quality: self.upgrade_quality,
             paused: self.paused,
         })
     }
@@ -480,6 +484,7 @@ pub enum DraftField {
     SplitEnabled(bool),
     SplitMinutes(String),
     AutoSuffix(bool),
+    UpgradeQuality(bool),
 }
 
 /// A single field edited in a streamer's settings panel.
@@ -488,6 +493,7 @@ pub enum StreamerField {
     FolderLayout(Option<FolderLayout>),
     Notify(Option<bool>),
     AutoSuffix(Option<bool>),
+    UpgradeQuality(Option<bool>),
     Split(Option<bool>),
     SplitMinutes(String),
     IntroEnabled(bool),
@@ -543,6 +549,7 @@ pub struct StreamerDraft {
     pub folder_layout: Option<FolderLayout>,
     pub notify: Option<bool>,
     pub auto_suffix: Option<bool>,
+    pub upgrade_quality: Option<bool>,
     pub split: Option<bool>,
     pub split_minutes: String,
     pub intro_enabled: bool,
@@ -569,6 +576,7 @@ impl StreamerDraft {
             folder_layout: o.folder_layout,
             notify: o.notify,
             auto_suffix: o.auto_suffix,
+            upgrade_quality: o.upgrade_quality,
             split: o.split,
             split_minutes: opt_text(o.split_minutes),
             intro_enabled: o.intro_delay_enabled,
@@ -585,6 +593,7 @@ impl StreamerDraft {
             folder_layout: self.folder_layout,
             notify: self.notify,
             auto_suffix: self.auto_suffix,
+            upgrade_quality: self.upgrade_quality,
             split: self.split,
             split_minutes: self.split_minutes.trim().parse().ok().filter(|m| *m > 0),
             intro_delay_enabled: self.intro_enabled,
@@ -822,7 +831,7 @@ pub struct App {
     warnings: HashMap<StreamerId, Warnings>,
     live_since: HashMap<StreamerId, u64>,
     last_live: HashMap<StreamerId, u64>,
-    resolutions: HashMap<StreamerId, (u32, u32)>,
+    resolutions: HashMap<StreamerId, Quality>,
     checks: HashMap<SiteId, CheckInfo>,
     issues: HashMap<StreamerId, String>,
     notices: Vec<Notice>,
@@ -1017,6 +1026,7 @@ impl App {
             StreamerField::FolderLayout(v) => d.folder_layout = v,
             StreamerField::Notify(v) => d.notify = v,
             StreamerField::AutoSuffix(v) => d.auto_suffix = v,
+            StreamerField::UpgradeQuality(v) => d.upgrade_quality = v,
             StreamerField::Split(v) => {
                 d.split = v;
                 if v != Some(true) {
@@ -1364,6 +1374,7 @@ impl App {
                             d.split_minutes = v;
                         }
                         DraftField::AutoSuffix(v) => d.auto_suffix = v,
+                        DraftField::UpgradeQuality(v) => d.upgrade_quality = v,
                     }
                 }
             }

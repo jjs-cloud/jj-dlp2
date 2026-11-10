@@ -176,6 +176,9 @@ pub struct Site {
     pub auto_suffix: bool,
     /// Skip checks for this site's streamers; recordings already running continue.
     pub paused: bool,
+    /// Restart a recording once per live span when the stream offers a higher quality than is being recorded.
+    #[serde(default)]
+    pub upgrade_quality: bool,
 }
 
 /// `text` trimmed, or `fallback` when it is blank.
@@ -283,6 +286,9 @@ pub struct StreamerOptions {
     /// Records even when the recording limit is reached; owned by the Priority tab.
     #[serde(default)]
     pub always_record: bool,
+    /// Overrides the site's upgrade-quality switch; `None` inherits it.
+    #[serde(default)]
+    pub upgrade_quality: Option<bool>,
 }
 
 /// Whether a schedule runs once or repeats weekly.
@@ -346,6 +352,11 @@ impl StreamerOptions {
     pub fn effective_auto_suffix(&self, site: &Site) -> bool {
         self.auto_suffix.unwrap_or(site.auto_suffix)
     }
+
+    /// Whether this streamer's recording is restarted when the stream offers a higher quality.
+    pub fn effective_upgrade_quality(&self, site: &Site) -> bool {
+        self.upgrade_quality.unwrap_or(site.upgrade_quality)
+    }
 }
 
 /// Notification and warning settings that apply to every site.
@@ -406,6 +417,41 @@ pub enum Command {
     Shutdown,
 }
 
+/// A video's resolution and frame rate; the frame rate is in thousandths of a frame per second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Quality {
+    pub width: u32,
+    pub height: u32,
+    pub fps_milli: Option<u32>,
+}
+
+impl Quality {
+    /// A quality from a frame rate in frames per second; an unusable rate becomes `None`.
+    pub fn new(width: u32, height: u32, fps: Option<f64>) -> Self {
+        let fps_milli = fps.filter(|f| f.is_finite() && *f > 0.0 && *f < 1000.0).map(|f| (f * 1000.0).round() as u32);
+        Self { width, height, fps_milli }
+    }
+
+    pub fn area(&self) -> u64 {
+        u64::from(self.width) * u64::from(self.height)
+    }
+
+    /// The frame rate rounded to whole frames per second.
+    pub fn fps_rounded(&self) -> Option<u32> {
+        self.fps_milli.map(|m| m.saturating_add(500) / 1000)
+    }
+}
+
+impl std::fmt::Display for Quality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)?;
+        match self.fps_rounded() {
+            Some(fps) => write!(f, "@{fps}"),
+            None => Ok(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StreamerStatus {
     pub live: bool,
@@ -414,6 +460,8 @@ pub struct StreamerStatus {
     pub last_checked: Option<u64>,
     /// The latest check could not be trusted for this streamer, so it can't prove the stream ended.
     pub check_failed: bool,
+    /// Quality of the stream's best format in the latest check; `None` when not live or not reported.
+    pub quality: Option<Quality>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,6 +596,7 @@ mod tests {
             split_minutes,
             auto_suffix: true,
             paused: false,
+            upgrade_quality: false,
         }
     }
 
@@ -605,17 +654,47 @@ mod tests {
     fn site_deserializes_without_the_newer_notification_fields() {
         let mut value = serde_json::to_value(site_with(false, None)).unwrap();
         let map = value.as_object_mut().unwrap();
-        for key in ["notify_interrupts", "notify_errors", "warn_stalled", "warn_restarts"] {
+        for key in ["notify_interrupts", "notify_errors", "warn_stalled", "warn_restarts", "upgrade_quality"] {
             map.remove(key);
         }
         let site: Site = serde_json::from_value(value).unwrap();
-        assert!(!site.notify_interrupts && !site.notify_errors && !site.warn_stalled && !site.warn_restarts);
+        assert!(!site.notify_interrupts && !site.notify_errors && !site.warn_stalled && !site.warn_restarts && !site.upgrade_quality);
     }
 
     #[test]
     fn global_notify_fills_missing_fields_with_defaults() {
         let g: GlobalNotify = serde_json::from_str("{}").unwrap();
         assert_eq!(g, GlobalNotify::default());
+    }
+
+    #[test]
+    fn upgrade_quality_follows_site_unless_overridden() {
+        let mut site = site_with(false, None);
+        assert!(!StreamerOptions::default().effective_upgrade_quality(&site));
+        site.upgrade_quality = true;
+        assert!(StreamerOptions::default().effective_upgrade_quality(&site));
+        let off = StreamerOptions { upgrade_quality: Some(false), ..Default::default() };
+        assert!(!off.effective_upgrade_quality(&site));
+        site.upgrade_quality = false;
+        let on = StreamerOptions { upgrade_quality: Some(true), ..Default::default() };
+        assert!(on.effective_upgrade_quality(&site));
+    }
+
+    #[test]
+    fn quality_rounds_and_prints_its_frame_rate() {
+        assert_eq!(Quality::new(1920, 1080, Some(60.039)).to_string(), "1920x1080@60");
+        assert_eq!(Quality::new(1280, 720, Some(29.97)).fps_rounded(), Some(30));
+        assert_eq!(Quality::new(640, 1280, None).to_string(), "640x1280");
+        assert_eq!(Quality::new(640, 1280, Some(0.0)).fps_milli, None);
+        assert_eq!(Quality::new(1920, 1080, None).area(), 2_073_600);
+    }
+
+    #[test]
+    fn streamer_options_deserializes_without_upgrade_quality() {
+        let mut value = serde_json::to_value(StreamerOptions::default()).unwrap();
+        value.as_object_mut().unwrap().remove("upgrade_quality");
+        let opts: StreamerOptions = serde_json::from_value(value).unwrap();
+        assert_eq!(opts.upgrade_quality, None);
     }
 
     #[test]

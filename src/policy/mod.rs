@@ -1,8 +1,8 @@
 //! Policy layer: owns the config files, applies edits, tells the engine to reload and decides when it records.
 
 use crate::api::{
-    now_secs, Command, Control, EngineClient, Event, FolderLayout, GlobalNotify, ProcessInfo, RecorderId, RecorderState, Settings, Site,
-    SiteId, Streamer, StreamerId, StreamerOptions, StreamerStatus, LOG_HISTORY_MAX,
+    now_secs, Command, Control, EngineClient, Event, FolderLayout, GlobalNotify, ProcessInfo, Quality, RecorderId, RecorderState, Settings,
+    Site, SiteId, Streamer, StreamerId, StreamerOptions, StreamerStatus, LOG_HISTORY_MAX,
 };
 use crate::engine::{logfile, EngineParts};
 use crate::settings;
@@ -25,6 +25,7 @@ mod outpath;
 pub mod posts;
 mod priority;
 mod probe;
+mod quality;
 mod restarts;
 mod schedule;
 mod segments;
@@ -37,6 +38,7 @@ pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
 use live::{LiveTracker, PartRecord};
 use notify::{Gate, Kind, LiveStatus, Message, Targets};
+use quality::QualityTracker;
 use restarts::RestartTracker;
 use segments::{Plan, Splitter, Step};
 use update::UpdateConfig;
@@ -91,6 +93,7 @@ pub struct NewSite {
     pub split_minutes: Option<u64>,
     pub auto_suffix: bool,
     pub paused: bool,
+    pub upgrade_quality: bool,
 }
 
 impl NewSite {
@@ -139,6 +142,7 @@ impl NewSite {
             split_minutes: self.split_minutes,
             auto_suffix: self.auto_suffix,
             paused: self.paused,
+            upgrade_quality: self.upgrade_quality,
         }
     }
 }
@@ -208,8 +212,8 @@ pub enum PolicyEvent {
     LastLive(HashMap<StreamerId, u64>),
     /// File state of every active recording; sent whenever it changes.
     RecordingFiles(HashMap<RecorderId, RecordingFile>),
-    /// A streamer's recording resolution as (width, height); `None` once it has no recording.
-    Resolution(StreamerId, Option<(u32, u32)>),
+    /// A streamer's recording resolution and frame rate; `None` once it has no recording.
+    Resolution(StreamerId, Option<Quality>),
     /// Streamer id to its restart count; streamers with none are absent.
     Restarts(HashMap<StreamerId, u32>),
     /// Streamer id to its interrupt and error counts; streamers with none are absent.
@@ -243,6 +247,12 @@ enum UpdateMsg {
 struct FileJob {
     id: RecorderId,
     result: files::JobResult,
+}
+
+/// Result of an ffprobe run on a streamer's recording, fed back into the policy loop.
+struct ProbeMsg {
+    streamer_id: StreamerId,
+    result: Result<Quality, probe::ProbeError>,
 }
 
 /// Result of the startup Twitch GQL lookup, with the streamers it was run for.
@@ -337,6 +347,10 @@ struct Policy {
     evicting: HashSet<StreamerId>,
     /// Names of the streamers evicted for a held live notification, by the streamer it is for.
     evicted_notes: HashMap<StreamerId, Vec<String>>,
+    /// Arms against each recording's probed quality and finds higher qualities worth restarting for.
+    quality: QualityTracker,
+    probe_tx: UnboundedSender<ProbeMsg>,
+    probe_rx: Option<UnboundedReceiver<ProbeMsg>>,
     posts: posts::PostsMonitor,
 }
 
@@ -364,6 +378,7 @@ impl Policy {
         let live = LiveTracker::load(&settings, now_secs());
         let mut posts = posts::PostsMonitor::new(events.clone(), posts_tx, settings.default_output_dir.clone());
         posts.set_global_notify(&settings.notifications);
+        let (probe_tx, probe_rx) = mpsc::unbounded_channel();
         Self {
             settings,
             live,
@@ -391,6 +406,9 @@ impl Policy {
             override_part: HashMap::new(),
             evicting: HashSet::new(),
             evicted_notes: HashMap::new(),
+            quality: QualityTracker::default(),
+            probe_tx,
+            probe_rx: Some(probe_rx),
             posts,
         }
     }
@@ -416,6 +434,7 @@ impl Policy {
         schedule_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut posts_tick = tokio::time::interval(POSTS_TICK_EVERY);
         posts_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut probe_msgs = self.probe_rx.take().expect("probe receiver");
         self.emit(PolicyEvent::LogHistory(uilog::tail(LOG_HISTORY_MAX)));
         self.log(format!("--- session started (v{}) ---", update::CURRENT));
         for line in crate::resets::take_log() {
@@ -459,6 +478,7 @@ impl Policy {
                 _ = delay_tick.tick() => {
                     self.release_due_delays();
                     self.split_tick();
+                    self.quality_tick();
                 }
                 msg = update_msgs.recv() => {
                     if let Some(m) = msg {
@@ -478,6 +498,11 @@ impl Policy {
                 msg = posts_msgs.recv() => {
                     if let Some(m) = msg {
                         self.posts.on_msg(m);
+                    }
+                }
+                msg = probe_msgs.recv() => {
+                    if let Some(m) = msg {
+                        self.on_probe(m);
                     }
                 }
             }
@@ -501,6 +526,12 @@ impl Policy {
         match &ev {
             Event::StreamerStatus { id, status } => {
                 self.statuses.insert(*id, *status);
+                self.quality.on_check(*id, status.quality);
+                self.quality.on_recording(*id, status.recording);
+                if status.live && status.quality.is_none() && self.upgrade_on(*id) && self.quality.first_missing_quality(*id) {
+                    let name = self.streamer_name(*id);
+                    self.log(format!("{name}: quality upgrade inactive: the checker output has no video resolution"));
+                }
                 self.live.streamer_checked(*id, !status.check_failed);
                 if let (Some(at), Some((_, secs))) = (status.last_checked, live::lookup(&self.settings, *id)) {
                     let first = self.gate.first_check(*id);
@@ -522,9 +553,11 @@ impl Policy {
                 if !status.live && !status.recording {
                     self.gate.take_held(*id);
                     self.warnings.end_span(*id);
+                    self.quality.end_span(*id);
                 }
                 self.on_restart_status(*id, status.recording);
                 self.reconcile(*id);
+                self.maybe_upgrade(*id);
             }
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
@@ -804,25 +837,77 @@ impl Policy {
         self.emit_files();
     }
 
-    /// Runs ffprobe on the recording's file in the background and reports its resolution.
+    /// Runs ffprobe on the recording's file in the background and feeds its quality back to the policy loop.
     fn probe_resolution(&self, id: RecorderId, streamer_id: StreamerId) {
         let Some(path) = self.files.trusted_path(id).map(Path::to_path_buf) else { return };
-        let name = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.name.clone()).unwrap_or_default();
-        let tx = self.events.clone();
+        let tx = self.probe_tx.clone();
         tokio::spawn(async move {
-            let ev = match probe::resolution(&path).await {
-                Ok(size) => PolicyEvent::Resolution(streamer_id, Some(size)),
-                Err(e) => {
-                    let msg = match e {
-                        probe::ProbeError::NotFound => format!("{name}: ffprobe not found in PATH; resolution not shown"),
-                        probe::ProbeError::Failed(why) => format!("{name}: ffprobe could not read the resolution: {why}"),
-                    };
-                    uilog::append(&msg);
-                    PolicyEvent::Log(msg)
-                }
-            };
-            let _ = tx.send(ev);
+            let result = probe::quality(&path).await;
+            let _ = tx.send(ProbeMsg { streamer_id, result });
         });
+    }
+
+    /// Shows a probed recording's quality or logs the probe failure, and feeds the upgrade tracker.
+    fn on_probe(&mut self, m: ProbeMsg) {
+        let ProbeMsg { streamer_id, result } = m;
+        match result {
+            Ok(q) => {
+                self.emit(PolicyEvent::Resolution(streamer_id, Some(q)));
+                self.quality.on_probe(streamer_id, q, Instant::now());
+                self.maybe_upgrade(streamer_id);
+            }
+            Err(e) => {
+                let name = self.streamer_name(streamer_id);
+                if self.upgrade_on(streamer_id) && self.quality.first_probe_failure(streamer_id) {
+                    self.log(format!("{name}: quality upgrade inactive: ffprobe could not read the recording"));
+                }
+                self.log(match e {
+                    probe::ProbeError::NotFound => format!("{name}: ffprobe not found in PATH; resolution not shown"),
+                    probe::ProbeError::Failed(why) => format!("{name}: ffprobe could not read the resolution: {why}"),
+                });
+            }
+        }
+    }
+
+    /// True when upgrade-quality is on for the streamer, by its own setting or its site's.
+    fn upgrade_on(&self, id: StreamerId) -> bool {
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return false };
+        self.site_of(id).is_some_and(|site| streamer.options.effective_upgrade_quality(site))
+    }
+
+    /// Restarts a recording once per live span when the stream now offers a higher quality than is being recorded.
+    fn maybe_upgrade(&mut self, id: StreamerId) {
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { return };
+        let on = self.upgrade_on(id);
+        let recording = self.statuses.get(&id).is_some_and(|s| s.recording);
+        if !on || !recording || self.live.upgraded(id) || self.decision_for(&streamer) != Decision::Record {
+            return;
+        }
+        let Some(up) = self.quality.upgrade(id) else { return };
+        self.live.mark_upgraded(id);
+        self.log(format!("{}: upgrading quality {} -> {}; restarting the recording", streamer.name, up.from, up.to));
+        self.restarts.stopping(id);
+        self.splitter.cancel(id);
+        self.engine.send(Command::StopRecording { id });
+        self.flush_live();
+    }
+
+    /// Logs once for each streamer whose quality check is still unarmed after its window.
+    fn quality_tick(&mut self) {
+        let on: HashSet<StreamerId> = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|s| self.settings.sites.iter().any(|x| x.id == s.site_id && s.options.effective_upgrade_quality(x)))
+            .map(|s| s.id)
+            .collect();
+        for u in self.quality.unarmed(Instant::now(), |id| on.contains(&id)) {
+            let name = self.streamer_name(u.id);
+            self.log(format!(
+                "{name}: quality upgrade not armed: the stream reports {} but the recording is {}",
+                u.stream, u.recording
+            ));
+        }
     }
 
     /// The absolute folder a streamer's recordings are written to.
@@ -1646,6 +1731,7 @@ mod tests {
             split_minutes: None,
             auto_suffix: true,
             paused: false,
+            upgrade_quality: false,
         }
     }
 
@@ -1745,6 +1831,7 @@ mod e2e {
                 split_minutes: None,
                 auto_suffix: true,
                 paused: false,
+                upgrade_quality: false,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };
@@ -1789,7 +1876,7 @@ mod e2e {
     }
 
     fn live_status(p: &mut Policy, recording: bool, checked: u64) {
-        let status = StreamerStatus { live: true, recording, last_checked: Some(checked), check_failed: false };
+        let status = StreamerStatus { live: true, recording, last_checked: Some(checked), check_failed: false, quality: None };
         p.on_engine_event(Event::StreamerStatus { id: 2, status });
     }
 
@@ -1844,7 +1931,7 @@ mod e2e {
     }
 
     fn set_status(p: &mut Policy, id: StreamerId, live: bool, recording: bool) {
-        let status = StreamerStatus { live, recording, last_checked: Some(now_secs()), check_failed: false };
+        let status = StreamerStatus { live, recording, last_checked: Some(now_secs()), check_failed: false, quality: None };
         p.on_engine_event(Event::StreamerStatus { id, status });
     }
 
@@ -1939,6 +2026,69 @@ mod e2e {
         live_status(&mut p, false, now + 1);
         let cmds = sent(&mut rx);
         assert!(matches!(cmds.as_slice(), [Command::StartRecording { id: 2 }, Command::StartRecording { id: 2 }]), "{cmds:?}");
+    }
+
+    fn quality_status(p: &mut Policy, recording: bool, checked: u64, quality: Quality) {
+        let status = StreamerStatus { live: true, recording, last_checked: Some(checked), check_failed: false, quality: Some(quality) };
+        p.on_engine_event(Event::StreamerStatus { id: 2, status });
+    }
+
+    fn probed(p: &mut Policy, quality: Quality) {
+        p.on_probe(ProbeMsg { streamer_id: 2, result: Ok(quality) });
+    }
+
+    /// Runs a live stream offering `first`, a recording probed at `probe`, then a check offering `later`; true when the recording is stopped.
+    fn upgrade_stops(options: StreamerOptions, first: Quality, probe: Quality, later: Quality) -> bool {
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, options, true);
+        let now = now_secs();
+        quality_status(&mut p, false, now, first);
+        quality_status(&mut p, true, now + 1, first);
+        probed(&mut p, probe);
+        quality_status(&mut p, true, now + 2, later);
+        sent(&mut rx).iter().any(|c| matches!(c, Command::StopRecording { id: 2 }))
+    }
+
+    #[test]
+    fn armed_recording_restarts_once_into_the_next_part_when_the_stream_offers_more() {
+        let _sb = Sandbox::new("policy-upgrade-quality");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions { upgrade_quality: Some(true), ..Default::default() }, true);
+        let (low, high) = (Quality::new(1280, 720, None), Quality::new(1920, 1080, None));
+        let now = now_secs();
+        quality_status(&mut p, false, now, low);
+        quality_status(&mut p, true, now + 1, low);
+        probed(&mut p, low);
+        sent(&mut rx);
+        quality_status(&mut p, true, now + 2, high);
+        let cmds = sent(&mut rx);
+        assert!(cmds.iter().any(|c| matches!(c, Command::StopRecording { id: 2 })), "{cmds:?}");
+        assert!(p.live.upgraded(2));
+        quality_status(&mut p, false, now + 3, high);
+        let cmds = sent(&mut rx);
+        assert!(
+            matches!(cmds.as_slice(), [Command::SetRecorderOverride { streamer_id: 2, args: Some(a) }, Command::StartRecording { id: 2 }] if a.contains("_part2")),
+            "{cmds:?}"
+        );
+        quality_status(&mut p, true, now + 4, high);
+        probed(&mut p, low);
+        quality_status(&mut p, true, now + 5, high);
+        assert!(!sent(&mut rx).iter().any(|c| matches!(c, Command::StopRecording { .. })));
+    }
+
+    #[test]
+    fn site_setting_applies_unless_the_streamer_overrides_it() {
+        let _sb = Sandbox::new("policy-upgrade-inherit");
+        let (low, high) = (Quality::new(1280, 720, None), Quality::new(1920, 1080, None));
+        assert!(upgrade_stops(StreamerOptions::default(), low, low, high));
+        assert!(!upgrade_stops(StreamerOptions { upgrade_quality: Some(false), ..Default::default() }, low, low, high));
+    }
+
+    #[test]
+    fn unarmed_recording_is_never_restarted() {
+        let _sb = Sandbox::new("policy-upgrade-unarmed");
+        let (low, high, higher) = (Quality::new(1280, 720, None), Quality::new(1920, 1080, None), Quality::new(2560, 1440, None));
+        assert!(!upgrade_stops(StreamerOptions::default(), high, low, higher));
     }
 
     #[test]

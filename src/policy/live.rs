@@ -16,6 +16,8 @@ struct LiveFile {
     gql_checked_at: Option<u64>,
     /// Each streamer's current recording part within its live span.
     parts: HashMap<StreamerId, PartRecord>,
+    /// Start of the live span each streamer's quality was upgraded in.
+    upgraded: HashMap<StreamerId, u64>,
 }
 
 /// Where a streamer is in its `_partN` numbering during one live span.
@@ -35,6 +37,7 @@ pub struct LiveTracker {
     last_live: HashMap<StreamerId, u64>,
     gql_checked_at: Option<u64>,
     parts: HashMap<StreamerId, PartRecord>,
+    upgraded: HashMap<StreamerId, u64>,
     seen_check: HashMap<StreamerId, u64>,
     check_failed: HashSet<StreamerId>,
     dirty: bool,
@@ -52,14 +55,15 @@ pub fn lookup(settings: &Settings, id: StreamerId) -> Option<(SiteId, u64)> {
 impl LiveTracker {
     /// Loads live.json, dropping unknown streamers and spans already past their end-after window.
     pub fn load(settings: &Settings, now: u64) -> Self {
-        let LiveFile { mut spans, mut last_live, gql_checked_at, mut parts } = read();
+        let LiveFile { mut spans, mut last_live, gql_checked_at, mut parts, mut upgraded } = read();
         spans.retain(|id, _| {
             lookup(settings, *id)
                 .is_some_and(|(_, secs)| last_live.get(id).is_some_and(|l| now.saturating_sub(*l) < secs))
         });
         last_live.retain(|id, _| lookup(settings, *id).is_some());
         parts.retain(|id, p| spans.get(id) == Some(&p.span));
-        Self { spans, last_live, gql_checked_at, parts, ..Default::default() }
+        upgraded.retain(|id, span| spans.get(id) == Some(span));
+        Self { spans, last_live, gql_checked_at, parts, upgraded, ..Default::default() }
     }
 
     /// Keeps only the streamers the predicate accepts.
@@ -68,6 +72,7 @@ impl LiveTracker {
         self.spans.retain(|id, _| keep(*id));
         self.last_live.retain(|id, _| keep(*id));
         self.parts.retain(|id, _| keep(*id));
+        self.upgraded.retain(|id, _| keep(*id));
         self.check_failed.retain(|id| keep(*id));
         if self.spans.len() != spans {
             self.dirty = true;
@@ -111,6 +116,7 @@ impl LiveTracker {
             if checked.saturating_sub(last) >= end_after_secs {
                 self.spans.remove(&id);
                 self.parts.remove(&id);
+                self.upgraded.remove(&id);
                 self.dirty = true;
                 self.span_changed = true;
             }
@@ -173,6 +179,19 @@ impl LiveTracker {
         }
     }
 
+    /// True when the streamer's current live span has already had its quality upgrade.
+    pub fn upgraded(&self, id: StreamerId) -> bool {
+        self.spans.get(&id).is_some_and(|span| self.upgraded.get(&id) == Some(span))
+    }
+
+    /// Marks the streamer's current live span as upgraded.
+    pub fn mark_upgraded(&mut self, id: StreamerId) {
+        if let Some(span) = self.spans.get(&id).copied() {
+            self.upgraded.insert(id, span);
+            self.dirty = true;
+        }
+    }
+
     /// Streamer id to the time it was most recently seen live.
     pub fn last_live(&self) -> HashMap<StreamerId, u64> {
         self.last_live.clone()
@@ -203,6 +222,7 @@ impl LiveTracker {
             last_live: self.last_live.clone(),
             gql_checked_at: self.gql_checked_at,
             parts: self.parts.clone(),
+            upgraded: self.upgraded.clone(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
         std::fs::write(&tmp, json)?;
@@ -343,6 +363,28 @@ mod tests {
         t.status(1, 500, true, END);
         t.set_part(1, PartRecord { span: 100, part: 3, file: None });
         assert!(t.part(1).is_none());
+    }
+
+    #[test]
+    fn upgrade_flag_lasts_for_one_span() {
+        let mut t = LiveTracker::default();
+        t.mark_upgraded(1);
+        assert!(!t.upgraded(1));
+        t.status(1, 100, true, END);
+        t.take_dirty();
+        t.mark_upgraded(1);
+        assert!(t.upgraded(1) && t.take_dirty());
+        t.status(1, 160, false, END);
+        t.status(1, 100 + END, false, END);
+        t.status(1, 100 + END + 60, true, END);
+        assert!(!t.upgraded(1));
+    }
+
+    #[test]
+    fn live_file_without_the_upgrade_map_loads() {
+        let file: LiveFile = serde_json::from_str(r#"{"spans":{"1":100}}"#).unwrap();
+        assert!(file.upgraded.is_empty());
+        assert_eq!(file.spans.get(&1), Some(&100));
     }
 
     #[test]

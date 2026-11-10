@@ -544,6 +544,7 @@ impl Engine {
                 recording: self.recording(id),
                 last_checked: st.and_then(|s| s.last_checked),
                 check_failed: st.is_some_and(|s| s.check_failed),
+                quality: st.filter(|s| s.live).and_then(|s| s.entry.as_ref()).and_then(|e| e.quality),
             },
         });
     }
@@ -689,6 +690,7 @@ mod e2e {
                 split_minutes: None,
                 auto_suffix: true,
                 paused: false,
+                upgrade_quality: false,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -864,6 +866,7 @@ mod e2e {
                 split_minutes: None,
                 auto_suffix: true,
                 paused: false,
+                upgrade_quality: false,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };

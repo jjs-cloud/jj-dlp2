@@ -1,7 +1,7 @@
 //! Per-site checker: runs yt-dlp for all of a site's URLs and detects live streams.
 
 use super::{diagnose, exepath, hide_window, logfile, template, Internal};
-use crate::api::{now_secs, CheckOutput, Site};
+use crate::api::{now_secs, CheckOutput, Quality, Site};
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -23,6 +23,8 @@ pub struct SiteSnapshot {
 pub struct LiveEntry {
     pub candidates: Vec<String>,
     pub webpage_url: String,
+    /// Resolution and frame rate of the format yt-dlp would record; `None` when the output has none.
+    pub quality: Option<Quality>,
 }
 
 impl LiveEntry {
@@ -133,7 +135,24 @@ fn parse_json_line(line: &str) -> Option<LiveEntry> {
     Some(LiveEntry {
         candidates: vec![get("original_url"), webpage_url.clone(), get("channel_url"), get("uploader_url")],
         webpage_url,
+        quality: json_quality(&v),
     })
+}
+
+/// The selected format's resolution and frame rate: `width`/`height`, else the `resolution` text.
+fn json_quality(v: &Value) -> Option<Quality> {
+    let num = |k: &str| v.get(k).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+    let (w, h) = match (num("width"), num("height")) {
+        (Some(w), Some(h)) => (w, h),
+        _ => parse_resolution(v.get("resolution")?.as_str()?)?,
+    };
+    (w > 0 && h > 0).then(|| Quality::new(w, h, v.get("fps").and_then(Value::as_f64)))
+}
+
+/// Parses `WIDTHxHEIGHT`.
+fn parse_resolution(text: &str) -> Option<(u32, u32)> {
+    let (w, h) = text.trim().split_once('x')?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
 
 /// Expects `original_url|webpage_url`.
@@ -147,6 +166,7 @@ fn parse_simulate_line(line: &str) -> Option<LiveEntry> {
     Some(LiveEntry {
         candidates: vec![original.to_string(), webpage.to_string()],
         webpage_url: webpage.to_string(),
+        quality: None,
     })
 }
 
@@ -206,6 +226,26 @@ mod tests {
         let e = parse_json_line(l).unwrap();
         assert!(e.matches("https://www.youtube.com/@foo/live"));
         assert!(parse_json_line(r#"{"id":"x","is_live":false}"#).is_none());
+    }
+
+    #[test]
+    fn reads_quality_from_width_and_height() {
+        let l = r#"{"is_live":true,"webpage_url":"https://kick.com/k","width":1920,"height":1080,"fps":60.039,"resolution":"1920x1080"}"#;
+        assert_eq!(parse_json_line(l).unwrap().quality, Some(Quality::new(1920, 1080, Some(60.039))));
+    }
+
+    #[test]
+    fn reads_quality_from_the_resolution_text_without_fps() {
+        let l = r#"{"is_live":true,"webpage_url":"https://tiktok.com/@a/live","resolution":"640x1280"}"#;
+        assert_eq!(parse_json_line(l).unwrap().quality, Some(Quality::new(640, 1280, None)));
+    }
+
+    #[test]
+    fn no_quality_without_a_usable_resolution() {
+        let audio = r#"{"is_live":true,"webpage_url":"https://x.test/a","resolution":"audio only"}"#;
+        assert_eq!(parse_json_line(audio).unwrap().quality, None);
+        let bare = r#"{"is_live":true,"webpage_url":"https://x.test/a"}"#;
+        assert_eq!(parse_json_line(bare).unwrap().quality, None);
     }
 
     #[test]

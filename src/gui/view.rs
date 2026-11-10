@@ -909,8 +909,9 @@ impl App {
             name_el,
             {
                 let mut times = Row::new().spacing(4).align_y(Alignment::Center);
-                if let Some(&(w, h)) = self.resolutions.get(&id) {
-                    times = times.push(iced::widget::text(format!("{}p ", w.min(h))).font(s.font).size(m.info).color(s.muted).wrapping(Wrapping::None));
+                if let Some(q) = self.resolutions.get(&id) {
+                    let fps = q.fps_rounded().map(|f| f.to_string()).unwrap_or_default();
+                    times = times.push(iced::widget::text(format!("{}p{fps} ", q.width.min(q.height))).font(s.font).size(m.info).color(s.muted).wrapping(Wrapping::None));
                 }
                 times.push(iced::widget::text(time_text).font(s.font).size(m.info).color(time_color).wrapping(Wrapping::None))
             },
@@ -1384,8 +1385,9 @@ impl App {
                             .size(15)
                             .color(if st.enabled { s.text } else { s.muted }),
                     );
-                    if let Some(&(w, h)) = self.resolutions.get(&id) {
-                        name = name.push(muted(&s, format!("{w} x {h}")));
+                    if let Some(q) = self.resolutions.get(&id) {
+                        let fps = q.fps_rounded().map(|f| format!(" · {f} fps")).unwrap_or_default();
+                        name = name.push(muted(&s, format!("{} x {}{fps}", q.width, q.height)));
                     }
                     if let Some(d) = self.live_for(id, status) {
                         name = name.push(muted(&s, format!("live for {}", fmt_dur(d))));
@@ -1488,6 +1490,7 @@ impl App {
         let path = layout::preview(base, effective_layout, site.map_or("", |x| x.name.as_str()), Some(&st.name));
         let site_notify = site.is_some_and(|x| x.notify);
         let site_suffix = site.is_some_and(|x| x.auto_suffix);
+        let site_upgrade = site.is_some_and(|x| x.upgrade_quality);
 
         let top = row![
             cell(
@@ -1551,6 +1554,18 @@ impl App {
                 labeled(
                     "Name restarted recordings _partN",
                     inherit_pick(site_suffix, d.auto_suffix, StreamerField::AutoSuffix).into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(Space::new().into(), Length::FillPortion(2)),
+        ]
+        .spacing(8);
+
+        let upgrade_row = row![
+            cell(
+                labeled(
+                    "Upgrade Quality",
+                    inherit_pick(site_upgrade, d.upgrade_quality, StreamerField::UpgradeQuality).into()
                 ),
                 Length::FillPortion(1)
             ),
@@ -1625,6 +1640,7 @@ impl App {
             intro_delay,
             schedule,
             suffix_row,
+            upgrade_row,
             actions,
         ]
         .spacing(6)
@@ -2181,6 +2197,11 @@ impl App {
         .spacing(24)
         .align_y(Alignment::End);
 
+        let upgrade_quality = toggler(d.upgrade_quality)
+            .label("Upgrade Quality (restart the recording once if the stream offers a higher quality)")
+            .on_toggle(move |v| Msg::Draft(id, DraftField::UpgradeQuality(v)))
+            .text_size(12);
+
         let swatch = if d.use_theme_color { s.accent2 } else { skin::parse_hex(&d.color).unwrap_or(s.muted) };
         let mut color_row: Row<'a, Msg> = row![
             muted(&s, "Site color"),
@@ -2341,6 +2362,7 @@ impl App {
         let form = form
             .push(timing)
             .push(splitting)
+            .push(upgrade_quality)
             .push(color_row)
             .push(templates)
             .push(recorder_col)

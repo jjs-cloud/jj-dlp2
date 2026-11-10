@@ -119,6 +119,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         split_minutes: None,
         auto_suffix: true,
         paused: false,
+        upgrade_quality: !matches!(preset, Preset::Tiktok),
     }
 }
 
@@ -148,6 +149,14 @@ mod tests {
         for preset in [Preset::Twitch, Preset::Kick, Preset::Blank] {
             assert!(new_site(preset).forward_output);
         }
+    }
+
+    #[test]
+    fn upgrade_quality_defaults_on_except_for_tiktok() {
+        for preset in [Preset::Twitch, Preset::Chaturbate, Preset::Kick, Preset::Youtube, Preset::Blank] {
+            assert!(new_site(preset).upgrade_quality);
+        }
+        assert!(!new_site(Preset::Tiktok).upgrade_quality);
     }
 
     #[test]
