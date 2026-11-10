@@ -597,7 +597,7 @@ impl Engine {
             log_stdout: log_path(streamer.options.log_stdout, "stdout"),
             log_stderr: log_path(streamer.options.log_stderr, "stderr"),
             internal: self.internal_tx.clone(),
-            forward_output: site.forward_output,
+            forward_output: site.forward_output && !(self.settings.notifications.disable_notifications && self.settings.notifications.disable_warnings),
         };
         match recorder::spawn_recorder(spec, &self.tracked) {
             Ok(handle) => {

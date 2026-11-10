@@ -512,6 +512,12 @@ impl App {
         }
         title = title.push(toggler(self.live_first).label("Live first").on_toggle(Msg::SetLiveFirst).text_size(12));
         title = title.push(
+            button(btn_label(&s, if self.compact { "Full View" } else { "Compact View" }).size(12))
+                .on_press(Msg::SetCompact(!self.compact))
+                .padding([5.0, 10.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        );
+        title = title.push(
             pick_list(prefs::SortKey::ALL.to_vec(), Some(self.sort_key), Msg::SetSortKey)
                 .padding([3.0, 8.0])
                 .text_size(12),
@@ -520,12 +526,6 @@ impl App {
             button(self.sort_dir_icon(s))
                 .on_press(Msg::ToggleSortDir)
                 .padding([5.0, 8.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
-        );
-        title = title.push(
-            button(btn_label(&s, if self.compact { "Full View" } else { "Compact View" }).size(12))
-                .on_press(Msg::SetCompact(!self.compact))
-                .padding([5.0, 10.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
         );
         let mut col = Column::new().spacing(12).padding(iced::Padding {
@@ -1846,6 +1846,7 @@ impl App {
         let selected = self.settings_site_choice(&options);
         let target = selected.as_ref().map(|o| o.target);
         let picker = pick_list(options, selected, |o: SiteSelOption| Msg::PickSettingsSite(o.target))
+            .placeholder("Site")
             .padding(8)
             .text_size(13)
             .width(240);
@@ -2111,7 +2112,7 @@ impl App {
         };
         let cell = |e: Element<'a, Msg>, w: Length| -> Element<'a, Msg> { container(e).width(w).into() };
         let dirty = saved.is_none_or(|site| *d != SiteDraft::from_site(site));
-        let valid = d.to_new_site(&self.settings.notifications.ntfy_topic).is_some();
+        let valid = d.to_new_site(&self.settings.notifications.ntfy_topic, self.parsing_overridden()).is_some();
 
         let identity = row![
             cell(

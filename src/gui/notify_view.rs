@@ -114,7 +114,8 @@ impl App {
                 .into()
         };
         let dirty = *d != SiteDraft::from_site(site);
-        let valid = d.to_new_site(global_topic).is_some();
+        let parsing_off = self.parsing_overridden();
+        let valid = d.to_new_site(global_topic, parsing_off).is_some();
         let can_test = d.ntfy_ok(global_topic) && !d.test_targets(global_topic).is_empty();
         let notify_on = d.notify && !no_notify;
         let channels_on = d.notify_desktop || d.notify_ntfy;
@@ -180,7 +181,7 @@ impl App {
         ]
         .spacing(24);
 
-        let output_on = d.forward_output;
+        let output_on = d.forward_output && !parsing_off;
         let matrix_cell = |on: bool, enabled: bool, f: fn(bool) -> DraftField| -> Element<'a, Msg> {
             container(toggler(on && enabled).on_toggle_maybe(enabled.then(|| move |v: bool| Msg::Draft(id, f(v)))))
                 .width(COL_W)
@@ -284,8 +285,8 @@ impl App {
         ]
         .spacing(8);
 
-        let interrupt_on = d.interrupts_active();
-        let error_on = d.errors_active();
+        let interrupt_on = d.interrupts_active(parsing_off);
+        let error_on = d.errors_active(parsing_off);
         let pattern_field = |label: &'static str, value: &'a str, on: bool, f: fn(String) -> DraftField| -> Element<'a, Msg> {
             let input = text_input("", if on { value } else { "" })
                 .on_input_maybe(on.then(|| move |v: String| Msg::Draft(id, f(v))))
@@ -295,7 +296,7 @@ impl App {
             labeled(label, input.into())
         };
         let patterns = row![
-            container(toggle("Enable command output parsing", d.forward_output, true, DraftField::ForwardOutput)).width(Length::Shrink),
+            container(toggle("Enable command output parsing", d.forward_output, !parsing_off, DraftField::ForwardOutput)).width(Length::Shrink),
             cell(
                 pattern_field("Interrupt patterns (separate with |)", &d.interrupt_patterns, interrupt_on, DraftField::InterruptPatterns),
                 Length::FillPortion(1)

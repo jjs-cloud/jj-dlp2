@@ -316,7 +316,7 @@ impl PostsState {
             AddTarget::Template(Preset::Blank) => opts.iter().find(|o| o.target == t),
             AddTarget::Template(p) => opts.iter().find(|o| o.target == t || o.name.trim().eq_ignore_ascii_case(p.label())),
         });
-        picked.or_else(|| opts.first()).cloned()
+        picked.or_else(|| opts.iter().find(|o| matches!(o.target, AddTarget::Site(_)))).cloned()
     }
 
     /// The site's check countdown for the sidebar: paused, checking or seconds left.

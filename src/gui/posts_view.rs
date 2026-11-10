@@ -327,7 +327,7 @@ impl App {
         let options = p.settings_options();
         let selected = p.settings_choice(&options);
         let target = selected.as_ref().map(|o| o.target);
-        let picker = pick_list(options, selected, |o: AddOption| send(PostsMsg::PickSettingsSite(o.target))).padding(8).text_size(13).width(240);
+        let picker = pick_list(options, selected, |o: AddOption| send(PostsMsg::PickSettingsSite(o.target))).placeholder("Site").padding(8).text_size(13).width(240);
         let status = muted(&s, p.status_text(self.now).unwrap_or(""));
 
         let mut col = Column::new().spacing(12).padding(iced::Padding { right: 8.0, ..Default::default() });

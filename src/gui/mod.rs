@@ -366,20 +366,20 @@ impl SiteDraft {
         !self.notify_ntfy || notify::topic_ok(&self.ntfy_topic, global)
     }
 
-    /// True while command output parsing is on and an Interrupts toggle is on.
-    pub fn interrupts_active(&self) -> bool {
-        self.forward_output && (self.notify_interrupts || self.warn_interrupts)
+    /// True while command output parsing is on (`parsing_off` overrides it) and an Interrupts toggle is on.
+    pub fn interrupts_active(&self, parsing_off: bool) -> bool {
+        self.forward_output && !parsing_off && (self.notify_interrupts || self.warn_interrupts)
     }
 
-    /// True while command output parsing is on and an Errors toggle is on.
-    pub fn errors_active(&self) -> bool {
-        self.forward_output && (self.notify_errors || self.warn_errors)
+    /// True while command output parsing is on (`parsing_off` overrides it) and an Errors toggle is on.
+    pub fn errors_active(&self, parsing_off: bool) -> bool {
+        self.forward_output && !parsing_off && (self.notify_errors || self.warn_errors)
     }
 
     /// True while an active pattern field is blank.
-    pub fn patterns_missing(&self) -> bool {
-        (self.interrupts_active() && self.interrupt_patterns.trim().is_empty())
-            || (self.errors_active() && self.error_patterns.trim().is_empty())
+    pub fn patterns_missing(&self, parsing_off: bool) -> bool {
+        (self.interrupts_active(parsing_off) && self.interrupt_patterns.trim().is_empty())
+            || (self.errors_active(parsing_off) && self.error_patterns.trim().is_empty())
     }
 
     /// Takes every field shown on the Notifications tab from `d`, leaving the rest.
@@ -424,13 +424,13 @@ impl SiteDraft {
     }
 
     /// The site this draft describes, or `None` while the name or URL template is blank or a field is invalid.
-    pub fn to_new_site(&self, global_topic: &str) -> Option<NewSite> {
+    pub fn to_new_site(&self, global_topic: &str, parsing_off: bool) -> Option<NewSite> {
         if self.name.trim().is_empty()
             || self.url_template.trim().is_empty()
             || !self.color_ok()
             || !self.ntfy_ok(global_topic)
             || self.split_invalid()
-            || self.patterns_missing()
+            || self.patterns_missing(parsing_off)
         {
             return None;
         }
@@ -1198,6 +1198,12 @@ impl App {
         choice
     }
 
+    /// True while both global disable switches are on, which turns command output parsing off at run time.
+    pub(crate) fn parsing_overridden(&self) -> bool {
+        let g = &self.settings.notifications;
+        g.disable_notifications && g.disable_warnings
+    }
+
     /// The Settings > Livestreams dropdown entries: each named preset (its site once created), then custom sites, then New site.
     pub(crate) fn settings_site_options(&self) -> Vec<SiteSelOption> {
         let mut out: Vec<SiteSelOption> = self
@@ -1224,7 +1230,7 @@ impl App {
             }
             _ => opts.iter().find(|o| o.target == t),
         });
-        picked.or_else(|| opts.first()).cloned()
+        picked.or_else(|| opts.iter().find(|o| matches!(o.target, SiteSel::Site(_)))).cloned()
     }
 
     /// Shows a GUI-originated line in the Log tab and saves it to ui.log.
@@ -1487,7 +1493,8 @@ impl App {
             }
             Msg::SaveSite(id) => {
                 let topic = self.settings.notifications.ntfy_topic.as_str();
-                if let Some(site) = self.drafts.get(&id).and_then(|d| d.to_new_site(topic)) {
+                let parsing_off = self.parsing_overridden();
+                if let Some(site) = self.drafts.get(&id).and_then(|d| d.to_new_site(topic, parsing_off)) {
                     if id == NEW_SITE_ID {
                         self.drafts.remove(&NEW_SITE_ID);
                         self.pending_jump = Some(site.name.clone());
