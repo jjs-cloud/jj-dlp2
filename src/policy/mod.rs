@@ -26,6 +26,7 @@ pub mod posts;
 mod priority;
 mod probe;
 mod quality;
+mod quick;
 mod restarts;
 mod schedule;
 mod segments;
@@ -39,7 +40,8 @@ pub use files::RecordingFile;
 use live::{LiveTracker, PartRecord};
 use notify::{Gate, Kind, LiveStatus, Message, Targets};
 use quality::QualityTracker;
-use restarts::RestartTracker;
+use quick::{Fire, QuickChecks};
+use restarts::{Change, RestartTracker};
 use segments::{Plan, Splitter, Step};
 use update::UpdateConfig;
 pub use warnings::Warnings;
@@ -96,6 +98,8 @@ pub struct NewSite {
     pub auto_suffix: bool,
     pub paused: bool,
     pub upgrade_quality: bool,
+    pub quick_check: bool,
+    pub quick_check_secs: Option<u64>,
 }
 
 impl NewSite {
@@ -147,6 +151,8 @@ impl NewSite {
             auto_suffix: self.auto_suffix,
             paused: self.paused,
             upgrade_quality: self.upgrade_quality,
+            quick_check: self.quick_check,
+            quick_check_secs: self.quick_check_secs,
         }
     }
 }
@@ -356,6 +362,8 @@ struct Policy {
     evicted_notes: HashMap<StreamerId, Vec<String>>,
     /// Arms against each recording's probed quality and finds higher qualities worth restarting for.
     quality: QualityTracker,
+    /// Arms and schedules the quick re-check after a confirmed recording ends.
+    quick: QuickChecks,
     probe_tx: UnboundedSender<ProbeMsg>,
     probe_rx: Option<UnboundedReceiver<ProbeMsg>>,
     posts: posts::PostsMonitor,
@@ -414,6 +422,7 @@ impl Policy {
             evicting: HashSet::new(),
             evicted_notes: HashMap::new(),
             quality: QualityTracker::default(),
+            quick: QuickChecks::default(),
             probe_tx,
             probe_rx: Some(probe_rx),
             posts,
@@ -486,6 +495,7 @@ impl Policy {
                     self.release_due_delays();
                     self.split_tick();
                     self.quality_tick();
+                    self.quick_check_tick();
                 }
                 msg = update_msgs.recv() => {
                     if let Some(m) = msg {
@@ -596,12 +606,58 @@ impl Policy {
         Some(Thresholds::from_site(site))
     }
 
+    /// Schedules the quick check for a streamer whose confirmed recording just ended, when quick check is on for it.
+    fn schedule_quick_check(&mut self, id: StreamerId) {
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
+        let Some(site) = self.site_of(id) else { return };
+        if !streamer.options.effective_quick_check(site) {
+            self.quick.cancel(id);
+            return;
+        }
+        let delay = Duration::from_secs(site.quick_check_or_default());
+        self.quick.on_exit(id, delay, Instant::now());
+    }
+
+    /// Sends each due quick check to the engine, unless the streamer no longer qualifies or the span's limit is reached.
+    fn quick_check_tick(&mut self) {
+        for id in self.quick.take_due(Instant::now()) {
+            let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { continue };
+            let Some(site) = self.site_of(id) else { continue };
+            let status = self.statuses.get(&id);
+            let skip = !streamer.enabled
+                || site.paused
+                || !streamer.options.effective_quick_check(site)
+                || status.is_some_and(|s| s.recording || s.live);
+            if skip {
+                continue;
+            }
+            let name = streamer.name.clone();
+            match self.quick.fire(id, self.live.span_start(id)) {
+                Fire::Go(_) => {
+                    self.log(format!("{name}: running a quick check to verify stream has ended"));
+                    self.engine.send(Command::QuickCheck { id });
+                }
+                Fire::Capped { first } => {
+                    if first {
+                        self.log(format!("{name}: quick check limit of {} reached for this live span", quick::MAX_PER_SPAN));
+                    }
+                }
+            }
+        }
+    }
+
     /// Feeds a streamer's recording flag to the restart tracker.
     fn on_restart_status(&mut self, id: StreamerId, recording: bool) {
         let Some((_, end_after_secs)) = live::lookup(&self.settings, id) else { return };
         let enabled = self.settings.streamers.iter().any(|s| s.id == id && s.enabled);
         let before = self.restarts.count(id);
-        self.restarts.on_status(id, recording, enabled, Duration::from_secs(end_after_secs), Instant::now());
+        let change = self.restarts.on_status(id, recording, enabled, Duration::from_secs(end_after_secs), Instant::now());
+        match change {
+            Change::Started => self.quick.cancel(id),
+            Change::Ended { unexpected: true } => self.schedule_quick_check(id),
+            Change::Ended { unexpected: false } => self.quick.cancel(id),
+            Change::None => {}
+        }
         let after = self.restarts.count(id);
         let threshold = self.site_of(id).map_or(1, |s| s.restart_threshold_or_default());
         if before < threshold && after >= threshold {
@@ -822,6 +878,7 @@ impl Policy {
             self.notify_event(streamer_id, Kind::Stalled, 0);
         }
         if let Some(streamer_id) = up.confirmed_for {
+            self.quick.arm(streamer_id);
             self.on_growth_confirmed(streamer_id);
             if let Some(step) = self.splitter.on_confirmed(streamer_id, id) {
                 self.run_step(step);
@@ -1275,6 +1332,7 @@ impl Policy {
         let settings = &self.settings;
         self.live.retain(|id| live::lookup(settings, id).is_some());
         self.restarts.retain(|id| live::lookup(settings, id).is_some());
+        self.quick.retain(|id| live::lookup(settings, id).is_some());
         self.warnings.retain(|id| live::lookup(settings, id).is_some(), |id| settings.sites.iter().any(|s| s.id == id));
         self.gate.retain(|id| live::lookup(settings, id).is_some());
         self.statuses.retain(|id, _| live::lookup(settings, *id).is_some());
@@ -1749,6 +1807,8 @@ mod tests {
             auto_suffix: true,
             paused: false,
             upgrade_quality: false,
+            quick_check: false,
+            quick_check_secs: None,
         }
     }
 
@@ -1851,6 +1911,8 @@ mod e2e {
                 auto_suffix: true,
                 paused: false,
                 upgrade_quality: false,
+                quick_check: false,
+                quick_check_secs: None,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };

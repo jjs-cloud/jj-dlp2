@@ -51,6 +51,7 @@ pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
 pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 5;
 pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
 pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
+pub const DEFAULT_QUICK_CHECK_SECS: u64 = 45;
 pub const DEFAULT_NOTIFY_COOLDOWN_MINUTES: u64 = 30;
 pub const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 15;
 
@@ -185,6 +186,12 @@ pub struct Site {
     /// Restart a recording once per live span when the stream offers a higher quality than is being recorded.
     #[serde(default)]
     pub upgrade_quality: bool,
+    /// Re-check a streamer alone shortly after its recording ends, to catch a quick restart.
+    #[serde(default)]
+    pub quick_check: bool,
+    /// Seconds to wait after a recording ends before the quick check; blank uses the default.
+    #[serde(default)]
+    pub quick_check_secs: Option<u64>,
 }
 
 /// Serde default for fields that are on unless a saved file says otherwise.
@@ -233,6 +240,10 @@ impl Site {
 
     pub fn file_check_or_default(&self) -> u64 {
         self.file_check_interval_secs.unwrap_or(DEFAULT_FILE_CHECK_INTERVAL_SECS)
+    }
+
+    pub fn quick_check_or_default(&self) -> u64 {
+        self.quick_check_secs.unwrap_or(DEFAULT_QUICK_CHECK_SECS)
     }
 
     pub fn restart_clear_or_default(&self) -> u64 {
@@ -300,6 +311,9 @@ pub struct StreamerOptions {
     /// Overrides the site's upgrade-quality switch; `None` inherits it.
     #[serde(default)]
     pub upgrade_quality: Option<bool>,
+    /// Overrides the site's quick-check switch; `None` inherits it.
+    #[serde(default)]
+    pub quick_check: Option<bool>,
 }
 
 /// Whether a schedule runs once or repeats weekly.
@@ -368,6 +382,11 @@ impl StreamerOptions {
     pub fn effective_upgrade_quality(&self, site: &Site) -> bool {
         self.upgrade_quality.unwrap_or(site.upgrade_quality)
     }
+
+    /// Whether this streamer is re-checked on its own shortly after its recording ends.
+    pub fn effective_quick_check(&self, site: &Site) -> bool {
+        self.quick_check.unwrap_or(site.quick_check)
+    }
 }
 
 /// Notification and warning settings that apply to every site.
@@ -416,6 +435,8 @@ pub enum Command {
     StopSegment { id: RecorderId },
     /// Stops a streamer's recorders; an autonomous engine starts them again at the next live check.
     StopRecording { id: StreamerId },
+    /// Runs the site's checker for this streamer alone and applies the result to its status.
+    QuickCheck { id: StreamerId },
     /// Replaces a site's checker_args until cleared with `None`.
     #[allow(dead_code)]
     SetCheckerOverride { site_id: SiteId, args: Option<String> },
@@ -610,6 +631,8 @@ mod tests {
             auto_suffix: true,
             paused: false,
             upgrade_quality: false,
+            quick_check: false,
+            quick_check_secs: None,
         }
     }
 
@@ -701,6 +724,41 @@ mod tests {
         site.upgrade_quality = false;
         let on = StreamerOptions { upgrade_quality: Some(true), ..Default::default() };
         assert!(on.effective_upgrade_quality(&site));
+    }
+
+    #[test]
+    fn quick_check_follows_site_unless_overridden() {
+        let mut site = site_with(false, None);
+        assert!(!StreamerOptions::default().effective_quick_check(&site));
+        site.quick_check = true;
+        assert!(StreamerOptions::default().effective_quick_check(&site));
+        let off = StreamerOptions { quick_check: Some(false), ..Default::default() };
+        assert!(!off.effective_quick_check(&site));
+        site.quick_check = false;
+        let on = StreamerOptions { quick_check: Some(true), ..Default::default() };
+        assert!(on.effective_quick_check(&site));
+    }
+
+    #[test]
+    fn quick_check_delay_defaults_when_blank() {
+        let mut site = site_with(false, None);
+        assert_eq!(site.quick_check_or_default(), DEFAULT_QUICK_CHECK_SECS);
+        site.quick_check_secs = Some(12);
+        assert_eq!(site.quick_check_or_default(), 12);
+    }
+
+    #[test]
+    fn old_settings_deserialize_without_the_quick_check_fields() {
+        let mut value = serde_json::to_value(site_with(false, None)).unwrap();
+        for key in ["quick_check", "quick_check_secs"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let site: Site = serde_json::from_value(value).unwrap();
+        assert!(!site.quick_check && site.quick_check_secs.is_none());
+        let mut opts = serde_json::to_value(StreamerOptions::default()).unwrap();
+        opts.as_object_mut().unwrap().remove("quick_check");
+        let opts: StreamerOptions = serde_json::from_value(opts).unwrap();
+        assert_eq!(opts.quick_check, None);
     }
 
     #[test]

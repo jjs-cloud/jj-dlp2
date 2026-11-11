@@ -4,6 +4,15 @@ use crate::api::StreamerId;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// What a status update changed about a streamer's recording flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    None,
+    Started,
+    /// The recording ended; `unexpected` is false when it was stopped on purpose or the streamer is disabled.
+    Ended { unexpected: bool },
+}
+
 #[derive(Default)]
 struct Entry {
     recording: bool,
@@ -20,11 +29,11 @@ pub struct RestartTracker {
 }
 
 impl RestartTracker {
-    /// Feeds a streamer's recording flag; `window` is how soon after an exit a new recorder counts.
-    pub fn on_status(&mut self, id: StreamerId, recording: bool, enabled: bool, window: Duration, now: Instant) {
+    /// Feeds a streamer's recording flag and reports the change; `window` is how soon after an exit a new recorder counts.
+    pub fn on_status(&mut self, id: StreamerId, recording: bool, enabled: bool, window: Duration, now: Instant) -> Change {
         let e = self.entries.entry(id).or_default();
         if recording == e.recording {
-            return;
+            return Change::None;
         }
         e.recording = recording;
         if recording {
@@ -34,10 +43,12 @@ impl RestartTracker {
                 e.last_restart = Some(now);
                 self.dirty = true;
             }
+            Change::Started
         } else {
             let unexpected = enabled && !e.user_stop;
             e.user_stop = false;
             e.exited_at = unexpected.then_some(now);
+            Change::Ended { unexpected }
         }
     }
 

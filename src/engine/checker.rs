@@ -1,7 +1,7 @@
 //! Per-site checker: runs yt-dlp for all of a site's URLs and detects live streams.
 
 use super::{diagnose, exepath, hide_window, logfile, template, Internal};
-use crate::api::{now_secs, CheckOutput, Quality, Site};
+use crate::api::{now_secs, CheckOutput, Quality, Site, StreamerId};
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -53,12 +53,23 @@ pub fn spawn_worker(snap: SiteSnapshot, internal: UnboundedSender<Internal>) -> 
     SiteWorker { tx, handle }
 }
 
+/// Runs one check for a single streamer's URL and reports it as a `QuickCheckResult`.
+pub fn spawn_quick_check(snap: SiteSnapshot, streamer_id: StreamerId, internal: UnboundedSender<Internal>) {
+    tokio::spawn(async move {
+        let started = now_secs();
+        let result = run_check(&snap, &internal).await;
+        let msg = Internal::QuickCheckResult { site_id: snap.site.id, streamer_id, started, at: now_secs(), result };
+        let _ = internal.send(msg);
+    });
+}
+
 async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedSender<Internal>) {
     loop {
         let snap = rx.borrow_and_update().clone();
         if !snap.urls.is_empty() && !snap.site.paused {
+            let started = now_secs();
             let result = run_check(&snap, &internal).await;
-            let msg = Internal::CheckResult { site_id: snap.site.id, at: now_secs(), result };
+            let msg = Internal::CheckResult { site_id: snap.site.id, started, at: now_secs(), result };
             if internal.send(msg).is_err() {
                 return;
             }

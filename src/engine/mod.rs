@@ -20,7 +20,7 @@ use diagnose::Problem;
 #[cfg(windows)]
 pub(crate) use recorder::send_ctrl_c;
 use recorder::{RecorderHandle, RecorderSpec, SharedTracked, Tracked};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -30,7 +30,9 @@ const HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Messages from engine background tasks back to the engine loop.
 pub(crate) enum Internal {
-    CheckResult { site_id: SiteId, at: u64, result: Result<CheckReport, String> },
+    CheckResult { site_id: SiteId, started: u64, at: u64, result: Result<CheckReport, String> },
+    /// The result of a one-streamer check requested by `Command::QuickCheck`.
+    QuickCheckResult { site_id: SiteId, streamer_id: StreamerId, started: u64, at: u64, result: Result<CheckReport, String> },
     RecorderGone(RecorderId),
     Log(String),
     /// An informational line from a recorder, logged once per live session.
@@ -96,6 +98,8 @@ fn failed_checks(report: &CheckReport, streamers: &[Streamer]) -> HashSet<Stream
 struct StreamState {
     live: bool,
     last_checked: Option<u64>,
+    /// When the check that produced this state began; an older check never overwrites a newer one.
+    checked_start: Option<u64>,
     entry: Option<LiveEntry>,
     /// The latest check could not be trusted for this streamer.
     check_failed: bool,
@@ -126,6 +130,8 @@ struct Engine {
     site_problems: HashMap<SiteId, String>,
     session_notes: HashSet<(StreamerId, String)>,
     notices: Vec<Notice>,
+    quick_queue: HashMap<SiteId, VecDeque<StreamerId>>,
+    quick_running: HashSet<SiteId>,
 }
 
 impl Engine {
@@ -149,6 +155,8 @@ impl Engine {
             site_problems: HashMap::new(),
             session_notes: HashSet::new(),
             notices: Vec::new(),
+            quick_queue: HashMap::new(),
+            quick_running: HashSet::new(),
         }
     }
 
@@ -208,6 +216,7 @@ impl Engine {
             Command::StartSegment { id } => self.start_recording(id, true),
             Command::StopSegment { id } => self.stop_recorder(id),
             Command::StopRecording { id } => self.stop_streamer_recorders(id),
+            Command::QuickCheck { id } => self.queue_quick_check(id),
             Command::SetCheckerOverride { site_id, args } => {
                 if !self.settings.sites.iter().any(|s| s.id == site_id) {
                     self.log(format!("checker override ignored: unknown site {site_id}"));
@@ -288,7 +297,12 @@ impl Engine {
 
     fn handle_internal(&mut self, msg: Internal) {
         match msg {
-            Internal::CheckResult { site_id, at, result } => self.on_check_result(site_id, at, result),
+            Internal::CheckResult { site_id, started, at, result } => self.on_check_result(site_id, started, at, result),
+            Internal::QuickCheckResult { site_id, streamer_id, started, at, result } => {
+                self.on_quick_check_result(streamer_id, started, at, result);
+                self.quick_running.remove(&site_id);
+                self.pump_quick_checks(site_id);
+            }
             Internal::Log(msg) => self.log(msg),
             Internal::Note { streamer_id, text } => {
                 if self.session_notes.insert((streamer_id, text.clone())) {
@@ -361,7 +375,7 @@ impl Engine {
         SiteSnapshot { site, urls }
     }
 
-    fn on_check_result(&mut self, site_id: SiteId, at: u64, result: Result<CheckReport, String>) {
+    fn on_check_result(&mut self, site_id: SiteId, started: u64, at: u64, result: Result<CheckReport, String>) {
         let report = match result {
             Ok(r) => r,
             Err(message) => {
@@ -375,17 +389,26 @@ impl Engine {
             self.settings.streamers.iter().filter(|s| s.site_id == site_id).cloned().collect();
         let failed = failed_checks(&report, &streamers);
         let single = streamers.len() == 1;
+        let stale: HashSet<StreamerId> = streamers
+            .iter()
+            .filter(|s| self.states.get(&s.id).and_then(|st| st.checked_start).is_some_and(|t| t > started))
+            .map(|s| s.id)
+            .collect();
         let mut matched = vec![false; report.entries.len()];
         for s in &streamers {
             let found = report.entries.iter().position(|e| e.matches(&s.url));
             if let Some(i) = found {
                 matched[i] = true;
             }
+            if stale.contains(&s.id) {
+                continue;
+            }
             let state = self.states.entry(s.id).or_default();
             let was_live = state.live;
             state.live = found.is_some();
             state.entry = found.map(|i| report.entries[i].clone());
             state.last_checked = Some(at);
+            state.checked_start = Some(started);
             state.check_failed = failed.contains(&s.id);
             if state.live && !was_live {
                 self.log(format!("{} is live", s.name));
@@ -394,6 +417,9 @@ impl Engine {
         // A lone streamer on a site can't be ambiguous, so accept any live entry for it.
         if single && !matched.is_empty() && !matched.iter().any(|m| *m) {
             let s = &streamers[0];
+            if stale.contains(&s.id) {
+                return;
+            }
             let state = self.states.entry(s.id).or_default();
             state.live = true;
             state.entry = Some(report.entries[0].clone());
@@ -404,11 +430,70 @@ impl Engine {
                 }
             }
         }
-        for s in &streamers {
+        for s in streamers.iter().filter(|s| !stale.contains(&s.id)) {
             self.refresh_health(s.id);
             self.follow_enabled(s.id);
             self.emit_status(s.id);
         }
+    }
+
+    /// Queues a one-streamer check; a streamer waits in its site's queue at most once.
+    fn queue_quick_check(&mut self, streamer_id: StreamerId) {
+        let Some(site_id) = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.site_id) else { return };
+        let queue = self.quick_queue.entry(site_id).or_default();
+        if !queue.contains(&streamer_id) {
+            queue.push_back(streamer_id);
+        }
+        self.pump_quick_checks(site_id);
+    }
+
+    /// Starts the next queued quick check for the site unless one is already running.
+    fn pump_quick_checks(&mut self, site_id: SiteId) {
+        if self.shutting_down || self.quick_running.contains(&site_id) {
+            return;
+        }
+        while let Some(id) = self.quick_queue.get_mut(&site_id).and_then(VecDeque::pop_front) {
+            let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { continue };
+            let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else { continue };
+            if site.paused || self.recording(id) {
+                continue;
+            }
+            let mut snap = self.snapshot_for(site);
+            snap.urls = vec![streamer.url];
+            self.quick_running.insert(site_id);
+            checker::spawn_quick_check(snap, id, self.internal_tx.clone());
+            return;
+        }
+    }
+
+    /// Applies a one-streamer check to that streamer's state only.
+    fn on_quick_check_result(&mut self, streamer_id: StreamerId, started: u64, at: u64, result: Result<CheckReport, String>) {
+        let Some(s) = self.settings.streamers.iter().find(|s| s.id == streamer_id).cloned() else { return };
+        let report = match result {
+            Ok(r) => r,
+            Err(message) => {
+                self.log(format!("{}: quick check failed: {message}", s.name));
+                return;
+            }
+        };
+        let state = self.states.entry(s.id).or_default();
+        if state.checked_start.is_some_and(|t| t > started) {
+            return;
+        }
+        let failed = failed_checks(&report, std::slice::from_ref(&s)).contains(&s.id);
+        let found = report.entries.iter().find(|e| e.matches(&s.url)).or(report.entries.first()).cloned();
+        let was_live = state.live;
+        state.live = found.is_some();
+        state.entry = found;
+        state.last_checked = Some(at);
+        state.checked_start = Some(started);
+        state.check_failed = failed;
+        if state.live && !was_live {
+            self.log(format!("{} is live", s.name));
+        }
+        self.refresh_health(s.id);
+        self.follow_enabled(s.id);
+        self.emit_status(s.id);
     }
 
     /// Reports a check result, logging its problem only when it appears, changes or clears.
@@ -693,6 +778,8 @@ mod e2e {
                 auto_suffix: true,
                 paused: false,
                 upgrade_quality: false,
+                quick_check: false,
+                quick_check_secs: None,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -871,6 +958,8 @@ mod e2e {
                 auto_suffix: true,
                 paused: false,
                 upgrade_quality: false,
+                quick_check: false,
+                quick_check_secs: None,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };

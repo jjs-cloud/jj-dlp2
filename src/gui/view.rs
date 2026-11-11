@@ -1508,6 +1508,7 @@ impl App {
         let site_notify = site.is_some_and(|x| x.notify);
         let site_suffix = site.is_some_and(|x| x.auto_suffix);
         let site_upgrade = site.is_some_and(|x| x.upgrade_quality);
+        let site_quick = site.is_some_and(|x| x.quick_check);
 
         let name_row = row![
             cell(
@@ -1607,6 +1608,18 @@ impl App {
         ]
         .spacing(8);
 
+        let quick_row = row![
+            cell(
+                labeled(
+                    "Quick check ended streams",
+                    inherit_pick(site_quick, d.quick_check, StreamerField::QuickCheck).into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(Space::new().into(), Length::FillPortion(2)),
+        ]
+        .spacing(8);
+
         let intro_delay = column![
             row![
                 toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
@@ -1676,6 +1689,7 @@ impl App {
             schedule,
             suffix_row,
             upgrade_row,
+            quick_row,
             actions,
         ]
         .spacing(6)
@@ -2224,6 +2238,25 @@ impl App {
             .on_toggle(move |v| Msg::Draft(id, DraftField::UpgradeQuality(v)))
             .text_size(12);
 
+        let quick_check = row![
+            container(
+                toggler(d.quick_check)
+                    .label("Quick check ended streams")
+                    .on_toggle(move |v| Msg::Draft(id, DraftField::QuickCheck(v)))
+                    .text_size(12)
+            )
+            .width(Length::Shrink),
+            cell(
+                labeled(
+                    "Quick check after (seconds)",
+                    field(&DEFAULT_QUICK_CHECK_SECS.to_string(), &d.quick_check_secs, DraftField::QuickCheckSecs)
+                ),
+                Length::Fixed(260.0)
+            ),
+        ]
+        .spacing(24)
+        .align_y(Alignment::End);
+
         let swatch = if d.use_theme_color { s.accent2 } else { skin::parse_hex(&d.color).unwrap_or(s.muted) };
         let mut color_row: Row<'a, Msg> = row![
             muted(&s, "Site color"),
@@ -2362,6 +2395,7 @@ impl App {
             .push(timing)
             .push(splitting)
             .push(upgrade_quality)
+            .push(quick_check)
             .push(color_row)
             .push(templates)
             .push(recorder_col)

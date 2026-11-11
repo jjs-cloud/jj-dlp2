@@ -122,6 +122,8 @@ pub fn new_site(preset: Preset) -> NewSite {
         auto_suffix: true,
         paused: false,
         upgrade_quality: !matches!(preset, Preset::Tiktok),
+        quick_check: matches!(preset, Preset::Tiktok),
+        quick_check_secs: None,
     }
 }
 
@@ -160,6 +162,14 @@ mod tests {
         for preset in [Preset::Twitch, Preset::Kick, Preset::Blank] {
             assert!(new_site(preset).forward_output);
         }
+    }
+
+    #[test]
+    fn quick_check_defaults_on_for_tiktok_only() {
+        for preset in [Preset::Twitch, Preset::Chaturbate, Preset::Kick, Preset::Youtube, Preset::Blank] {
+            assert!(!new_site(preset).quick_check);
+        }
+        assert!(new_site(Preset::Tiktok).quick_check);
     }
 
     #[test]

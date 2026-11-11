@@ -189,6 +189,8 @@ pub struct SiteDraft {
     pub split_minutes: String,
     pub auto_suffix: bool,
     pub upgrade_quality: bool,
+    pub quick_check: bool,
+    pub quick_check_secs: String,
     pub paused: bool,
 }
 
@@ -239,6 +241,8 @@ impl SiteDraft {
             split_minutes: opt_text(s.split_minutes),
             auto_suffix: s.auto_suffix,
             upgrade_quality: s.upgrade_quality,
+            quick_check: s.quick_check,
+            quick_check_secs: opt_text(s.quick_check_secs),
             paused: s.paused,
         }
     }
@@ -291,6 +295,8 @@ impl SiteDraft {
             split_minutes: opt_text(n.split_minutes),
             auto_suffix: n.auto_suffix,
             upgrade_quality: n.upgrade_quality,
+            quick_check: n.quick_check,
+            quick_check_secs: opt_text(n.quick_check_secs),
             paused: n.paused,
         }
     }
@@ -320,6 +326,10 @@ impl SiteDraft {
 
     pub fn restart_threshold(&self) -> Option<Option<u32>> {
         parse_opt(&self.restart_threshold, 1)
+    }
+
+    pub fn quick_check_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.quick_check_secs, 1)
     }
 
     pub fn file_exists_grace_secs(&self) -> Option<Option<u64>> {
@@ -478,6 +488,8 @@ impl SiteDraft {
             split_minutes: self.split_minutes()?,
             auto_suffix: self.auto_suffix,
             upgrade_quality: self.upgrade_quality,
+            quick_check: self.quick_check,
+            quick_check_secs: self.quick_check_secs()?,
             paused: self.paused,
         })
     }
@@ -543,6 +555,8 @@ pub enum DraftField {
     SplitMinutes(String),
     AutoSuffix(bool),
     UpgradeQuality(bool),
+    QuickCheck(bool),
+    QuickCheckSecs(String),
 }
 
 /// A single field edited in a streamer's settings panel.
@@ -553,6 +567,7 @@ pub enum StreamerField {
     Notify(Option<bool>),
     AutoSuffix(Option<bool>),
     UpgradeQuality(Option<bool>),
+    QuickCheck(Option<bool>),
     Split(Option<bool>),
     SplitMinutes(String),
     IntroEnabled(bool),
@@ -610,6 +625,7 @@ pub struct StreamerDraft {
     pub notify: Option<bool>,
     pub auto_suffix: Option<bool>,
     pub upgrade_quality: Option<bool>,
+    pub quick_check: Option<bool>,
     pub split: Option<bool>,
     pub split_minutes: String,
     pub intro_enabled: bool,
@@ -643,6 +659,7 @@ impl StreamerDraft {
             notify: o.notify,
             auto_suffix: o.auto_suffix,
             upgrade_quality: o.upgrade_quality,
+            quick_check: o.quick_check,
             split: o.split,
             split_minutes: opt_text(o.split_minutes),
             intro_enabled: o.intro_delay_enabled,
@@ -660,6 +677,7 @@ impl StreamerDraft {
             notify: self.notify,
             auto_suffix: self.auto_suffix,
             upgrade_quality: self.upgrade_quality,
+            quick_check: self.quick_check,
             split: self.split,
             split_minutes: self.split_minutes.trim().parse().ok().filter(|m| *m > 0),
             intro_delay_enabled: self.intro_enabled,
@@ -1118,6 +1136,7 @@ impl App {
             StreamerField::Notify(v) => d.notify = v,
             StreamerField::AutoSuffix(v) => d.auto_suffix = v,
             StreamerField::UpgradeQuality(v) => d.upgrade_quality = v,
+            StreamerField::QuickCheck(v) => d.quick_check = v,
             StreamerField::Split(v) => {
                 d.split = v;
                 if v != Some(true) {
@@ -1488,6 +1507,8 @@ impl App {
                         }
                         DraftField::AutoSuffix(v) => d.auto_suffix = v,
                         DraftField::UpgradeQuality(v) => d.upgrade_quality = v,
+                        DraftField::QuickCheck(v) => d.quick_check = v,
+                        DraftField::QuickCheckSecs(v) => d.quick_check_secs = v,
                     }
                 }
             }
