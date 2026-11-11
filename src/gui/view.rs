@@ -928,9 +928,17 @@ impl App {
                 times.push(iced::widget::text(time_text).font(time_font).size(m.info).color(time_color).wrapping(Wrapping::None))
             },
             compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id), self.openable_recording(id)),
-            toggler(st.enabled)
-                .on_toggle(move |v| Msg::ToggleStreamer(id, v))
-                .size(m.toggler),
+            row![
+                toggler(st.enabled)
+                    .on_toggle(move |v| Msg::ToggleStreamer(id, v))
+                    .size(m.toggler),
+                button(btn_label(&s, "x").size(m.info))
+                    .on_press(Msg::RemoveStreamer(id))
+                    .padding(0.0)
+                    .style(skin::bare_x(s)),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
         ]
         .spacing(m.spacing)
         .align_y(Alignment::Center);

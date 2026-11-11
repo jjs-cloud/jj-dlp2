@@ -311,6 +311,20 @@ pub fn btn(s: Skin, kind: BtnKind) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
+/// Borderless text-only button that turns danger-colored on hover.
+pub fn bare_x(s: Skin) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: None,
+            text_color: if hovered { s.danger } else { s.muted },
+            border: Border::default(),
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
 /// Pulsing warn-to-danger tab button used while warnings are present.
 pub fn tab_alert(s: Skin, phase: f32) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
