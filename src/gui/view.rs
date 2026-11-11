@@ -904,9 +904,9 @@ impl App {
             name_cell.into()
         };
         // Live duration while live, otherwise time since last live.
-        let (time_text, time_color) = match self.live_for(id, status) {
-            Some(d) => (format!("{:>12}", fmt_dur(d)), s.live),
-            None => (self.last_live_ago(id, status).map(fmt_ago).unwrap_or_default(), s.muted),
+        let (time_text, time_color, time_font) = match self.live_for(id, status) {
+            Some(d) => (format!("{:>12}", fmt_dur(d)), s.live, iced::Font::MONOSPACE),
+            None => (self.last_live_ago(id, status).map(fmt_ago).unwrap_or_default(), s.muted, s.font),
         };
         let line = row![
             mini_dot(m, color, glow),
@@ -925,7 +925,7 @@ impl App {
                     let fps = q.fps_rounded().map(|f| f.to_string()).unwrap_or_default();
                     times = times.push(iced::widget::text(format!("{}p{fps} ", q.width.min(q.height))).font(s.font).size(m.info).color(s.muted).wrapping(Wrapping::None));
                 }
-                times.push(iced::widget::text(time_text).font(s.font).size(m.info).color(time_color).wrapping(Wrapping::None))
+                times.push(iced::widget::text(time_text).font(time_font).size(m.info).color(time_color).wrapping(Wrapping::None))
             },
             compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id), self.openable_recording(id)),
             toggler(st.enabled)
@@ -1412,7 +1412,9 @@ impl App {
                         name = name.push(muted(&s, format!("{} x {}{fps}", q.width, q.height)));
                     }
                     if let Some(d) = self.live_for(id, status) {
-                        name = name.push(muted(&s, format!("live for {}", fmt_dur(d))));
+                        name = name.push(
+                            row![muted(&s, "live for "), muted(&s, fmt_dur(d)).font(iced::Font::MONOSPACE)]
+                        );
                     }
                     name
                 },
