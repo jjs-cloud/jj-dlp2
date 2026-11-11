@@ -212,11 +212,8 @@ impl LiveTracker {
         std::mem::take(&mut self.last_live_changed)
     }
 
-    /// Writes live.json atomically via a temp file.
+    /// Queues live.json for the background writer.
     pub fn save(&self) -> std::io::Result<()> {
-        let dir = crate::settings::config_dir();
-        std::fs::create_dir_all(&dir)?;
-        let tmp = dir.join("live.json.tmp");
         let file = LiveFile {
             spans: self.spans.clone(),
             last_live: self.last_live.clone(),
@@ -224,9 +221,8 @@ impl LiveTracker {
             parts: self.parts.clone(),
             upgraded: self.upgraded.clone(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path())
+        crate::persist::save_json(path(), file, true);
+        Ok(())
     }
 }
 

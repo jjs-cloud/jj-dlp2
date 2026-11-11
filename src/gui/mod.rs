@@ -738,7 +738,7 @@ impl StreamerDraft {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
-    Policy(PolicyEvent),
+    PolicyBatch(Vec<PolicyEvent>),
     Tick(#[allow(dead_code)] Instant),
     Anim(#[allow(dead_code)] Instant),
     SetTab(Tab),
@@ -1264,12 +1264,23 @@ impl App {
     }
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        let _t = crate::perf::timer("gui.update", 30);
+        crate::perf::count("gui.update");
+        self.update_inner(msg)
+    }
+
+    fn update_inner(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
-            Msg::Policy(ev) => {
-                if matches!(ev, PolicyEvent::Update(UpdateEvent::Restarting)) {
-                    return iced::exit();
+            Msg::PolicyBatch(events) => {
+                for _ in &events {
+                    crate::perf::count("gui.policy_events");
                 }
-                self.on_event(ev)
+                for ev in events {
+                    if matches!(ev, PolicyEvent::Update(UpdateEvent::Restarting)) {
+                        return iced::exit();
+                    }
+                    self.on_event(ev);
+                }
             }
             Msg::Anim(_) => {
                 self.phase = (self.phase + 0.04) % 1.0;
@@ -1855,8 +1866,9 @@ fn engine_stream() -> impl Stream<Item = Msg> {
     iced::stream::channel(64, async |mut out: iced::futures::channel::mpsc::Sender<Msg>| {
         let rx = EVENTS.lock().unwrap().take();
         if let Some(mut rx) = rx {
-            while let Some(ev) = rx.recv().await {
-                if out.send(Msg::Policy(ev)).await.is_err() {
+            let mut batch = Vec::new();
+            while rx.recv_many(&mut batch, 256).await > 0 {
+                if out.send(Msg::PolicyBatch(std::mem::take(&mut batch))).await.is_err() {
                     return;
                 }
             }

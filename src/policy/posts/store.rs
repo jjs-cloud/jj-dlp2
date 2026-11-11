@@ -2,7 +2,6 @@
 
 use super::model::{Post, PostState, PostsConfig};
 use crate::settings::config_dir;
-use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 fn path_in_config(name: &str) -> PathBuf {
@@ -17,16 +16,6 @@ pub fn thumbs_dir() -> PathBuf {
 pub fn sidecar_path(id: &str) -> PathBuf {
     let path = path_in_config("post_sidecars").join(format!("{}.txt", super::model::safe_name(id)));
     std::path::absolute(&path).unwrap_or(path)
-}
-
-fn write_atomic<T: Serialize>(path: &Path, value: &T) {
-    let _ = std::fs::create_dir_all(config_dir());
-    let tmp = path.with_extension("json.tmp");
-    if let Ok(json) = serde_json::to_string_pretty(value) {
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
-        }
-    }
 }
 
 static GUARD: crate::settings::SaveGuard = crate::settings::SaveGuard::new();
@@ -63,9 +52,10 @@ pub fn load_config() -> PostsConfig {
     read_json(&path).unwrap_or_default()
 }
 
-pub fn save_config(cfg: &PostsConfig) {
+/// Queues the config for the background writer unless saving is paused.
+pub fn save_config(cfg: PostsConfig) {
     if GUARD.reason().is_none() {
-        write_atomic(&path_in_config("posts.json"), cfg);
+        crate::persist::save_json(path_in_config("posts.json"), cfg, true);
     }
 }
 
@@ -87,9 +77,10 @@ pub fn load_library() -> Vec<Post> {
     posts
 }
 
-pub fn save_library(posts: &[Post]) {
+/// Queues the library for the background writer unless saving is paused.
+pub fn save_library(posts: Vec<Post>) {
     if GUARD.reason().is_none() {
-        write_atomic(&path_in_config("posts_library.json"), &posts);
+        crate::persist::save_json(path_in_config("posts_library.json"), posts, false);
     }
 }
 

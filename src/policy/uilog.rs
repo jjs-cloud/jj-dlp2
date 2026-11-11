@@ -12,13 +12,10 @@ fn path() -> PathBuf {
     settings::config_dir().join("ui.log")
 }
 
-/// Appends one timestamped line, then trims the file to its newest lines if it is too large.
+/// Queues one timestamped line for the background writer, which trims the file when it is too large.
 pub fn append(text: &str) {
-    let path = path();
-    logfile::line(&path, &text.replace(['\r', '\n'], " "));
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES) {
-        trim(&path);
-    }
+    let line = format!("{}  {}\n", logfile::stamp(), text.replace(['\r', '\n'], " "));
+    crate::persist::append_line(path(), line, MAX_BYTES, trim);
 }
 
 /// The newest `n` saved lines, oldest first.

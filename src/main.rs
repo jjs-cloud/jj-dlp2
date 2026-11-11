@@ -5,6 +5,8 @@ mod engine;
 mod filemgr;
 mod gui;
 mod instance;
+mod persist;
+mod perf;
 mod policy;
 mod resets;
 mod settings;

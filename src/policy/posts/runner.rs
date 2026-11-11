@@ -296,8 +296,9 @@ fn save_thumbnail(bytes: &[u8], id: &str) -> bool {
 
 /// Grabs a frame of the video as the post's thumbnail with ffmpeg; true on success.
 async fn frame_thumbnail(video: &Path, id: &str) -> bool {
-    let _ = std::fs::create_dir_all(thumbs_dir());
     let out = thumbs_dir().join(thumb_name(id));
+    let dir = thumbs_dir();
+    let _ = tokio::task::spawn_blocking(move || std::fs::create_dir_all(dir)).await;
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-y", "-loglevel", "error", "-ss", "0.5", "-i"])
         .arg(video)
@@ -309,7 +310,7 @@ async fn frame_thumbnail(video: &Path, id: &str) -> bool {
         .kill_on_drop(true);
     crate::engine::hide_window(&mut cmd);
     let ok = matches!(tokio::time::timeout(Duration::from_secs(30), cmd.status()).await, Ok(Ok(s)) if s.success());
-    ok && out.is_file()
+    ok && tokio::task::spawn_blocking(move || out.is_file()).await.unwrap_or(false)
 }
 
 /// Looks for a finished download whose name contains the post id.
@@ -355,36 +356,52 @@ fn remove_partials(dir: &Path, id: &str, depth: u32) {
 /// Removes the unfinished files of a cancelled download once its process has exited.
 pub async fn discard_partials(folder: PathBuf, id: String) {
     tokio::time::sleep(Duration::from_secs(1)).await;
-    remove_partials(&folder, &id, 3);
-    let _ = std::fs::remove_file(sidecar_path(&id));
+    let _ = tokio::task::spawn_blocking(move || {
+        remove_partials(&folder, &id, 3);
+        let _ = std::fs::remove_file(sidecar_path(&id));
+    })
+    .await;
 }
 
 /// Downloads one post, then makes sure it has a thumbnail.
 pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Option<u64>, max_secs: Option<u64>) -> DownloadOutcome {
     let folder = site.output_folder(&global_dir);
-    let _ = std::fs::create_dir_all(&folder);
     let sidecar = sidecar_path(&post.id);
-    if let Some(parent) = sidecar.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::remove_file(&sidecar);
+    let (prep_folder, prep_sidecar) = (folder.clone(), sidecar.clone());
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = std::fs::create_dir_all(&prep_folder);
+        if let Some(parent) = prep_sidecar.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::remove_file(&prep_sidecar);
+    })
+    .await;
     let args = download_cmd(&site, &post.url, &folder.to_string_lossy(), &sidecar, max_mb);
     let limit = max_secs.map_or(DOWNLOAD_TIMEOUT, Duration::from_secs);
     let out = match run(site.exe_or_default(), &args, limit, &download_log(&site)).await {
         Ok(o) => o,
         Err(e) if max_secs.is_some() && e.starts_with(TIMEOUT_PREFIX) => {
-            remove_partials(&folder, &post.id, 3);
+            let (dir, id) = (folder.clone(), post.id.clone());
+            let _ = tokio::task::spawn_blocking(move || remove_partials(&dir, &id, 3)).await;
             let msg = "Over the time limit for auto-downloads".to_string();
             return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true, posted_at: None, duration: None };
         }
         Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None },
     };
-    let reported = std::fs::read(&sidecar).ok().and_then(|b| String::from_utf8(b).ok());
-    let _ = std::fs::remove_file(&sidecar);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (find_folder, find_id) = (folder.clone(), post.id.clone());
+    let found = tokio::task::spawn_blocking(move || {
+        let reported = std::fs::read(&sidecar).ok().and_then(|b| String::from_utf8(b).ok());
+        let _ = std::fs::remove_file(&sidecar);
+        let from_sidecar = reported.as_deref().and_then(|t| path_lines(t).find(|p| p.is_file()));
+        let path = from_sidecar.or_else(|| path_lines(&stdout).find(|p| p.is_file())).or_else(|| find_by_id(&find_folder, &find_id, 3));
+        (reported, path, stdout)
+    })
+    .await;
+    let Ok((reported, path, stdout)) = found else {
+        return DownloadOutcome { file: Err("could not look for the downloaded file".into()), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None };
+    };
     let (posted_at, duration) = reported.as_deref().map_or((None, None), parse_meta);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let from_sidecar = reported.as_deref().and_then(|t| path_lines(t).find(|p| p.is_file()));
-    let path = from_sidecar.or_else(|| path_lines(&stdout).find(|p| p.is_file())).or_else(|| find_by_id(&folder, &post.id, 3));
     let Some(path) = path else {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let skipped = max_mb.is_some() && (stdout.contains("larger than max-filesize") || stderr.contains("larger than max-filesize"));

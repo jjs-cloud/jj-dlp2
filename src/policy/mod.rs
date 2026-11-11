@@ -468,7 +468,10 @@ impl Policy {
         loop {
             tokio::select! {
                 cmd = cmds.recv(), if cmds_open => match cmd {
-                    Some(c) => self.handle(c),
+                    Some(c) => {
+                        let _t = crate::perf::timer("policy.command", 30);
+                        self.handle(c)
+                    }
                     None => {
                         cmds_open = false;
                         self.engine.send(Command::Shutdown);
@@ -476,6 +479,8 @@ impl Policy {
                 },
                 ev = engine_events.recv() => match ev {
                     Some(e) => {
+                        let _t = crate::perf::timer("policy.engine_events", 30);
+                        crate::perf::count("policy.engine_batches");
                         self.on_engine_event(e);
                         while let Ok(e) = engine_events.try_recv() {
                             self.on_engine_event(e);
@@ -490,8 +495,15 @@ impl Policy {
                 _ = update_tick.tick() => self.check_now(),
                 _ = restart_tick.tick() => self.expire_restarts(),
                 _ = schedule_tick.tick() => self.run_schedules(),
-                _ = posts_tick.tick() => self.posts.tick(),
+                _ = posts_tick.tick() => {
+                    let _t = crate::perf::timer("policy.posts_tick", 30);
+                    self.posts.tick()
+                }
                 _ = delay_tick.tick() => {
+                    let _t = crate::perf::timer("policy.delay_tick", 30);
+                    for e in crate::persist::take_errors() {
+                        self.log(e);
+                    }
                     self.release_due_delays();
                     self.split_tick();
                     self.quality_tick();
@@ -504,6 +516,7 @@ impl Policy {
                 }
                 msg = file_msgs.recv() => {
                     if let Some(m) = msg {
+                        let _t = crate::perf::timer("policy.file_job", 30);
                         self.on_file_job(m);
                     }
                 }
@@ -514,6 +527,7 @@ impl Policy {
                 }
                 msg = posts_msgs.recv() => {
                     if let Some(m) = msg {
+                        let _t = crate::perf::timer("policy.posts_msg", 30);
                         self.posts.on_msg(m);
                     }
                 }
@@ -528,6 +542,8 @@ impl Policy {
             self.on_engine_event(e);
         }
         self.flush_live();
+        self.posts.flush_saves(true);
+        crate::persist::flush();
     }
 
     /// Feeds check results to the live tracker, then forwards the event.
@@ -1160,17 +1176,27 @@ impl Policy {
     /// Renames a streamer's finished part 1 file to `_part1`.
     fn rename_part_one(&self, streamer_id: StreamerId, path: &Path) {
         let Some(target) = segments::suffix_path(path, 1) else { return };
-        if !path.is_file() {
-            return;
-        }
-        let name = self.settings.streamers.iter().find(|s| s.id == streamer_id).map(|s| s.name.clone()).unwrap_or_default();
-        if target.exists() {
-            self.log(format!("{name}: not renaming {}: {} already exists", path.display(), target.display()));
-            return;
-        }
-        match std::fs::rename(path, &target) {
-            Ok(()) => self.log(format!("{name}: renamed {} to {}", path.display(), target.display())),
-            Err(e) => self.log(format!("{name}: could not rename {}: {e}", path.display())),
+        let name = self.streamer_name(streamer_id);
+        let (path, events) = (path.to_path_buf(), self.events.clone());
+        let work = move || {
+            if !path.is_file() {
+                return;
+            }
+            let line = if target.exists() {
+                format!("{name}: not renaming {}: {} already exists", path.display(), target.display())
+            } else {
+                match std::fs::rename(&path, &target) {
+                    Ok(()) => format!("{name}: renamed {} to {}", path.display(), target.display()),
+                    Err(e) => format!("{name}: could not rename {}: {e}", path.display()),
+                }
+            };
+            uilog::append(&line);
+            let _ = events.send(PolicyEvent::Log(line));
+        };
+        if cfg!(test) {
+            work();
+        } else {
+            let _ = std::thread::Builder::new().name("rename".into()).spawn(work);
         }
     }
 

@@ -8,6 +8,7 @@ use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -22,6 +23,8 @@ const VIEW_DELAY: Duration = Duration::from_secs(2);
 const MAX_DOWNLOADS: usize = 2;
 /// Seconds a post's error text is kept before it is cleared.
 const ERROR_SHOW_SECS: u64 = 10;
+/// Shortest time between saves of the config and library files.
+const SAVE_EVERY: Duration = Duration::from_secs(1);
 
 type AccountKey = (SiteId, String);
 
@@ -43,6 +46,9 @@ pub struct PostsMonitor {
     cancels: HashMap<String, tokio::task::AbortHandle>,
     next_sweep: Instant,
     pending_view: Vec<(String, Instant)>,
+    cfg_dirty: AtomicBool,
+    lib_dirty: AtomicBool,
+    last_save: Instant,
 }
 
 impl PostsMonitor {
@@ -65,6 +71,9 @@ impl PostsMonitor {
             cancels: HashMap::new(),
             next_sweep: soon,
             pending_view: Vec::new(),
+            cfg_dirty: AtomicBool::new(false),
+            lib_dirty: AtomicBool::new(false),
+            last_save: Instant::now(),
         }
     }
 
@@ -103,12 +112,41 @@ impl PostsMonitor {
         self.emit(PostsEvent::Notice(msg.into()));
     }
 
+    /// Marks the config as needing a save; `flush_saves` writes it.
     fn save_cfg(&self) {
-        store::save_config(&self.cfg);
+        if cfg!(test) {
+            store::save_config(self.cfg.clone());
+        } else {
+            self.cfg_dirty.store(true, Ordering::Relaxed);
+        }
     }
 
+    /// Marks the library as needing a save; `flush_saves` writes it.
     fn save_lib(&self) {
-        store::save_library(&self.posts);
+        if cfg!(test) {
+            store::save_library(self.posts.clone());
+        } else {
+            self.lib_dirty.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Queues the changed files for the background writer, at most once per `SAVE_EVERY` unless `force` is set.
+    pub fn flush_saves(&mut self, force: bool) {
+        if !force && self.last_save.elapsed() < SAVE_EVERY {
+            return;
+        }
+        let mut saved = false;
+        if self.cfg_dirty.swap(false, Ordering::Relaxed) {
+            store::save_config(self.cfg.clone());
+            saved = true;
+        }
+        if self.lib_dirty.swap(false, Ordering::Relaxed) {
+            store::save_library(self.posts.clone());
+            saved = true;
+        }
+        if saved {
+            self.last_save = Instant::now();
+        }
     }
 
     fn emit_config(&self) {
@@ -156,6 +194,7 @@ impl PostsMonitor {
 
     /// Starts due checks, queued downloads and delayed view marks; called regularly.
     pub fn tick(&mut self) {
+        self.flush_saves(false);
         runner::take_notes().into_iter().for_each(|n| self.log(n));
         let now = Instant::now();
         self.mark_due_views(now);
@@ -337,7 +376,9 @@ impl PostsMonitor {
             }
         }
         self.save_cfg();
-        self.save_lib();
+        if !changed.is_empty() {
+            self.save_lib();
+        }
         self.emit_config();
         self.emit_changed(&changed);
         self.emit_status();

@@ -270,6 +270,11 @@ fn proc_totals(p: &ProcessInfo) -> (f32, u64) {
 
 impl App {
     pub(super) fn view(&self) -> Element<'_, Msg> {
+        let _t = crate::perf::timer("gui.view", 30);
+        self.view_inner()
+    }
+
+    fn view_inner(&self) -> Element<'_, Msg> {
         let s = self.skin();
         let body: Element<'_, Msg> = match self.tab {
             Tab::Livestreams => self.monitor(s),
