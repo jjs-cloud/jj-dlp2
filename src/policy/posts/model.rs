@@ -226,6 +226,7 @@ impl PostSite {
                 name: Preset::TwitterX.label().into(),
                 download_args: TWITTER_X_DOWNLOAD_ARGS.into(),
                 url_template: TWITTER_X_URL_TEMPLATE.into(),
+                use_x_scraper: true,
                 ..Default::default()
             },
             Preset::Blank => PostSite::default(),
@@ -659,6 +660,11 @@ mod tests {
         let site = PostSite::from_preset(Preset::TwitterX);
         assert!(site.download_args.contains("%(display_id)s"));
         assert!(!site.download_args.contains("--print"));
+    }
+
+    #[test]
+    fn twitter_x_preset_enables_the_scraper() {
+        assert!(PostSite::from_preset(Preset::TwitterX).use_x_scraper);
     }
 
     #[test]
