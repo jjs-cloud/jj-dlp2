@@ -1299,6 +1299,9 @@ impl App {
                 if self.tab == Tab::Processes && t != Tab::Processes {
                     self.expanded_procs.clear();
                 }
+                if self.tab == Tab::Posts && t != Tab::Posts {
+                    self.posts.reset_filters();
+                }
                 self.tab = t;
                 if t == Tab::Livestreams {
                     // Collapse any open streamer settings on entering Livestreams.

@@ -538,6 +538,9 @@ impl App {
         if self.compact {
             col = self.compact_list(s, col);
         } else {
+            for p in &self.check_problems() {
+                col = col.push(self.warning_line(s, p));
+            }
             if self.settings.streamers.is_empty() {
                 col = col.push(muted(&s, "No streamers yet. Pick a site and add a username below."));
             }
@@ -675,7 +678,8 @@ impl App {
         (cols, fit.clamp(self.row_min, self.row_max))
     }
 
-    fn compact_list<'a>(&'a self, s: Skin, mut col: Column<'a, Msg>) -> Column<'a, Msg> {
+    /// One line per site whose last check reported a problem or failed.
+    fn check_problems(&self) -> Vec<String> {
         let mut problems: Vec<String> = Vec::new();
         for site in &self.settings.sites {
             if let Some(c) = self.checks.get(&site.id) {
@@ -686,6 +690,11 @@ impl App {
                 }
             }
         }
+        problems
+    }
+
+    fn compact_list<'a>(&'a self, s: Skin, mut col: Column<'a, Msg>) -> Column<'a, Msg> {
+        let problems = self.check_problems();
         for p in &problems {
             col = col.push(self.warning_line(s, p));
         }
@@ -1328,10 +1337,7 @@ impl App {
         };
         let head = head.push(Space::new().width(Length::Fill)).push(check).push(arrow("▲", up)).push(arrow("▼", down));
 
-        let mut top = Column::new().spacing(8).push(head);
-        if let Some(p) = self.checks.get(&site.id).and_then(|c| c.problem.as_deref()) {
-            top = top.push(self.warning_line(s, p));
-        }
+        let top = Column::new().spacing(8).push(head);
         let top = self.push_streamers(s, top, streamers);
         container(top)
             .padding(14)

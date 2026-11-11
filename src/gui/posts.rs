@@ -340,6 +340,13 @@ impl PostsState {
         content.perform(action);
     }
 
+    /// Back to the Unviewed section with all accounts.
+    pub fn reset_filters(&mut self) {
+        self.section = Section::Unviewed;
+        self.account = None;
+        self.reset_view();
+    }
+
     fn reset_view(&mut self) {
         self.shown = PAGE;
     }
