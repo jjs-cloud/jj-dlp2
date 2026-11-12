@@ -945,6 +945,8 @@ pub struct App {
     processes: BTreeMap<RecorderId, ProcessInfo>,
     recording_files: HashMap<RecorderId, RecordingFile>,
     log: VecDeque<String>,
+    /// Number of lines ever pushed to `log`; gives each line a stable key in the Log tab.
+    log_seq: u64,
     drafts: HashMap<SiteId, SiteDraft>,
     new_streamer: String,
     add_site: Option<SiteTarget>,
@@ -1030,6 +1032,7 @@ impl App {
             processes: BTreeMap::new(),
             recording_files: HashMap::new(),
             log: VecDeque::new(),
+            log_seq: 0,
             drafts: HashMap::new(),
             new_streamer: String::new(),
             add_site: None,
@@ -1263,6 +1266,7 @@ impl App {
 
     fn push_log(&mut self, line: String) {
         self.log.push_front(format!("{}  {line}", crate::engine::logfile::stamp()));
+        self.log_seq = self.log_seq.wrapping_add(1);
         self.log.truncate(self.log_lines as usize);
     }
 
@@ -1292,6 +1296,7 @@ impl App {
                 }
             }
             Msg::Tick(_) => {
+                crate::perf::heartbeat();
                 self.now = now_secs();
                 if !self.animating() {
                     self.phase = 0.25;
@@ -1462,7 +1467,7 @@ impl App {
                 let global = &self.settings.default_output_dir;
                 let dir = std::path::PathBuf::from(self.drafts.get(&id).map_or(global.trim(), |d| crate::policy::layout::base_dir(&d.output, global)));
                 let _ = std::fs::create_dir_all(&dir);
-                let _ = open::that_detached(dir);
+                crate::filemgr::ops::open_detached(dir);
             }
             Msg::Draft(id, field) => {
                 if let Some(d) = self.drafts.get_mut(&id) {
@@ -1590,7 +1595,7 @@ impl App {
             Msg::OpenGlobalOut => {
                 let dir = PathBuf::from(self.global_out_dir());
                 let _ = std::fs::create_dir_all(&dir);
-                let _ = open::that_detached(dir);
+                crate::filemgr::ops::open_detached(dir);
             }
             Msg::Recheck => self.client.send(PolicyCommand::Recheck),
             Msg::ClearWarnings => self.client.send(PolicyCommand::ClearWarnings),

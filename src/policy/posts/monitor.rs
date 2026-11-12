@@ -468,7 +468,7 @@ impl PostsMonitor {
             PostsCommand::Play(id) => self.play(&id),
             PostsCommand::OpenPage(id) => {
                 if let Some(url) = self.post(&id).map(|p| p.url.clone()) {
-                    let _ = open::that_detached(url);
+                    ops::open_detached(url);
                 }
             }
             PostsCommand::Reveal(id) => {
@@ -522,7 +522,7 @@ impl PostsMonitor {
                 if let Some(site) = self.cfg.site(id) {
                     let dir = site.output_folder(&self.global_dir);
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = open::that_detached(dir);
+                    ops::open_detached(dir);
                 }
             }
         }
@@ -699,7 +699,10 @@ impl PostsMonitor {
         }
         let result = match file {
             Some(f) => ops::open_file(Path::new(f)),
-            None => open::that_detached(&post.url).map_err(|e| e.to_string()),
+            None => {
+                ops::open_detached(post.url.clone());
+                Ok(())
+            }
         };
         self.after_open(id, post.site_id, result.map_err(|e| format!("Could not open the post: {e}")));
     }

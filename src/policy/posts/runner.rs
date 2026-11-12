@@ -430,11 +430,13 @@ pub async fn resolve_m3u8(site: PostSite, url: String) -> Result<String, String>
 /// Plays a stream URL in `player`, or through a temporary .m3u8 file when `player` is blank.
 pub fn play_stream(player: &str, url: &str, id: &str) -> Result<(), String> {
     if !player.trim().is_empty() {
-        return open::with_detached(url, resolve_and_note(player)).map_err(|e| e.to_string());
+        crate::filemgr::ops::open_with_detached(url.to_string(), resolve_and_note(player));
+        return Ok(());
     }
     let file = std::env::temp_dir().join(Path::new(&thumb_name(id)).with_extension("m3u8"));
     std::fs::write(&file, format!("#EXTM3U\n{url}\n")).map_err(|e| e.to_string())?;
-    open::that_detached(file).map_err(|e| e.to_string())
+    crate::filemgr::ops::open_detached(file);
+    Ok(())
 }
 
 /// Sends a notification with the free space of `folder` off the async threads and returns the log lines for failures.

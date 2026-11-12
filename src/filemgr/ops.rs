@@ -10,9 +10,28 @@ pub enum DeleteMode {
     Permanent,
 }
 
-/// Opens a file with the system default program.
+/// Opens a file with the system default program without waiting for the shell.
 pub fn open_file(path: &Path) -> Result<(), String> {
-    open::that_detached(path).map_err(|e| e.to_string())
+    open_detached(path.to_path_buf());
+    Ok(())
+}
+
+/// Opens a path or URL with the system default program on a background thread; failures go to the UI log.
+pub fn open_detached(target: impl AsRef<std::ffi::OsStr> + Send + 'static) {
+    let _ = std::thread::Builder::new().name("open".into()).spawn(move || {
+        if let Err(e) = open::that_detached(target.as_ref()) {
+            crate::policy::uilog::append(&format!("Could not open {}: {e}", target.as_ref().to_string_lossy()));
+        }
+    });
+}
+
+/// Opens a path or URL with the given program on a background thread; failures go to the UI log.
+pub fn open_with_detached(target: String, app: String) {
+    let _ = std::thread::Builder::new().name("open".into()).spawn(move || {
+        if let Err(e) = open::with_detached(&target, app) {
+            crate::policy::uilog::append(&format!("Could not play {target}: {e}"));
+        }
+    });
 }
 
 /// Shows the path in the system file manager, selecting it where the platform supports that.

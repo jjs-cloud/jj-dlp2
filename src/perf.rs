@@ -1,16 +1,23 @@
-//! Optional timing log: set JJ_PERF=1 to write slow-operation lines to perf.log in the config folder.
+//! Optional timing log: start with --perf to write slow-operation lines to perf.log in the config folder.
 
 use crate::{persist, settings};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const REPORT_EVERY: Duration = Duration::from_secs(5);
 
-/// True when the JJ_PERF environment variable is set to something other than 0.
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Turns timing on; called when the app is started with --perf.
+pub fn enable() {
+    ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// True when timing was turned on with --perf.
 pub fn enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("JJ_PERF").is_some_and(|v| !v.is_empty() && v != "0"))
+    ENABLED.load(Ordering::Relaxed)
 }
 
 /// Appends one timestamped line to perf.log.
@@ -66,5 +73,22 @@ pub fn count(label: &'static str) {
         counts.since = Instant::now();
         drop(guard);
         note(&format!("counts over {secs}s: {}", items.join(" ")));
+    }
+}
+
+static BEAT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Called once per GUI tick; logs when the gap since the previous tick shows the UI thread was stalled.
+pub fn heartbeat() {
+    if !enabled() {
+        return;
+    }
+    let now = Instant::now();
+    let prev = BEAT.lock().unwrap().replace(now);
+    if let Some(prev) = prev {
+        let gap = now.duration_since(prev);
+        if gap >= Duration::from_millis(1500) {
+            note(&format!("gui stalled: {} ms between 1 s ticks", gap.as_millis()));
+        }
     }
 }

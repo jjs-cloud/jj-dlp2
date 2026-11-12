@@ -1277,9 +1277,7 @@ impl Policy {
             self.log(format!("recording file not found: {}", path.display()));
             return;
         }
-        if let Err(e) = open::that_detached(path) {
-            self.log(format!("could not open {}: {e}", path.display()));
-        }
+        crate::filemgr::ops::open_detached(path.to_path_buf());
     }
 
     /// Writes live.json and notifies front ends when the tracker changed.

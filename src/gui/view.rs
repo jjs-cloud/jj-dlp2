@@ -2446,20 +2446,24 @@ impl App {
     }
 
     fn log_view(&self, s: Skin) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(4);
-        if self.log.is_empty() {
-            col = col.push(muted(&s, "Nothing logged yet."));
-        }
-        for line in &self.log {
-            col = col.push(
-                iced::widget::text(line.as_str())
-                    .font(iced::Font::MONOSPACE)
-                    .size(12)
-                    .color(s.text),
-            );
-        }
+        // Rows are keyed by line number so a new line does not make every older line re-lay out.
+        let body: Element<'_, Msg> = if self.log.is_empty() {
+            muted(&s, "Nothing logged yet.").into()
+        } else {
+            let rows: Vec<(u64, Element<'_, Msg>)> = self
+                .log
+                .iter()
+                .enumerate()
+                .map(|(i, line)| {
+                    let row: Element<'_, Msg> =
+                        iced::widget::text(line.as_str()).font(iced::Font::MONOSPACE).size(12).color(s.text).into();
+                    (self.log_seq.wrapping_sub(i as u64), row)
+                })
+                .collect();
+            iced::widget::keyed_column(rows).spacing(4).into()
+        };
         let title = row![self.section_title(s, "ENGINE LOG")];
-        container(column![title, scrollable(col).height(Length::Fill)].spacing(10))
+        container(column![title, scrollable(body).height(Length::Fill)].spacing(10))
             .padding(14)
             .width(Length::Fill)
             .height(Length::Fill)
