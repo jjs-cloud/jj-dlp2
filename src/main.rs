@@ -1,6 +1,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 mod api;
+mod crash;
 mod engine;
 mod filemgr;
 mod gui;
@@ -42,6 +43,7 @@ fn main() {
         let dir = std::path::PathBuf::from(value);
         settings::set_config_dir(std::path::absolute(&dir).unwrap_or(dir));
     }
+    crash::install();
     if let Some(i) = args.iter().position(|a| a.starts_with("--backend=")) {
         let value = args.remove(i).trim_start_matches("--backend=").to_string();
         // Safe here: nothing else has started, so no other thread reads the environment yet.
@@ -101,11 +103,18 @@ fn main() {
         policy::update::cleanup_stale();
         resets::run();
     }
+    let tracked = !matches!(mode, Mode::Update(_));
+    if tracked {
+        crash::start_session();
+    }
     match mode {
         Mode::Gui => run_gui(),
         Mode::NoGui => run_no_gui(),
         Mode::EngineOnly => run_engine_only(),
         Mode::Update(rc) => run_update(rc),
+    }
+    if tracked {
+        crash::end_session();
     }
 }
 

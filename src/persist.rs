@@ -98,7 +98,8 @@ fn run(rx: mpsc::Receiver<Job>) {
         }
         let mut jobs = vec![first];
         jobs.extend(rx.try_iter());
-        handle(jobs);
+        // A panic in one batch must not stop later saves; the panic hook records it.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(jobs)));
     }
 }
 
