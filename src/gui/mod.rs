@@ -1874,13 +1874,32 @@ fn on_resize((_, size): (window::Id, Size)) -> Msg {
     Msg::Resized(size)
 }
 
+/// Keeps only the newest process update for each recorder in a batch of events.
+fn coalesce(batch: Vec<PolicyEvent>) -> Vec<PolicyEvent> {
+    let mut last: HashMap<RecorderId, usize> = HashMap::new();
+    for (i, ev) in batch.iter().enumerate() {
+        if let PolicyEvent::Engine(Event::ProcessUpdate(p)) = ev {
+            last.insert(p.id, i);
+        }
+    }
+    batch
+        .into_iter()
+        .enumerate()
+        .filter(|(i, ev)| match ev {
+            PolicyEvent::Engine(Event::ProcessUpdate(p)) => last.get(&p.id) == Some(i),
+            _ => true,
+        })
+        .map(|(_, ev)| ev)
+        .collect()
+}
+
 fn engine_stream() -> impl Stream<Item = Msg> {
     iced::stream::channel(64, async |mut out: iced::futures::channel::mpsc::Sender<Msg>| {
         let rx = EVENTS.lock().unwrap().take();
         if let Some(mut rx) = rx {
             let mut batch = Vec::new();
-            while rx.recv_many(&mut batch, 256).await > 0 {
-                if out.send(Msg::PolicyBatch(std::mem::take(&mut batch))).await.is_err() {
+            while rx.recv_many(&mut batch, 2048).await > 0 {
+                if out.send(Msg::PolicyBatch(coalesce(std::mem::take(&mut batch)))).await.is_err() {
                     return;
                 }
             }

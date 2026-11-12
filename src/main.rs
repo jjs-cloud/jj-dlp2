@@ -15,7 +15,7 @@ mod testutil;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
-const USAGE: &str = "Usage: jj-dlp [--config-dir=<path>] [--perf] [--no-gui | --engine-only | --update [--rc]]\n  --config-dir  keep config, logs and the instance lock in <path>, so several instances can run\n  --perf        write slow-operation timings to perf.log in the config folder\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
+const USAGE: &str = "Usage: jj-dlp [--config-dir=<path>] [--perf] [--backend=<name>] [--no-gui | --engine-only | --update [--rc]]\n  --config-dir  keep config, logs and the instance lock in <path>, so several instances can run\n  --perf        write slow-operation timings to perf.log in the config folder\n  --backend     draw with dx12, vulkan, gl or software instead of the automatic choice\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
 
 enum Mode {
     Gui,
@@ -41,6 +41,19 @@ fn main() {
         }
         let dir = std::path::PathBuf::from(value);
         settings::set_config_dir(std::path::absolute(&dir).unwrap_or(dir));
+    }
+    if let Some(i) = args.iter().position(|a| a.starts_with("--backend=")) {
+        let value = args.remove(i).trim_start_matches("--backend=").to_string();
+        // Safe here: nothing else has started, so no other thread reads the environment yet.
+        match value.as_str() {
+            "dx12" | "vulkan" | "gl" => unsafe { std::env::set_var("WGPU_BACKEND", &value) },
+            "software" => unsafe { std::env::set_var("ICED_BACKEND", "tiny-skia") },
+            _ => {
+                attach_console();
+                eprintln!("{USAGE}");
+                std::process::exit(2);
+            }
+        }
     }
     if let Some(i) = args.iter().position(|a| a == "--perf") {
         args.remove(i);
