@@ -9,8 +9,6 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System}
 use tokio::sync::mpsc::UnboundedSender;
 
 const ORPHAN_GRACE: Duration = Duration::from_secs(20);
-/// Samples between refreshes of the whole process table; the others refresh only known pids.
-const FULL_REFRESH_EVERY: u64 = 5;
 /// Samples between updates for a recorder whose state has not changed.
 const IDLE_UPDATE_EVERY: u64 = 2;
 
@@ -25,20 +23,9 @@ pub fn spawn_sampler(
         .expect("spawn sampler thread");
 }
 
-/// Whether to refresh the whole process table, and the pids of every tracked tree; None when nothing is tracked.
-fn refresh_plan(tracked: &SharedTracked, primed: bool, tick: u64) -> Option<(bool, Vec<Pid>)> {
-    let map = tracked.lock().unwrap();
-    let live: Vec<_> = map.values().filter(|t| !t.gone_sent).collect();
-    if live.is_empty() {
-        return None;
-    }
-    let full = !primed || tick % FULL_REFRESH_EVERY == 0 || live.iter().any(|t| t.root_exit.is_some() || t.stopping);
-    let pids = live
-        .iter()
-        .flat_map(|t| std::iter::once(t.root_pid).chain(t.seen.iter().map(|(p, _)| *p)))
-        .map(Pid::from_u32)
-        .collect();
-    Some((full, pids))
+/// True while any recorder is still tracked.
+fn any_tracked(tracked: &SharedTracked) -> bool {
+    tracked.lock().unwrap().values().any(|t| !t.gone_sent)
 }
 
 fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal: UnboundedSender<Internal>) {
@@ -52,16 +39,11 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
             return;
         }
         tick += 1;
-        let Some((full, pids)) = refresh_plan(&tracked, primed, tick) else {
+        if !any_tracked(&tracked) {
             primed = false;
             continue;
-        };
-        let kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
-        if full {
-            sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
-        } else {
-            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), true, kind);
         }
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cpu().with_memory());
         // The first refresh after idling only seeds CPU readings.
         if !primed {
             primed = true;
