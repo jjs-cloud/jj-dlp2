@@ -36,8 +36,8 @@ jj-dlp is a app (built with Rust) that allows you to automatically record live s
 
 ## Dependencies 
 
-- [ffmpeg](https://www.ffmpeg.org/) (jj-dlp will help you install ffmpeg if it's missing)
-
+- [ffmpeg](https://www.ffmpeg.org/) - jj-dlp uses yt-dlp, which uses ffmpeg to download livestreams
+- [firefox](https://www.firefox.com/) - Firefox is needed so yt-dlp can use your cookie for each site
 ---
 
 
