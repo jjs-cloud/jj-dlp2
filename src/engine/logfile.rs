@@ -2,8 +2,6 @@
 
 use super::template;
 use crate::settings;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -82,18 +80,9 @@ impl CmdLog {
     }
 }
 
-/// Appends text to a log file, emptying it first if it is over the size limit; errors are ignored.
+/// Queues text for the background writer, which empties the file first if it is over the size limit.
 pub fn append(path: &Path, text: &str) {
-    let _ = try_append(path, text);
-}
-
-fn try_append(path: &Path, text: &str) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let over = std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_BYTES);
-    let mut file = if over { File::create(path)? } else { OpenOptions::new().create(true).append(true).open(path)? };
-    file.write_all(text.as_bytes())
+    crate::persist::append_line(path.to_path_buf(), text.to_string(), MAX_BYTES, crate::persist::Over::Empty);
 }
 
 /// Appends one timestamped line.

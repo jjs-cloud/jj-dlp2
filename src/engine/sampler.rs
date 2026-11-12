@@ -2,13 +2,17 @@
 
 use super::recorder::SharedTracked;
 use super::Internal;
-use crate::api::{Event, ProcSample, ProcessInfo, RecorderState};
+use crate::api::{Event, ProcSample, ProcessInfo, RecorderId, RecorderState};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
 use tokio::sync::mpsc::UnboundedSender;
 
 const ORPHAN_GRACE: Duration = Duration::from_secs(20);
+/// Samples between refreshes of the whole process table; the others refresh only known pids.
+const FULL_REFRESH_EVERY: u64 = 5;
+/// Samples between updates for a recorder whose state has not changed.
+const IDLE_UPDATE_EVERY: u64 = 2;
 
 pub fn spawn_sampler(
     tracked: SharedTracked,
@@ -21,23 +25,43 @@ pub fn spawn_sampler(
         .expect("spawn sampler thread");
 }
 
+/// Whether to refresh the whole process table, and the pids of every tracked tree; None when nothing is tracked.
+fn refresh_plan(tracked: &SharedTracked, primed: bool, tick: u64) -> Option<(bool, Vec<Pid>)> {
+    let map = tracked.lock().unwrap();
+    let live: Vec<_> = map.values().filter(|t| !t.gone_sent).collect();
+    if live.is_empty() {
+        return None;
+    }
+    let full = !primed || tick % FULL_REFRESH_EVERY == 0 || live.iter().any(|t| t.root_exit.is_some() || t.stopping);
+    let pids = live
+        .iter()
+        .flat_map(|t| std::iter::once(t.root_pid).chain(t.seen.iter().map(|(p, _)| *p)))
+        .map(Pid::from_u32)
+        .collect();
+    Some((full, pids))
+}
+
 fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal: UnboundedSender<Internal>) {
     let mut sys = System::new();
     let mut primed = false;
+    let mut tick: u64 = 0;
+    let mut last_state: HashMap<RecorderId, RecorderState> = HashMap::new();
     loop {
         std::thread::sleep(Duration::from_secs(1));
         if events.is_closed() {
             return;
         }
-        if tracked.lock().unwrap().values().all(|t| t.gone_sent) {
+        tick += 1;
+        let Some((full, pids)) = refresh_plan(&tracked, primed, tick) else {
             primed = false;
             continue;
+        };
+        let kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
+        if full {
+            sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+        } else {
+            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), true, kind);
         }
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
-        );
         // The first refresh after idling only seeds CPU readings.
         if !primed {
             primed = true;
@@ -45,6 +69,7 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
         }
         let children = children_map(&sys);
         let mut map = tracked.lock().unwrap();
+        last_state.retain(|id, _| map.contains_key(id));
         for (&id, t) in map.iter_mut() {
             if t.gone_sent {
                 continue;
@@ -78,6 +103,10 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
                 None if root.is_none() && ytdlp.is_none() => RecorderState::Starting,
                 None => RecorderState::Running,
             };
+            if last_state.get(&id) == Some(&state) && tick % IDLE_UPDATE_EVERY != 0 {
+                continue;
+            }
+            last_state.insert(id, state);
             let _ = events.send(Event::ProcessUpdate(ProcessInfo {
                 id,
                 streamer_id: t.streamer_id,

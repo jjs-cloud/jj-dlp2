@@ -963,6 +963,8 @@ pub struct App {
     logs: logs::LogsState,
     global_out: String,
     phase: f32,
+    /// True while the window has no visible size, so the pulse animation is paused.
+    minimized: bool,
     now: u64,
     expanded_procs: HashSet<RecorderId>,
     output: HashMap<RecorderId, OutputLog>,
@@ -1046,6 +1048,7 @@ impl App {
             logs: logs::LogsState::new(),
             global_out: String::new(),
             phase: 0.0,
+            minimized: false,
             now: now_secs(),
             expanded_procs: HashSet::new(),
             output: HashMap::new(),
@@ -1104,7 +1107,7 @@ impl App {
         Subscription::batch([
             Subscription::run(engine_stream),
             iced::time::every(Duration::from_secs(1)).map(Msg::Tick),
-            if self.animating() { iced::time::every(Duration::from_millis(100)).map(Msg::Anim) } else { Subscription::none() },
+            if self.animating() && !self.minimized { iced::time::every(Duration::from_millis(200)).map(Msg::Anim) } else { Subscription::none() },
             window::resize_events().map(on_resize),
             if self.tab == Tab::Files { iced::keyboard::listen().map(files::key_msg) } else { Subscription::none() },
         ])
@@ -1283,7 +1286,7 @@ impl App {
                 }
             }
             Msg::Anim(_) => {
-                self.phase = (self.phase + 0.04) % 1.0;
+                self.phase = (self.phase + 0.08) % 1.0;
                 if let Some(task) = self.try_jump() {
                     return task;
                 }
@@ -1681,6 +1684,10 @@ impl App {
                 }
             }
             Msg::Resized(size) => {
+                self.minimized = size.width < 1.0 || size.height < 1.0;
+                if self.minimized {
+                    return Task::none();
+                }
                 self.win_w = size.width;
                 self.win_h = size.height;
                 *LAST_SIZE.lock().unwrap() = Some((size.width, size.height));

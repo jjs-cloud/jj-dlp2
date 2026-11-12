@@ -144,6 +144,7 @@ fn run_engine_only() {
         move || client.send(api::Command::Shutdown),
         engine.thread,
     );
+    persist::flush();
 }
 
 /// Handles events until `thread` ends; the first Ctrl-C calls `on_interrupt`.

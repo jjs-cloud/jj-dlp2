@@ -15,7 +15,7 @@ fn path() -> PathBuf {
 /// Queues one timestamped line for the background writer, which trims the file when it is too large.
 pub fn append(text: &str) {
     let line = format!("{}  {}\n", logfile::stamp(), text.replace(['\r', '\n'], " "));
-    crate::persist::append_line(path(), line, MAX_BYTES, trim);
+    crate::persist::append_line(path(), line, MAX_BYTES, crate::persist::Over::Trim(trim));
 }
 
 /// The newest `n` saved lines, oldest first.

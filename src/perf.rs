@@ -17,7 +17,7 @@ pub fn enabled() -> bool {
 pub fn note(text: &str) {
     if enabled() {
         let line = format!("{}  {text}\n", crate::engine::logfile::stamp());
-        persist::append_line(settings::config_dir().join("perf.log"), line, u64::MAX, |_| {});
+        persist::append_line(settings::config_dir().join("perf.log"), line, u64::MAX, persist::Over::Empty);
     }
 }
 

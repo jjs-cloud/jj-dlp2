@@ -17,6 +17,8 @@ const W_MODIFIED: f32 = 160.0;
 const W_SIZE: f32 = 90.0;
 const W_RATE: f32 = 100.0;
 const INDENT: f32 = 18.0;
+/// Extra rows built above and below the viewport.
+const ROW_OVERSCAN: usize = 6;
 
 /// Compact button that fits the one-line status row.
 fn small_act<'a>(s: Skin, label: &'static str, m: Option<FilesMsg>, kind: BtnKind) -> Element<'a, Msg> {
@@ -159,8 +161,20 @@ impl App {
             list = list.push(container(muted(&s, "No sites yet. Add a streamer on the Livestreams tab to see its recordings here.")).padding(16));
         }
         let now = Instant::now();
-        for (i, r) in f.rows.iter().enumerate() {
+        // Only rows near the viewport are built; spacers stand in for the rest (rows have a fixed height).
+        let total = f.rows.len();
+        let view_h = self.files_view_h().max(self.win_h);
+        let top = f.scroll_y.min((total as f32 * ROW_H - view_h).max(0.0));
+        let first = ((top / ROW_H) as usize).saturating_sub(ROW_OVERSCAN).min(total);
+        let last = (((top + view_h) / ROW_H).ceil() as usize + ROW_OVERSCAN).min(total).max(first);
+        if first > 0 {
+            list = list.push(Space::new().height(first as f32 * ROW_H));
+        }
+        for (i, r) in f.rows.iter().enumerate().take(last).skip(first) {
             list = list.push(self.files_row(s, i, r, now));
+        }
+        if last < total {
+            list = list.push(Space::new().height((total - last) as f32 * ROW_H));
         }
         if let Some(m) = &f.moving {
             list = list.push(container(muted(&s, "MOVING")).center_y(ROW_H).padding([0.0, 6.0]));

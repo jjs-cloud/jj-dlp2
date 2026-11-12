@@ -205,6 +205,8 @@ pub struct PostsState {
     pub newest_first: bool,
     pub card_w: f32,
     status: Option<(String, u64)>,
+    /// Cached unviewed count for the tab badge; cleared whenever the library changes.
+    unviewed: std::cell::Cell<Option<usize>>,
 }
 
 impl PostsState {
@@ -227,6 +229,7 @@ impl PostsState {
             newest_first: prefs.newest_first,
             card_w: prefs.card_w,
             status: None,
+            unviewed: std::cell::Cell::new(None),
         }
     }
 
@@ -263,7 +266,12 @@ impl PostsState {
     }
 
     pub fn unviewed_total(&self) -> usize {
-        self.count(Section::Unviewed, None)
+        if let Some(n) = self.unviewed.get() {
+            return n;
+        }
+        let n = self.count(Section::Unviewed, None);
+        self.unviewed.set(Some(n));
+        n
     }
 
     /// True when every site that has accounts to check is paused.
@@ -353,6 +361,7 @@ impl PostsState {
 
     /// Applies a state change reported by the policy layer.
     fn apply(&mut self, ev: PostsEvent) {
+        self.unviewed.set(None);
         match ev {
             PostsEvent::Config(cfg) => {
                 for site in &cfg.sites {

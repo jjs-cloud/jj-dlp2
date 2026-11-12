@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 /// Height of one list row in pixels.
 pub const ROW_H: f32 = 28.0;
 const SCAN_EVERY: Duration = Duration::from_millis(900);
+/// Scan interval while nothing is recording, being written or being moved.
+const SCAN_IDLE_EVERY: Duration = Duration::from_secs(4);
 const STATUS_SECS: u64 = 4;
 const TRIM_IDS: [&str; 6] = ["files-trim-0", "files-trim-1", "files-trim-2", "files-trim-3", "files-trim-4", "files-trim-5"];
 
@@ -120,7 +122,7 @@ pub struct FilesState {
     status: Option<(String, u64)>,
     scanning: bool,
     last_scan: Option<Instant>,
-    scroll_y: f32,
+    pub(super) scroll_y: f32,
     view_h: f32,
     next_job: u64,
 }
@@ -297,7 +299,9 @@ impl App {
     pub(super) fn files_tick(&mut self) -> Task<Msg> {
         let now = Instant::now();
         let f = &self.files;
-        if f.scanning || f.last_scan.is_some_and(|t| now.duration_since(t) < SCAN_EVERY) {
+        let busy = !self.processes.is_empty() || f.built_writing > 0 || !f.jobs.is_empty() || f.moving.is_some();
+        let every = if busy { SCAN_EVERY } else { SCAN_IDLE_EVERY };
+        if f.scanning || f.last_scan.is_some_and(|t| now.duration_since(t) < every) {
             return Task::none();
         }
         let roots = self.files_roots();
@@ -329,7 +333,7 @@ impl App {
         iced::widget::operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y })
     }
 
-    fn files_view_h(&self) -> f32 {
+    pub(super) fn files_view_h(&self) -> f32 {
         if self.files.view_h > 0.0 { self.files.view_h } else { (self.win_h - 330.0).max(ROW_H * 4.0) }
     }
 

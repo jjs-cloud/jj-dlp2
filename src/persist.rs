@@ -15,11 +15,20 @@ const FLUSH_WAIT: Duration = Duration::from_secs(10);
 
 type Render = Box<dyn FnOnce() -> Option<Vec<u8>> + Send>;
 
+/// What to do with an appended file that has grown past its size limit.
+#[derive(Clone, Copy)]
+pub enum Over {
+    /// Run the function on the file after the write.
+    Trim(fn(&Path)),
+    /// Empty the file before the write.
+    Empty,
+}
+
 struct Line {
     path: PathBuf,
     text: String,
     max_bytes: u64,
-    trim: fn(&Path),
+    over: Over,
 }
 
 enum Job {
@@ -56,9 +65,9 @@ pub fn save_json<T: Serialize + Send + 'static>(path: PathBuf, value: T, pretty:
     submit(Job::Save(path, render));
 }
 
-/// Queues text to append to `path`; `trim` runs on the file once it is over `max_bytes`.
-pub fn append_line(path: PathBuf, text: String, max_bytes: u64, trim: fn(&Path)) {
-    submit(Job::Line(Line { path, text, max_bytes, trim }));
+/// Queues text to append to `path`, handling the file as `over` says once it is over `max_bytes`.
+pub fn append_line(path: PathBuf, text: String, max_bytes: u64, over: Over) {
+    submit(Job::Line(Line { path, text, max_bytes, over }));
 }
 
 /// Waits until everything queued so far is written.
@@ -123,25 +132,35 @@ fn handle(jobs: Vec<Job>) {
     }
 }
 
-/// Appends each path's lines in order with one write, then trims the file if it grew too large.
+/// Appends each path's lines in order with one write, then applies the size policy.
 fn write_lines(lines: Vec<Line>) {
     let mut order: Vec<PathBuf> = Vec::new();
-    let mut grouped: HashMap<PathBuf, (String, u64, fn(&Path))> = HashMap::new();
+    let mut grouped: HashMap<PathBuf, (String, u64, Over)> = HashMap::new();
     for l in lines {
         let entry = grouped.entry(l.path.clone()).or_insert_with(|| {
             order.push(l.path.clone());
-            (String::new(), l.max_bytes, l.trim)
+            (String::new(), l.max_bytes, l.over)
         });
         entry.0.push_str(&l.text);
     }
     for path in order {
-        let Some((text, max_bytes, trim)) = grouped.remove(&path) else { continue };
+        let Some((text, max_bytes, over)) = grouped.remove(&path) else { continue };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let written = std::fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut f| f.write_all(text.as_bytes()));
-        if written.is_ok() && std::fs::metadata(&path).is_ok_and(|m| m.len() > max_bytes) {
-            trim(&path);
+        let too_big = || std::fs::metadata(&path).is_ok_and(|m| m.len() > max_bytes);
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true);
+        if matches!(over, Over::Empty) && too_big() {
+            options.write(true).truncate(true);
+        } else {
+            options.append(true);
+        }
+        let written = options.open(&path).and_then(|mut f| f.write_all(text.as_bytes()));
+        if let (Ok(()), Over::Trim(trim)) = (written, over) {
+            if too_big() {
+                trim(&path);
+            }
         }
     }
 }
