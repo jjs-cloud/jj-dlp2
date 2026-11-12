@@ -922,6 +922,11 @@ pub(crate) fn posts_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("posts-sites-scroll")
 }
 
+/// Scrollable id of the Livestreams tab.
+pub(crate) fn livestreams_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("livestreams-scroll")
+}
+
 /// Scrollable id of the Sites settings list.
 pub(crate) fn sites_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("sites-scroll")
@@ -1258,7 +1263,7 @@ impl App {
         picked.or_else(|| opts.iter().find(|o| matches!(o.target, SiteSel::Site(_)))).cloned()
     }
 
-    /// Shows a GUI-originated line in the Log tab and saves it to ui.log.
+    /// Shows a GUI-originated line in the Log tab and saves it to ui.log.txt.
     fn note(&mut self, line: String) {
         crate::policy::uilog::append(&line);
         self.push_log(line);
@@ -1326,6 +1331,10 @@ impl App {
                     // Collapse any open streamer settings on entering Livestreams.
                     self.open_streamer_settings.clear();
                     self.schedule_picker = None;
+                    return iced::widget::operation::scroll_to(
+                        livestreams_scroll_id(),
+                        iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+                    );
                 }
                 if t == Tab::Files {
                     self.files.on_enter();

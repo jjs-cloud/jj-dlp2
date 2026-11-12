@@ -595,7 +595,7 @@ impl Policy {
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
                 self.recorder_pids.remove(id);
-                self.retiring.remove(id);
+                let was_retiring = self.retiring.remove(id);
                 if let Some((streamer_id, path)) = self.rename_on_exit.remove(id) {
                     self.rename_part_one(streamer_id, &path);
                 }
@@ -604,6 +604,9 @@ impl Policy {
                 }
                 if let Some(streamer_id) = self.files.remove(*id) {
                     if !self.recorder_pids.values().any(|(sid, _)| *sid == streamer_id) {
+                        if !was_retiring {
+                            self.note_part_unused(streamer_id);
+                        }
                         outpath::remove_sidecar(streamer_id);
                         self.emit(PolicyEvent::Resolution(streamer_id, None));
                     }
@@ -1142,21 +1145,36 @@ impl Policy {
             opts.effective_auto_suffix(site) || opts.effective_split_minutes(site).is_some() || opts.intro_split_minutes().is_some();
         let part = match self.live.part(id).cloned() {
             None => {
-                self.live.set_part(id, PartRecord { span, part: 1, file: None });
+                self.live.set_part(id, PartRecord { span, part: 1, file: None, unused: false });
                 1
+            }
+            Some(rec) if rec.unused => {
+                self.live.set_part(id, PartRecord { unused: false, ..rec.clone() });
+                rec.part
             }
             Some(rec) if continuing => {
                 let next = rec.part + 1;
                 if let Some(file) = rec.file {
                     self.rename_part_one(id, Path::new(&file));
                 }
-                self.live.set_part(id, PartRecord { span, part: next, file: None });
+                self.live.set_part(id, PartRecord { span, part: next, file: None, unused: false });
                 next
             }
             Some(rec) => rec.part,
         };
         self.send_part_override(id, part);
         self.flush_live();
+    }
+
+    /// Flags the streamer's current part as unused when its recorder ended without a file on disk.
+    fn note_part_unused(&mut self, streamer_id: StreamerId) {
+        let Some(rec) = self.live.part(streamer_id).cloned() else { return };
+        let dir = self.recording_dir(streamer_id);
+        let made = outpath::read_sidecar(streamer_id, &dir).iter().any(|c| c.path.is_file());
+        if !made && !rec.unused {
+            self.live.set_part(streamer_id, PartRecord { unused: true, ..rec });
+            self.flush_live();
+        }
     }
 
     /// Stores the verified path of a streamer's part 1 file so it can be renamed when a second part appears.
@@ -1231,7 +1249,7 @@ impl Policy {
             Step::Commit { streamer, old, part } => {
                 let Some(span) = self.live.span_start(streamer) else { return };
                 let first = self.live.part(streamer).and_then(|r| r.file.clone().filter(|_| r.part == 1));
-                self.live.set_part(streamer, PartRecord { span, part, file: None });
+                self.live.set_part(streamer, PartRecord { span, part, file: None, unused: false });
                 self.flush_live();
                 self.log(format!("{}: recording part {part}", self.streamer_name(streamer)));
                 if self.recorder_pids.contains_key(&old) {
@@ -2105,6 +2123,23 @@ mod e2e {
             matches!(cmds.as_slice(), [Command::SetRecorderOverride { streamer_id: 2, args: Some(a) }, Command::StartRecording { id: 2 }] if a.contains("_part2")),
             "{cmds:?}"
         );
+    }
+
+    #[test]
+    fn restart_reuses_the_part_number_when_no_file_was_created() {
+        let _sb = Sandbox::new("policy-restart-unused-part");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), true);
+        let now = now_secs();
+        live_status(&mut p, false, now);
+        live_status(&mut p, true, now + 1);
+        sent(&mut rx);
+        let rec = p.live.part(2).cloned().unwrap();
+        p.live.set_part(2, PartRecord { unused: true, ..rec });
+        live_status(&mut p, false, now + 2);
+        let cmds = sent(&mut rx);
+        assert!(matches!(cmds.as_slice(), [Command::StartRecording { id: 2 }]), "{cmds:?}");
+        assert_eq!(p.live.part(2).map(|r| (r.part, r.unused)), Some((1, false)));
     }
 
     #[test]

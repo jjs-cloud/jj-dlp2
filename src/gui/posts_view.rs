@@ -399,7 +399,7 @@ impl App {
 
         let cleanup = row![
             cell(
-                input("Delete unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
+                input("Delete files of unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
                 Length::FillPortion(1),
             ),
         ]

@@ -65,7 +65,7 @@ pub fn new_site(preset: Preset) -> NewSite {
             "Kick",
             "https://kick.com/{username}",
             "--dump-json {urls}",
-            r#"--fixup never --no-part --output "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
+            r#"--cookies-from-browser firefox --fixup never --no-part --output "%(uploader)s %(epoch>%Y-%m-%d %H_%M_%S)s.%(ext)s" {url}"#,
             "#53FC18",
         ),
         Preset::Youtube => (
@@ -115,8 +115,8 @@ pub fn new_site(preset: Preset) -> NewSite {
         warnings_enabled: true,
         notify_interrupts: false,
         notify_errors: false,
-        warn_stalled: true,
-        warn_restarts: true,
+        warn_stalled: false,
+        warn_restarts: false,
         split_enabled: false,
         split_minutes: None,
         auto_suffix: true,
@@ -178,6 +178,15 @@ mod tests {
             assert!(new_site(preset).upgrade_quality);
         }
         assert!(!new_site(Preset::Tiktok).upgrade_quality);
+    }
+
+    #[test]
+    fn stalled_and_restart_warnings_default_off_and_kick_uses_cookies() {
+        for preset in [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube, Preset::Blank] {
+            let site = new_site(preset);
+            assert!(!site.warn_stalled && !site.warn_restarts);
+        }
+        assert!(new_site(Preset::Kick).recorder_args.contains("--cookies-from-browser firefox"));
     }
 
     #[test]

@@ -47,6 +47,7 @@ pub enum LogsMsg {
     SetWrap(bool),
     Copy,
     RevealFolder,
+    OpenUiLog,
     ToggleStreamer(StreamerId, LogKind, bool),
     ToggleChecker(SiteId, LogKind, bool),
     TogglePostChecker(SiteId, String, LogKind, bool),
@@ -257,6 +258,7 @@ impl App {
                     self.note(format!("could not open {}: {e}", dir.display()));
                 }
             }
+            LogsMsg::OpenUiLog => ops::open_detached(crate::policy::uilog::path()),
             LogsMsg::ToggleStreamer(id, kind, on) => self.toggle_streamer_log(id, kind, on),
             LogsMsg::ToggleChecker(id, kind, on) => self.toggle_checker_log(id, kind, on),
             LogsMsg::TogglePostChecker(site_id, name, kind, on) => self.set_post_log(site_id, LogTarget::Checker(name), kind, on),

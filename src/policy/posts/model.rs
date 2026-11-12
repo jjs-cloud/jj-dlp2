@@ -18,17 +18,17 @@ pub const MIN_INTERVAL_SECS: u64 = 15;
 /// Checker arguments used when a site's own are blank; `{url}` is the profile (or post) URL.
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
 /// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
-pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
 /// Arguments used when a site's own are blank; `{url}` is the post URL and the printed line is the stream playlist.
 pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
 const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
 const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
-const YOUTUBE_SHORTS_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
-const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
+const YOUTUBE_SHORTS_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
 const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
-const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
+const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
 /// Failed downloads are retried until they have failed this many times.
 pub const MAX_ATTEMPTS: u8 = 3;
 

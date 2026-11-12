@@ -1,4 +1,4 @@
-//! The persistent UI log (`ui.log`) in the config directory.
+//! The persistent UI log (`ui.log.txt`) in the config directory.
 
 use crate::api::LOG_HISTORY_MAX;
 use crate::engine::logfile;
@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 /// The file is cut back to its newest lines once it grows past this size.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-fn path() -> PathBuf {
-    settings::config_dir().join("ui.log")
+/// Location of the UI log file.
+pub fn path() -> PathBuf {
+    settings::config_dir().join("ui.log.txt")
 }
 
 /// Queues one timestamped line for the background writer, which trims the file when it is too large.

@@ -742,7 +742,7 @@ impl PostsMonitor {
         self.emit_changed(&ids);
     }
 
-    /// Sends the downloaded file to the recycle bin, removes its folder if that is now empty, and hides the post; returns a status message.
+    /// Recycles the post's file and empty folder, then resets the post to not saved; returns a status message.
     fn trash(&mut self, id: &str) -> Result<String, String> {
         let Some(post) = self.post(id).cloned() else { return Ok(String::new()) };
         let root = self.cfg.site(post.site_id).map(|s| s.output_folder(&self.global_dir));
@@ -762,20 +762,22 @@ impl PostsMonitor {
                 };
                 format!("Moved {name} to the recycle bin{folder}")
             }
-            (Some(f), None) => format!("File not found at {f}; removed the post from the list"),
-            (None, None) => "Removed the post from the list".to_string(),
+            (Some(f), None) => format!("File not found at {f}; marked the post as not saved"),
+            (None, None) => "No file to delete".to_string(),
         };
         let _ = std::fs::remove_file(post.thumb_path());
         if let Some(p) = self.post_mut(id) {
-            p.state = PostState::Removed;
             p.file = None;
             p.has_thumb = false;
-            p.viewed = true;
+            p.state = PostState::Remote;
+            p.error.clear();
+            p.error_at = None;
+            p.attempts = 0;
         }
         Ok(note)
     }
 
-    /// Deletes unstarred posts older than their site's auto-delete age.
+    /// Deletes the files of unstarred posts older than their site's auto-delete age.
     fn sweep(&mut self) {
         let now = now_secs();
         let limits: HashMap<SiteId, u64> =
@@ -783,7 +785,7 @@ impl PostsMonitor {
         let old: Vec<String> = self
             .posts
             .iter()
-            .filter(|p| !p.starred && !matches!(p.state, PostState::Removed | PostState::Downloading))
+            .filter(|p| !p.starred && p.state == PostState::Ready)
             .filter(|p| limits.get(&p.site_id).is_some_and(|max| now.saturating_sub(p.found_at) >= *max))
             .map(|p| p.id.clone())
             .collect();
@@ -791,7 +793,7 @@ impl PostsMonitor {
         if !deleted.is_empty() {
             self.save_lib();
             self.emit_changed(&deleted);
-            self.log(format!("Posts: auto-deleted {} unstarred post(s)", deleted.len()));
+            self.log(format!("Posts: auto-deleted the files of {} unstarred post(s)", deleted.len()));
         }
     }
 }

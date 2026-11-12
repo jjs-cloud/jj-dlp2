@@ -1,5 +1,6 @@
 //! View functions for every screen.
 
+use super::logs::LogsMsg;
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
     App, DraftField, Msg, NEW_SITE_ID, OutputLog, PickerTarget, SITE_SWATCHES, ScheduleIssue, SettingsTab, SiteDraft, SiteOption, SiteSel, SiteSelOption, StreamerDraft,
@@ -105,6 +106,13 @@ pub(super) fn fmt_ago(secs: u64) -> String {
         3600..=86399 => format!("{}h ago", secs / 3600),
         _ => format!("{}d ago", secs / 86400),
     }
+}
+
+/// Splits a URL into the part before its domain, the domain, and the rest.
+fn split_url_host(url: &str) -> (String, String, String) {
+    let start = url.find("://").map_or(0, |i| i + 3);
+    let end = url[start..].find(['/', '?', '#']).map_or(url.len(), |i| start + i);
+    (url[..start].to_string(), url[start..end].to_string(), url[end..].to_string())
 }
 
 pub(super) fn clip(s: &str, max: usize) -> String {
@@ -515,13 +523,13 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             );
         }
-        title = title.push(toggler(self.live_first).label("Live first").on_toggle(Msg::SetLiveFirst).text_size(12));
         title = title.push(
             button(btn_label(&s, if self.compact { "Full View" } else { "Compact View" }).size(12))
                 .on_press(Msg::SetCompact(!self.compact))
                 .padding([5.0, 10.0])
                 .style(skin::btn(s, BtnKind::Ghost)),
         );
+        title = title.push(toggler(self.live_first).label("Live first").on_toggle(Msg::SetLiveFirst).text_size(12));
         title = title.push(
             pick_list(prefs::SortKey::ALL.to_vec(), Some(self.sort_key), Msg::SetSortKey)
                 .padding([3.0, 8.0])
@@ -567,7 +575,7 @@ impl App {
                 col = col.push(self.site_block(s, site, list, up, down));
             }
         }
-        column![title, scrollable(col).height(Length::Fill)]
+        column![title, scrollable(col).id(super::livestreams_scroll_id()).height(Length::Fill)]
             .spacing(12)
             .push(container(self.streamer_add_bar(s)).padding(iced::Padding { right: 8.0, ..Default::default() }))
             .into()
@@ -1432,11 +1440,12 @@ impl App {
                     name
                 },
                 {
-                    let url = clip(&st.url, 70);
-                    match self.last_live_ago(id, status) {
-                        Some(d) => muted(&s, format!("{url} · last live {}", fmt_ago(d))),
-                        None => muted(&s, url),
+                    let (head, host, mut tail) = split_url_host(&clip(&st.url, 70));
+                    if let Some(d) = self.last_live_ago(id, status) {
+                        tail.push_str(&format!(" · last live {}", fmt_ago(d)));
                     }
+                    let site_color = self.settings.sites.iter().find(|x| x.id == st.site_id).map_or(s.accent2, |x| s.site_color(x.color.as_deref()));
+                    row![muted(&s, head), muted(&s, host).color(site_color), muted(&s, tail)]
                 },
             ]
             .spacing(2)
@@ -2086,7 +2095,7 @@ impl App {
 
         let log_card = column![
             self.section_title(s, "LOG"),
-            muted(&s, "Lines shown in the Log tab. Recent history is saved to ui.log and reloaded at startup."),
+            muted(&s, "Lines shown in the Log tab. Recent history is saved to ui.log.txt and reloaded at startup."),
             log_lines,
         ]
         .spacing(8);
@@ -2437,7 +2446,17 @@ impl App {
                 .padding([6.0, 16.0])
                 .style(skin::btn(s, kind))
         };
-        let switcher = row![switch("Engine", LogTab::Engine), switch("Output", LogTab::Output)].spacing(8);
+        let switcher = row![
+            switch("Engine", LogTab::Engine),
+            switch("Output", LogTab::Output),
+            Space::new().width(Length::Fill),
+            button(btn_label(&s, "Open Log").size(12))
+                .on_press(Msg::Logs(LogsMsg::OpenUiLog))
+                .padding([5.0, 12.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
         let body = match self.log_tab {
             LogTab::Engine => self.log_view(s),
             LogTab::Output => self.logs_output(s),

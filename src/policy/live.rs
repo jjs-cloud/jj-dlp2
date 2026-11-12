@@ -29,6 +29,9 @@ pub struct PartRecord {
     pub part: u32,
     /// Path of part 1 while it still lacks its `_part1` suffix.
     pub file: Option<String>,
+    /// The part's recorder ended without creating a file, so the next start reuses this number.
+    #[serde(default)]
+    pub unused: bool,
 }
 
 #[derive(Default)]
@@ -346,7 +349,7 @@ mod tests {
     fn part_record_lives_and_dies_with_its_span() {
         let mut t = LiveTracker::default();
         t.status(1, 100, true, END);
-        t.set_part(1, PartRecord { span: 100, part: 2, file: None });
+        t.set_part(1, PartRecord { span: 100, part: 2, file: None, unused: false });
         assert_eq!(t.part(1).map(|p| p.part), Some(2));
         t.status(1, 160, false, END);
         t.status(1, 100 + END, false, END);
@@ -357,7 +360,7 @@ mod tests {
     fn part_record_from_an_older_span_is_ignored() {
         let mut t = LiveTracker::default();
         t.status(1, 500, true, END);
-        t.set_part(1, PartRecord { span: 100, part: 3, file: None });
+        t.set_part(1, PartRecord { span: 100, part: 3, file: None, unused: false });
         assert!(t.part(1).is_none());
     }
 
