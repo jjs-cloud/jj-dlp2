@@ -49,20 +49,21 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
             primed = true;
             continue;
         }
-        let children = children_map(&sys);
+        let fresh = fresh_system();
+        let children = children_map(&fresh);
         let mut map = tracked.lock().unwrap();
         last_state.retain(|id, _| map.contains_key(id));
         for (&id, t) in map.iter_mut() {
             if t.gone_sent {
                 continue;
             }
-            let alive = alive_tree(&sys, &children, t.root_pid, &mut t.seen);
+            let alive = alive_tree(&fresh, &children, t.root_pid, &mut t.seen);
             if t.root_name.is_none() {
-                t.root_name = sys
+                t.root_name = fresh
                     .process(Pid::from_u32(t.root_pid))
                     .map(|p| p.name().to_string_lossy().to_lowercase());
             }
-            let (root, ytdlp, has_bootloader, ffmpeg) = classify(&sys, &alive, t.root_pid, t.root_name.as_deref());
+            let (root, ytdlp, has_bootloader, ffmpeg) = classify(&fresh, &sys, &alive, t.root_pid, t.root_name.as_deref());
 
             if t.root_exit.is_some() && alive.is_empty() {
                 t.gone_sent = true;
@@ -72,7 +73,7 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
             if let Some(at) = t.root_exited_at {
                 if at.elapsed() > ORPHAN_GRACE && !alive.is_empty() {
                     for pid in &alive {
-                        if let Some(p) = sys.process(*pid) {
+                        if let Some(p) = fresh.process(*pid) {
                             p.kill();
                         }
                     }
@@ -107,10 +108,24 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
     }
 }
 
+/// A new `System` read from scratch, so a reused pid never keeps the old process's start time or name.
+fn fresh_system() -> System {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    sys
+}
+
 fn children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
     let mut m: HashMap<Pid, Vec<Pid>> = HashMap::new();
     for (pid, p) in sys.processes() {
         if let Some(parent) = p.parent() {
+            // Skip a link to a pid now held by a process that started after this one.
+            let reused = sys.process(parent).is_some_and(|pp| {
+                p.start_time() != 0 && pp.start_time() != 0 && p.start_time() < pp.start_time()
+            });
+            if reused {
+                continue;
+            }
             m.entry(parent).or_default().push(*pid);
         }
     }
@@ -148,8 +163,8 @@ fn alive_tree(
         }
         if is_alive(pid, None) {
             out.push(pid);
-            if !seen.iter().any(|(p, _)| *p == pid.as_u32()) {
-                if let Some(p) = sys.process(pid) {
+            if let Some(p) = sys.process(pid) {
+                if !seen.contains(&(pid.as_u32(), p.start_time())) {
                     seen.push((pid.as_u32(), p.start_time()));
                 }
             }
@@ -161,12 +176,15 @@ fn alive_tree(
     out
 }
 
-fn sample(sys: &System, pid: Pid) -> Option<ProcSample> {
-    sys.process(pid).map(|p| ProcSample {
+/// Name from the fresh snapshot; CPU and memory from the long-lived system when it is the same process.
+fn sample(fresh: &System, sys: &System, pid: Pid) -> Option<ProcSample> {
+    let p = fresh.process(pid)?;
+    let live = sys.process(pid).filter(|s| s.start_time() == p.start_time());
+    Some(ProcSample {
         pid: pid.as_u32(),
         name: p.name().to_string_lossy().into_owned(),
-        cpu_percent: p.cpu_usage(),
-        mem_bytes: p.memory(),
+        cpu_percent: live.map_or(0.0, |s| s.cpu_usage()),
+        mem_bytes: live.map_or(0, |s| s.memory()),
     })
 }
 
@@ -189,6 +207,7 @@ fn depth(sys: &System, pid: Pid, root: Pid) -> usize {
 /// Picks the real yt-dlp (the deepest process sharing the spawned process's name), the
 /// bootloader above it, and any ffmpeg processes.
 fn classify(
+    fresh: &System,
     sys: &System,
     alive: &[Pid],
     root_pid: u32,
@@ -196,22 +215,22 @@ fn classify(
 ) -> (Option<ProcSample>, Option<ProcSample>, bool, Vec<ProcSample>) {
     let root = Pid::from_u32(root_pid);
     let name_of = |pid: Pid| {
-        sys.process(pid).map(|p| p.name().to_string_lossy().to_lowercase()).unwrap_or_default()
+        fresh.process(pid).map(|p| p.name().to_string_lossy().to_lowercase()).unwrap_or_default()
     };
     let mut same: Vec<Pid> = alive
         .iter()
         .copied()
         .filter(|p| Some(name_of(*p).as_str()) == root_name && !name_of(*p).contains("ffmpeg"))
         .collect();
-    same.sort_by_key(|p| depth(sys, *p, root));
+    same.sort_by_key(|p| depth(fresh, *p, root));
     let has_bootloader = same.len() > 1;
     let ytdlp_pid = same.last().copied();
-    let root_sample = if alive.contains(&root) { sample(sys, root) } else { None };
-    let ytdlp = ytdlp_pid.and_then(|p| sample(sys, p));
+    let root_sample = if alive.contains(&root) { sample(fresh, sys, root) } else { None };
+    let ytdlp = ytdlp_pid.and_then(|p| sample(fresh, sys, p));
     let mut ffmpeg: Vec<ProcSample> = alive
         .iter()
         .filter(|p| name_of(**p).contains("ffmpeg"))
-        .filter_map(|p| sample(sys, *p))
+        .filter_map(|p| sample(fresh, sys, *p))
         .collect();
     ffmpeg.sort_by_key(|s| s.pid);
     (root_sample, ytdlp, has_bootloader, ffmpeg)
