@@ -59,7 +59,7 @@ pub enum Key {
     SiteGrowthGraceSecs,
     SiteStallWindowSecs,
     SiteFileCheckIntervalSecs,
-    SiteRestartClearMinutes,
+    SiteWarningClearMinutes,
     SiteRestartThreshold,
     SiteColor,
     // Streamer options.
@@ -235,8 +235,8 @@ fn reset_site(site: &mut Site, key: Key, when: &When) -> Option<String> {
         Key::SiteFileCheckIntervalSecs => {
             describe("file_check_interval_secs", reset_field(&mut site.file_check_interval_secs, None, when))
         }
-        Key::SiteRestartClearMinutes => {
-            describe("restart_clear_minutes", reset_field(&mut site.restart_clear_minutes, None, when))
+        Key::SiteWarningClearMinutes => {
+            describe("warning_clear_minutes", reset_field(&mut site.warning_clear_minutes, None, when))
         }
         Key::SiteRestartThreshold => describe("restart_threshold", reset_field(&mut site.restart_threshold, None, when)),
         _ => None,

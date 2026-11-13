@@ -93,7 +93,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         growth_grace_secs: None,
         stall_window_secs: None,
         file_check_interval_secs: None,
-        restart_clear_minutes: None,
+        warning_clear_minutes: None,
         restart_threshold: None,
         forward_output: true,
         interrupt_patterns: if matches!(preset, Preset::Twitch) { TWITCH_INTERRUPT_PATTERNS.into() } else { String::new() },
@@ -124,6 +124,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         upgrade_quality: !matches!(preset, Preset::Tiktok),
         quick_check: matches!(preset, Preset::Tiktok),
         quick_check_secs: None,
+        restart_stalled: true,
     }
 }
 
@@ -170,6 +171,13 @@ mod tests {
             assert!(!new_site(preset).quick_check);
         }
         assert!(new_site(Preset::Tiktok).quick_check);
+    }
+
+    #[test]
+    fn restart_stalled_defaults_on_for_every_preset() {
+        for preset in [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube, Preset::Blank] {
+            assert!(new_site(preset).restart_stalled);
+        }
     }
 
     #[test]

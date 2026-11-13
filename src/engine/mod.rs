@@ -749,7 +749,7 @@ mod e2e {
                 growth_grace_secs: Some(60),
                 stall_window_secs: Some(120),
                 file_check_interval_secs: Some(30),
-                restart_clear_minutes: Some(1440),
+                warning_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
                 forward_output: false,
                 interrupt_patterns: String::new(),
@@ -780,6 +780,7 @@ mod e2e {
                 upgrade_quality: false,
                 quick_check: false,
                 quick_check_secs: None,
+                restart_stalled: true,
             }],
             streamers: vec![Streamer {
                 id: 2,
@@ -929,7 +930,7 @@ mod e2e {
                 growth_grace_secs: Some(60),
                 stall_window_secs: Some(120),
                 file_check_interval_secs: Some(30),
-                restart_clear_minutes: Some(1440),
+                warning_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
                 forward_output: false,
                 interrupt_patterns: String::new(),
@@ -960,6 +961,7 @@ mod e2e {
                 upgrade_quality: false,
                 quick_check: false,
                 quick_check_secs: None,
+                restart_stalled: true,
             }],
             streamers: vec![streamer(2, "offline1"), streamer(3, "broken1"), streamer(4, "live1")],
         };

@@ -234,8 +234,8 @@ impl App {
             row![
                 cell(
                     labeled(
-                        "Clear restart warnings after (minutes, 0 = never)",
-                        field(&DEFAULT_RESTART_CLEAR_MINUTES.to_string(), &d.restart_clear, DraftField::RestartClear, true)
+                        "Clear warnings after (minutes, 0 = never)",
+                        field(&DEFAULT_WARNING_CLEAR_MINUTES.to_string(), &d.warning_clear, DraftField::WarningClear, true)
                     ),
                     Length::FillPortion(1)
                 ),

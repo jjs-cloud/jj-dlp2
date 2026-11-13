@@ -2,7 +2,7 @@
 
 use super::outpath::{self, same_path, SidecarPath};
 use crate::api::{ProcessInfo, RecorderId, RecorderState, Site, StreamerId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -114,6 +114,8 @@ pub struct Update {
     pub job: Option<Job>,
     /// Set when this update flagged the streamer's recording as stalled.
     pub stalled_for: Option<StreamerId>,
+    /// Why the recording stalled, set together with `stalled_for`.
+    pub stall_reason: Option<String>,
     /// Set when this update first confirmed the streamer's file growing.
     pub confirmed_for: Option<StreamerId>,
 }
@@ -150,8 +152,6 @@ struct Entry {
     stall: Option<String>,
     /// The file has been seen growing since its path was verified.
     confirmed: bool,
-    /// The stall was cleared by hand and stays hidden until the file recovers.
-    dismissed: bool,
 }
 
 impl Entry {
@@ -173,7 +173,6 @@ impl Entry {
             last_growth: None,
             stall: None,
             confirmed: false,
-            dismissed: false,
         }
     }
 
@@ -288,9 +287,6 @@ impl Entry {
             (Some(_), None) => logs.push(format!("{}: recording file is growing again", self.name)),
             _ => {}
         }
-        if reason.is_none() {
-            self.dismissed = false;
-        }
         effect.stalled = self.stall.is_none() && reason.is_some();
         self.stall = reason;
         effect
@@ -319,7 +315,6 @@ impl FileTracker {
         let mut up = Update::default();
         if !e.live {
             e.stall = None;
-            e.dismissed = false;
             return up;
         }
         if e.check == PathCheck::Pending {
@@ -345,23 +340,15 @@ impl FileTracker {
         if let (true, Some((_, stat))) = (current, res.stat) {
             let effect = e.apply_stat(stat, now, &mut up.logs);
             up.stalled_for = effect.stalled.then_some(e.streamer_id);
+            up.stall_reason = effect.stalled.then(|| e.stall.clone()).flatten();
             up.confirmed_for = effect.confirmed.then_some(e.streamer_id);
         }
         up
     }
 
-    /// Hides every current stall until its file recovers.
-    pub fn dismiss_stalls(&mut self) {
-        for e in self.entries.values_mut().filter(|e| e.stall.is_some()) {
-            e.dismissed = true;
-        }
-    }
-
-    /// Hides the streamer's current stalls until their files recover.
-    pub fn dismiss_stalls_for(&mut self, id: StreamerId) {
-        for e in self.entries.values_mut().filter(|e| e.streamer_id == id && e.stall.is_some()) {
-            e.dismissed = true;
-        }
+    /// Streamers that have at least one recording stalled right now.
+    pub fn stalled_streamers(&self) -> HashSet<StreamerId> {
+        self.entries.values().filter(|e| e.stall.is_some()).map(|e| e.streamer_id).collect()
     }
 
     /// Forgets a recording and returns its streamer.
@@ -379,7 +366,7 @@ impl FileTracker {
             .iter()
             .map(|(id, e)| {
                 let openable = e.trusted_path().is_some() && e.exists;
-                (*id, RecordingFile { openable, stalled: e.stall.is_some() && !e.dismissed })
+                (*id, RecordingFile { openable, stalled: e.stall.is_some() })
             })
             .collect()
     }
@@ -596,6 +583,19 @@ mod tests {
         assert_eq!(tr.on_job(1, size(300), at(t0, 200)).stalled_for, None);
         assert_eq!(tr.on_job(1, size(300), at(t0, 215)).stalled_for, Some(2));
         assert_eq!(tr.on_job(1, size(300), at(t0, 245)).stalled_for, None);
+    }
+
+    #[test]
+    fn a_stall_reports_its_reason_and_streamer_while_it_lasts() {
+        let t0 = Instant::now();
+        let mut tr = agreed(t0);
+        let size = |n| stat_of("/r/a.ts", Stat::Size(n));
+        tr.on_job(1, size(300), at(t0, 90));
+        let up = tr.on_job(1, size(300), at(t0, 215));
+        assert_eq!(up.stall_reason.as_deref(), Some("no file growth in 120s"));
+        assert!(tr.stalled_streamers().contains(&2));
+        tr.on_job(1, size(400), at(t0, 245));
+        assert!(tr.stalled_streamers().is_empty());
     }
 
     #[test]

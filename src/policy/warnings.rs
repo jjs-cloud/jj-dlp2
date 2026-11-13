@@ -2,6 +2,7 @@
 
 use crate::api::{Site, SiteId, StreamerId};
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 /// A streamer's warning counts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,6 +90,8 @@ pub struct WarnTracker {
     counts: HashMap<StreamerId, Warnings>,
     /// Kinds already logged in each streamer's current live span.
     logged: HashSet<(StreamerId, WarnKind)>,
+    /// When each counted kind last matched, for auto-clearing.
+    last_hit: HashMap<(StreamerId, WarnKind), Instant>,
     compiled: HashMap<SiteId, Compiled>,
     dirty: bool,
 }
@@ -121,6 +124,7 @@ impl WarnTracker {
                     WarnKind::Interrupt => w.interrupts += 1,
                     WarnKind::Error => w.errors += 1,
                 }
+                self.last_hit.insert((id, kind), Instant::now());
                 self.dirty = true;
             }
             let fresh = self.logged.insert((id, kind));
@@ -140,10 +144,28 @@ impl WarnTracker {
             self.dirty = true;
         }
         self.counts.clear();
+        self.last_hit.clear();
+    }
+
+    /// Resets counts whose latest match is older than the streamer's auto-clear minutes; 0 never clears.
+    pub fn expire(&mut self, now: Instant, clear_minutes: impl Fn(StreamerId) -> u64) {
+        let due: Vec<(StreamerId, WarnKind)> = self
+            .last_hit
+            .iter()
+            .filter(|((id, _), at)| {
+                let minutes = clear_minutes(*id);
+                minutes > 0 && now.duration_since(**at) >= Duration::from_secs(minutes * 60)
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        for (id, kind) in due {
+            self.clear_kind(id, kind);
+        }
     }
 
     /// Resets one kind of count for the streamer.
     pub fn clear_kind(&mut self, id: StreamerId, kind: WarnKind) {
+        self.last_hit.remove(&(id, kind));
         let Some(w) = self.counts.get_mut(&id) else { return };
         let n = match kind {
             WarnKind::Interrupt => &mut w.interrupts,
@@ -163,6 +185,7 @@ impl WarnTracker {
         let before = self.counts.len();
         self.counts.retain(|id, _| keep_streamer(*id));
         self.logged.retain(|(id, _)| keep_streamer(*id));
+        self.last_hit.retain(|(id, _), _| keep_streamer(*id));
         self.compiled.retain(|id, _| keep_site(*id));
         if self.counts.len() != before {
             self.dirty = true;
@@ -291,6 +314,28 @@ mod tests {
         t.end_span(1);
         assert_eq!(fresh(t.on_line(1, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
         assert!(fresh(t.on_line(2, &site, PACKET)).is_empty());
+    }
+
+    #[test]
+    fn expire_clears_a_kind_after_its_minutes_since_the_latest_match() {
+        let (mut t, site) = (WarnTracker::default(), twitch());
+        t.on_line(1, &site, PACKET);
+        t.on_line(1, &site, AD_TAG);
+        t.take_dirty();
+        let now = Instant::now();
+        t.expire(now + Duration::from_secs(59 * 60), |_| 60);
+        assert!(!t.take_dirty());
+        t.expire(now + Duration::from_secs(61 * 60), |_| 60);
+        assert!(t.take_dirty() && t.counts().is_empty());
+    }
+
+    #[test]
+    fn expire_with_zero_minutes_never_clears() {
+        let (mut t, site) = (WarnTracker::default(), twitch());
+        t.on_line(1, &site, PACKET);
+        t.take_dirty();
+        t.expire(Instant::now() + Duration::from_secs(10 * 24 * 3600), |_| 0);
+        assert!(!t.take_dirty() && t.counts().len() == 1);
     }
 
     #[test]

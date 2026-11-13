@@ -149,7 +149,7 @@ pub struct SiteDraft {
     pub exe: String,
     pub interval: String,
     pub end_after: String,
-    pub restart_clear: String,
+    pub warning_clear: String,
     pub restart_threshold: String,
     pub forward_output: bool,
     pub interrupt_patterns: String,
@@ -191,6 +191,7 @@ pub struct SiteDraft {
     pub upgrade_quality: bool,
     pub quick_check: bool,
     pub quick_check_secs: String,
+    pub restart_stalled: bool,
     pub paused: bool,
 }
 
@@ -201,7 +202,7 @@ impl SiteDraft {
             exe: s.exe_path.clone(),
             interval: opt_text(s.interval_secs),
             end_after: opt_text(s.end_after_minutes),
-            restart_clear: opt_text(s.restart_clear_minutes),
+            warning_clear: opt_text(s.warning_clear_minutes),
             restart_threshold: opt_text(s.restart_threshold),
             forward_output: s.forward_output,
             interrupt_patterns: s.interrupt_patterns.clone(),
@@ -243,6 +244,7 @@ impl SiteDraft {
             upgrade_quality: s.upgrade_quality,
             quick_check: s.quick_check,
             quick_check_secs: opt_text(s.quick_check_secs),
+            restart_stalled: s.restart_stalled,
             paused: s.paused,
         }
     }
@@ -255,7 +257,7 @@ impl SiteDraft {
             exe: n.exe_path,
             interval: opt_text(n.interval_secs),
             end_after: opt_text(n.end_after_minutes),
-            restart_clear: opt_text(n.restart_clear_minutes),
+            warning_clear: opt_text(n.warning_clear_minutes),
             restart_threshold: opt_text(n.restart_threshold),
             forward_output: n.forward_output,
             interrupt_patterns: n.interrupt_patterns,
@@ -297,6 +299,7 @@ impl SiteDraft {
             upgrade_quality: n.upgrade_quality,
             quick_check: n.quick_check,
             quick_check_secs: opt_text(n.quick_check_secs),
+            restart_stalled: n.restart_stalled,
             paused: n.paused,
         }
     }
@@ -319,9 +322,9 @@ impl SiteDraft {
         parse_opt(&self.end_after, 1)
     }
 
-    /// Minutes of quiet after which restart warnings clear; 0 turns auto-clear off.
-    pub fn restart_clear_minutes(&self) -> Option<Option<u64>> {
-        parse_opt(&self.restart_clear, 0)
+    /// Minutes after which warnings clear themselves; 0 turns auto-clear off.
+    pub fn warning_clear_minutes(&self) -> Option<Option<u64>> {
+        parse_opt(&self.warning_clear, 0)
     }
 
     pub fn restart_threshold(&self) -> Option<Option<u32>> {
@@ -412,7 +415,7 @@ impl SiteDraft {
         self.warn_restarts = d.warn_restarts;
         self.warn_interrupts = d.warn_interrupts;
         self.warn_errors = d.warn_errors;
-        self.restart_clear = d.restart_clear.clone();
+        self.warning_clear = d.warning_clear.clone();
         self.restart_threshold = d.restart_threshold.clone();
         self.file_exists_grace = d.file_exists_grace.clone();
         self.growth_grace = d.growth_grace.clone();
@@ -460,7 +463,7 @@ impl SiteDraft {
             growth_grace_secs: self.growth_grace_secs()?,
             stall_window_secs: self.stall_window_secs()?,
             file_check_interval_secs: self.file_check_interval_secs()?,
-            restart_clear_minutes: self.restart_clear_minutes()?,
+            warning_clear_minutes: self.warning_clear_minutes()?,
             restart_threshold: self.restart_threshold()?,
             forward_output: self.forward_output,
             interrupt_patterns: self.interrupt_patterns.trim().to_string(),
@@ -490,6 +493,7 @@ impl SiteDraft {
             upgrade_quality: self.upgrade_quality,
             quick_check: self.quick_check,
             quick_check_secs: self.quick_check_secs()?,
+            restart_stalled: self.restart_stalled,
             paused: self.paused,
         })
     }
@@ -517,7 +521,7 @@ pub enum DraftField {
     Exe(String),
     Interval(String),
     EndAfter(String),
-    RestartClear(String),
+    WarningClear(String),
     RestartThreshold(String),
     ForwardOutput(bool),
     InterruptPatterns(String),
@@ -555,6 +559,7 @@ pub enum DraftField {
     SplitMinutes(String),
     AutoSuffix(bool),
     UpgradeQuality(bool),
+    RestartStalled(bool),
     QuickCheck(bool),
     QuickCheckSecs(String),
 }
@@ -940,6 +945,7 @@ pub struct App {
     tab: Tab,
     statuses: HashMap<StreamerId, StreamerStatus>,
     restarts: HashMap<StreamerId, u32>,
+    stalls: HashMap<StreamerId, u32>,
     warnings: HashMap<StreamerId, Warnings>,
     live_since: HashMap<StreamerId, u64>,
     last_live: HashMap<StreamerId, u64>,
@@ -1027,6 +1033,7 @@ impl App {
             tab: Tab::Livestreams,
             statuses: HashMap::new(),
             restarts: HashMap::new(),
+            stalls: HashMap::new(),
             warnings: HashMap::new(),
             live_since: HashMap::new(),
             last_live: HashMap::new(),
@@ -1485,7 +1492,7 @@ impl App {
                         DraftField::Exe(v) => d.exe = v,
                         DraftField::Interval(v) => d.interval = v,
                         DraftField::EndAfter(v) => d.end_after = v,
-                        DraftField::RestartClear(v) => d.restart_clear = v,
+                        DraftField::WarningClear(v) => d.warning_clear = v,
                         DraftField::RestartThreshold(v) => d.restart_threshold = v,
                         DraftField::ForwardOutput(v) => d.forward_output = v,
                         DraftField::InterruptPatterns(v) => d.interrupt_patterns = v,
@@ -1538,6 +1545,7 @@ impl App {
                         }
                         DraftField::AutoSuffix(v) => d.auto_suffix = v,
                         DraftField::UpgradeQuality(v) => d.upgrade_quality = v,
+                        DraftField::RestartStalled(v) => d.restart_stalled = v,
                         DraftField::QuickCheck(v) => d.quick_check = v,
                         DraftField::QuickCheckSecs(v) => d.quick_check_secs = v,
                     }
@@ -1773,6 +1781,7 @@ impl App {
                 }
             },
             PolicyEvent::Restarts(map) => self.restarts = map,
+            PolicyEvent::Stalls(map) => self.stalls = map,
             PolicyEvent::Warnings(map) => self.warnings = map,
             PolicyEvent::Output(batch) => {
                 for (id, lines) in batch {

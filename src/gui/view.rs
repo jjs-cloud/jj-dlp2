@@ -211,7 +211,7 @@ fn compact_chips<'a>(
     m: RowMetrics,
     st: &Streamer,
     status: StreamerStatus,
-    stalled: bool,
+    stalls: u32,
     restarts: u32,
     warns: Warnings,
     open: Option<RecorderId>,
@@ -222,8 +222,8 @@ fn compact_chips<'a>(
     if status.recording && st.enabled {
         chips = chips.push(rec_chip(s, "REC", m.chip, [m.chip_pad_v, m.chip_pad_h], open));
     }
-    if stalled {
-        chips = chips.push(warn_chip(s, "STALLED", s.danger, m.chip, [m.chip_pad_v, m.chip_pad_h], st.id, WarningChip::Stalled));
+    if stalls > 0 {
+        chips = chips.push(warn_chip(s, format!("STALLED {stalls}×"), s.danger, m.chip, [m.chip_pad_v, m.chip_pad_h], st.id, WarningChip::Stalled));
     }
     if !st.enabled {
         chips = chips.push(mini_chip(s, m, "PAUSED", s.warn));
@@ -773,9 +773,18 @@ impl App {
         st.and_then(|st| self.settings.sites.iter().find(|x| x.id == st.site_id)).is_none_or(on)
     }
 
+    /// True when the recording's file is stalled now and its streamer's STALLED chip is showing.
     fn recording_stalled(&self, id: RecorderId) -> bool {
         self.recording_files.get(&id).is_some_and(|f| f.stalled)
-            && self.processes.get(&id).is_none_or(|p| self.warn_shown(p.streamer_id, |x| x.warn_stalled))
+            && self.processes.get(&id).is_some_and(|p| self.stall_count(p.streamer_id) > 0)
+    }
+
+    /// The streamer's stall count for its STALLED chip, or 0 when no chip shows.
+    fn stall_count(&self, id: StreamerId) -> u32 {
+        if !self.warn_shown(id, |x| x.warn_stalled) {
+            return 0;
+        }
+        self.stalls.get(&id).copied().unwrap_or(0)
     }
 
     fn recording_openable(&self, id: RecorderId) -> bool {
@@ -801,8 +810,6 @@ impl App {
         }
     }
 
-    /// True when at least one RESTARTED, INTERRUPT or ERROR chip is showing.
-    /// True while the Clear warnings button applies.
     /// True while something on screen pulses, so the fast animation tick is needed.
     pub(super) fn animating(&self) -> bool {
         let p = &self.posts;
@@ -817,37 +824,41 @@ impl App {
             || (self.tab == Tab::Livestreams && self.settings.streamers.is_empty())
     }
 
+    /// True while the Clear warnings button applies.
     fn monitor_alert(&self) -> bool {
-        self.any_warning_chip() || self.settings.streamers.iter().any(|st| self.streamer_stalled(st.id))
+        self.any_warning_chip()
     }
 
+    /// True when at least one STALLED, RESTARTED, INTERRUPT or ERROR chip is showing.
     fn any_warning_chip(&self) -> bool {
-        self.settings.streamers.iter().any(|st| {
-            let w = self.warns(st.id);
-            self.shown_restarts(st) > 0 || w.interrupts > 0 || w.errors > 0
-        })
+        self.settings.streamers.iter().any(|st| self.any_chip_shows(st))
     }
 
-    /// True when any active recording of the streamer is stalled.
     /// The recording of the streamer whose file is confirmed and can be opened.
     fn openable_recording(&self, id: StreamerId) -> Option<RecorderId> {
         self.processes.values().find(|p| p.streamer_id == id && self.recording_openable(p.id)).map(|p| p.id)
     }
 
+    /// True when the streamer's STALLED chip is showing and one of its recordings is stalled now.
     fn streamer_stalled(&self, id: StreamerId) -> bool {
         self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
     }
 
-    /// Row tint: red while STALLED shows, else yellow while RESTARTED, INTERRUPT or ERROR shows.
+    /// Row tint: red while a recording is stalled, else yellow while any warning chip shows.
     fn row_tint(&self, s: Skin, st: &Streamer) -> Option<Color> {
-        let w = self.warns(st.id);
         if self.streamer_stalled(st.id) {
             Some(s.danger)
-        } else if self.shown_restarts(st) > 0 || w.interrupts > 0 || w.errors > 0 {
+        } else if self.any_chip_shows(st) {
             Some(s.warn)
         } else {
             None
         }
+    }
+
+    /// True when any of the streamer's warning chips is showing.
+    fn any_chip_shows(&self, st: &Streamer) -> bool {
+        let w = self.warns(st.id);
+        self.stall_count(st.id) > 0 || self.shown_restarts(st) > 0 || w.interrupts > 0 || w.errors > 0
     }
 
     /// Seconds the streamer has been live; only while the checker reports it live.
@@ -940,7 +951,7 @@ impl App {
                 }
                 times.push(iced::widget::text(time_text).font(time_font).size(m.info).color(time_color).wrapping(Wrapping::None))
             },
-            compact_chips(s, m, st, status, self.streamer_stalled(id), self.shown_restarts(st), self.warns(id), self.openable_recording(id)),
+            compact_chips(s, m, st, status, self.stall_count(id), self.shown_restarts(st), self.warns(id), self.openable_recording(id)),
             row![
                 toggler(st.enabled)
                     .on_toggle(move |v| Msg::ToggleStreamer(id, v))
@@ -1151,7 +1162,8 @@ impl App {
         let mut state_chips: Row<'a, Msg> =
             Row::new().spacing(6).align_y(Alignment::Center).push(chip(s, state_label, state_color));
         if stalled {
-            state_chips = state_chips.push(warn_chip(s, "STALLED", s.danger, 11.0, [3.0, 10.0], p.streamer_id, WarningChip::Stalled));
+            let label = format!("STALLED {}×", self.stall_count(p.streamer_id));
+            state_chips = state_chips.push(warn_chip(s, label, s.danger, 11.0, [3.0, 10.0], p.streamer_id, WarningChip::Stalled));
         }
         let yt = p.ytdlp.as_ref().or(p.root.as_ref());
         let yt_text = yt.map_or("—".to_string(), |y| {
@@ -1389,8 +1401,9 @@ impl App {
         if status.recording && st.enabled {
             chips = chips.push(rec_chip(s, "RECORDING", 11.0, [3.0, 10.0], self.openable_recording(id)));
         }
-        if self.streamer_stalled(id) {
-            chips = chips.push(warn_chip(s, "STALLED", s.danger, 11.0, [3.0, 10.0], id, WarningChip::Stalled));
+        let stalls = self.stall_count(id);
+        if stalls > 0 {
+            chips = chips.push(warn_chip(s, format!("STALLED {stalls}×"), s.danger, 11.0, [3.0, 10.0], id, WarningChip::Stalled));
         }
         if status.live {
             chips = chips.push(chip(s, "LIVE", s.live));
@@ -2268,6 +2281,11 @@ impl App {
             .on_toggle(move |v| Msg::Draft(id, DraftField::UpgradeQuality(v)))
             .text_size(12);
 
+        let restart_stalled = toggler(d.restart_stalled)
+            .label("Restart stalled recordings")
+            .on_toggle(move |v| Msg::Draft(id, DraftField::RestartStalled(v)))
+            .text_size(12);
+
         let quick_check = row![
             container(
                 toggler(d.quick_check)
@@ -2425,6 +2443,7 @@ impl App {
             .push(timing)
             .push(splitting)
             .push(upgrade_quality)
+            .push(restart_stalled)
             .push(quick_check)
             .push(color_row)
             .push(templates)

@@ -49,7 +49,7 @@ pub const DEFAULT_FILE_EXISTS_GRACE_SECS: u64 = 60;
 pub const DEFAULT_GROWTH_GRACE_SECS: u64 = 60;
 pub const DEFAULT_STALL_WINDOW_SECS: u64 = 120;
 pub const DEFAULT_FILE_CHECK_INTERVAL_SECS: u64 = 5;
-pub const DEFAULT_RESTART_CLEAR_MINUTES: u64 = 1440;
+pub const DEFAULT_WARNING_CLEAR_MINUTES: u64 = 1440;
 pub const DEFAULT_RESTART_THRESHOLD: u32 = 1;
 pub const DEFAULT_QUICK_CHECK_SECS: u64 = 45;
 pub const DEFAULT_NOTIFY_COOLDOWN_MINUTES: u64 = 30;
@@ -121,8 +121,8 @@ pub struct Site {
     pub stall_window_secs: Option<u64>,
     /// Seconds between checks of the recording file.
     pub file_check_interval_secs: Option<u64>,
-    /// Minutes after the latest restart at which restart warnings clear themselves; 0 keeps them until cleared by hand.
-    pub restart_clear_minutes: Option<u64>,
+    /// Minutes after a warning's latest trigger at which it clears itself; 0 keeps warnings until cleared by hand.
+    pub warning_clear_minutes: Option<u64>,
     /// Restarts needed before the RESTARTED chip shows.
     pub restart_threshold: Option<u32>,
     /// Forward recorder output to the policy layer; off saves the resources that forwarding uses.
@@ -192,6 +192,9 @@ pub struct Site {
     /// Seconds to wait after a recording ends before the quick check; blank uses the default.
     #[serde(default)]
     pub quick_check_secs: Option<u64>,
+    /// Stop and restart a recording that has stalled.
+    #[serde(default = "default_true")]
+    pub restart_stalled: bool,
 }
 
 /// Serde default for fields that are on unless a saved file says otherwise.
@@ -246,8 +249,8 @@ impl Site {
         self.quick_check_secs.unwrap_or(DEFAULT_QUICK_CHECK_SECS)
     }
 
-    pub fn restart_clear_or_default(&self) -> u64 {
-        self.restart_clear_minutes.unwrap_or(DEFAULT_RESTART_CLEAR_MINUTES)
+    pub fn warning_clear_or_default(&self) -> u64 {
+        self.warning_clear_minutes.unwrap_or(DEFAULT_WARNING_CLEAR_MINUTES)
     }
 
     pub fn restart_threshold_or_default(&self) -> u32 {
@@ -602,7 +605,7 @@ mod tests {
             growth_grace_secs: None,
             stall_window_secs: None,
             file_check_interval_secs: None,
-            restart_clear_minutes: None,
+            warning_clear_minutes: None,
             restart_threshold: None,
             forward_output: false,
             interrupt_patterns: String::new(),
@@ -633,6 +636,7 @@ mod tests {
             upgrade_quality: false,
             quick_check: false,
             quick_check_secs: None,
+            restart_stalled: true,
         }
     }
 
@@ -695,6 +699,14 @@ mod tests {
         }
         let site: Site = serde_json::from_value(value).unwrap();
         assert!(!site.notify_interrupts && !site.notify_errors && !site.warn_stalled && !site.warn_restarts && !site.upgrade_quality);
+    }
+
+    #[test]
+    fn site_without_restart_stalled_keeps_it_on() {
+        let mut value = serde_json::to_value(site_with(false, None)).unwrap();
+        value.as_object_mut().unwrap().remove("restart_stalled");
+        let site: Site = serde_json::from_value(value).unwrap();
+        assert!(site.restart_stalled);
     }
 
     #[test]

@@ -30,6 +30,7 @@ mod quick;
 mod restarts;
 mod schedule;
 mod segments;
+mod stalls;
 pub mod uilog;
 pub mod update;
 mod warnings;
@@ -43,6 +44,7 @@ use quality::QualityTracker;
 use quick::{Fire, QuickChecks};
 use restarts::{Change, RestartTracker};
 use segments::{Plan, Splitter, Step};
+use stalls::{Restart, StallChips, StallRestarts};
 use update::UpdateConfig;
 pub use warnings::Warnings;
 use warnings::WarnTracker;
@@ -69,7 +71,7 @@ pub struct NewSite {
     pub growth_grace_secs: Option<u64>,
     pub stall_window_secs: Option<u64>,
     pub file_check_interval_secs: Option<u64>,
-    pub restart_clear_minutes: Option<u64>,
+    pub warning_clear_minutes: Option<u64>,
     pub restart_threshold: Option<u32>,
     pub forward_output: bool,
     pub interrupt_patterns: String,
@@ -100,6 +102,7 @@ pub struct NewSite {
     pub upgrade_quality: bool,
     pub quick_check: bool,
     pub quick_check_secs: Option<u64>,
+    pub restart_stalled: bool,
 }
 
 impl NewSite {
@@ -122,7 +125,7 @@ impl NewSite {
             growth_grace_secs: self.growth_grace_secs,
             stall_window_secs: self.stall_window_secs,
             file_check_interval_secs: self.file_check_interval_secs,
-            restart_clear_minutes: self.restart_clear_minutes,
+            warning_clear_minutes: self.warning_clear_minutes,
             restart_threshold: self.restart_threshold,
             forward_output: self.forward_output,
             interrupt_patterns: self.interrupt_patterns,
@@ -153,6 +156,7 @@ impl NewSite {
             upgrade_quality: self.upgrade_quality,
             quick_check: self.quick_check,
             quick_check_secs: self.quick_check_secs,
+            restart_stalled: self.restart_stalled,
         }
     }
 }
@@ -229,6 +233,8 @@ pub enum PolicyEvent {
     Resolution(StreamerId, Option<Quality>),
     /// Streamer id to its restart count; streamers with none are absent.
     Restarts(HashMap<StreamerId, u32>),
+    /// Streamer id to its stall count per live span; streamers without a STALLED chip are absent.
+    Stalls(HashMap<StreamerId, u32>),
     /// Streamer id to its interrupt and error counts; streamers with none are absent.
     Warnings(HashMap<StreamerId, Warnings>),
     /// New output lines per recording, oldest first; batched, and sent only for sites with output on.
@@ -334,6 +340,8 @@ struct Policy {
     files: FileTracker,
     restarts: RestartTracker,
     warnings: WarnTracker,
+    stall_chips: StallChips,
+    stall_restarts: StallRestarts,
     /// Output lines waiting to be sent to front ends, per recording.
     pending_output: HashMap<RecorderId, Vec<String>>,
     last_files: HashMap<RecorderId, RecordingFile>,
@@ -406,6 +414,8 @@ impl Policy {
             files: FileTracker::default(),
             restarts: RestartTracker::default(),
             warnings: WarnTracker::default(),
+            stall_chips: StallChips::default(),
+            stall_restarts: StallRestarts::default(),
             pending_output: HashMap::new(),
             last_files: HashMap::new(),
             gate: Gate::default(),
@@ -493,7 +503,7 @@ impl Policy {
                 },
                 _ = &mut engine_done => break,
                 _ = update_tick.tick() => self.check_now(),
-                _ = restart_tick.tick() => self.expire_restarts(),
+                _ = restart_tick.tick() => self.expire_warnings(),
                 _ = schedule_tick.tick() => self.run_schedules(),
                 _ = posts_tick.tick() => {
                     let _t = crate::perf::timer("policy.posts_tick", 30);
@@ -652,8 +662,8 @@ impl Policy {
             }
             let name = streamer.name.clone();
             match self.quick.fire(id, self.live.span_start(id)) {
-                Fire::Go(_) => {
-                    self.log(format!("{name}: running a quick check to verify stream has ended"));
+                Fire::Go(n) => {
+                    self.log(format!("{name}: running a quick check to verify stream has ended ({n}/{})", quick::MAX_PER_SPAN));
                     self.engine.send(Command::QuickCheck { id });
                 }
                 Fire::Capped { first } => {
@@ -809,11 +819,26 @@ impl Policy {
         });
     }
 
-    /// Clears restart counts older than each site's auto-clear time.
-    fn expire_restarts(&mut self) {
+    /// Clears restart, interrupt, error and stall warnings older than each site's auto-clear time.
+    fn expire_warnings(&mut self) {
+        let now = Instant::now();
         let settings = &self.settings;
-        self.restarts.expire(Instant::now(), |id| restart_clear_minutes(settings, id));
+        self.restarts.expire(now, |id| warning_clear_minutes(settings, id));
+        self.warnings.expire(now, |id| warning_clear_minutes(settings, id));
+        self.stall_chips.expire(now, |id| warning_clear_minutes(settings, id));
         self.flush_restarts();
+        self.flush_warnings();
+        self.flush_stalls();
+    }
+
+    fn flush_stalls(&mut self) {
+        if self.stall_chips.take_dirty() {
+            self.emit_stalls();
+        }
+    }
+
+    fn emit_stalls(&self) {
+        self.emit(PolicyEvent::Stalls(self.stall_chips.counts()));
     }
 
     fn flush_restarts(&mut self) {
@@ -910,6 +935,9 @@ impl Policy {
         for line in up.logs {
             self.log(line);
         }
+        if let (Some(streamer_id), Some(reason)) = (up.stalled_for, up.stall_reason) {
+            self.on_stall(streamer_id, &reason);
+        }
         if let Some(job) = up.job {
             let cwd = self.recording_dir(job.streamer_id);
             let tx = self.file_tx.clone();
@@ -918,6 +946,38 @@ impl Policy {
             });
         }
         self.emit_files();
+    }
+
+    /// Counts a stall on the streamer's chip and, when its site allows, restarts the stalled recording up to the per-span limit.
+    fn on_stall(&mut self, id: StreamerId, reason: &str) {
+        let span = self.live.span_start(id);
+        self.stall_chips.on_stall(id, span);
+        self.flush_stalls();
+        if !self.site_of(id).is_some_and(|site| site.restart_stalled) {
+            return;
+        }
+        let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { return };
+        let recording = self.statuses.get(&id).is_some_and(|s| s.recording);
+        if !recording || self.decision_for(&streamer) != Decision::Record {
+            return;
+        }
+        match self.stall_restarts.fire(id, span) {
+            Restart::Go(n) => {
+                self.log(format!("{}: restarting stalled recording ({n}/{}): {reason}", streamer.name, stalls::MAX_RESTARTS_PER_SPAN));
+                self.restarts.stopping(id);
+                self.splitter.cancel(id);
+                self.engine.send(Command::StopRecording { id });
+            }
+            Restart::Capped { first } => {
+                if first {
+                    self.log(format!(
+                        "{}: stalled recording restart limit of {} reached for this live span",
+                        streamer.name,
+                        stalls::MAX_RESTARTS_PER_SPAN
+                    ));
+                }
+            }
+        }
     }
 
     /// Runs ffprobe on the recording's file in the background and feeds its quality back to the policy loop.
@@ -1281,6 +1341,7 @@ impl Policy {
     }
 
     fn emit_files(&mut self) {
+        self.stall_chips.sync(&self.files.stalled_streamers(), Instant::now());
         let snap = self.files.snapshot();
         if snap != self.last_files {
             self.last_files = snap.clone();
@@ -1374,6 +1435,8 @@ impl Policy {
         let settings = &self.settings;
         self.live.retain(|id| live::lookup(settings, id).is_some());
         self.restarts.retain(|id| live::lookup(settings, id).is_some());
+        self.stall_chips.retain(|id| live::lookup(settings, id).is_some());
+        self.stall_restarts.retain(|id| live::lookup(settings, id).is_some());
         self.quick.retain(|id| live::lookup(settings, id).is_some());
         self.warnings.retain(|id| live::lookup(settings, id).is_some(), |id| settings.sites.iter().any(|s| s.id == id));
         self.gate.retain(|id| live::lookup(settings, id).is_some());
@@ -1385,6 +1448,7 @@ impl Policy {
         self.flush_live();
         self.flush_restarts();
         self.flush_warnings();
+        self.flush_stalls();
     }
 
     fn emit(&self, ev: PolicyEvent) {
@@ -1609,6 +1673,7 @@ impl Policy {
                 self.emit_last_live();
                 self.emit_restarts();
                 self.emit_warnings();
+                self.emit_stalls();
                 if let Some(a) = &self.available {
                     self.emit(PolicyEvent::Update(UpdateEvent::Available { version: a.version.clone(), is_rc: a.is_rc }));
                 }
@@ -1723,8 +1788,8 @@ impl Policy {
                 self.flush_restarts();
                 self.warnings.clear();
                 self.flush_warnings();
-                self.files.dismiss_stalls();
-                self.emit_files();
+                self.stall_chips.clear();
+                self.flush_stalls();
             }
             PolicyCommand::DismissWarning(id, chip) => match chip {
                 WarningChip::Restarted => {
@@ -1737,8 +1802,8 @@ impl Policy {
                     self.flush_warnings();
                 }
                 WarningChip::Stalled => {
-                    self.files.dismiss_stalls_for(id);
-                    self.emit_files();
+                    self.stall_chips.clear_one(id);
+                    self.flush_stalls();
                 }
             },
             PolicyCommand::CheckForUpdate => self.run_check(true),
@@ -1763,10 +1828,10 @@ impl Policy {
     }
 }
 
-/// The streamer's site auto-clear time for restart warnings, in minutes; 0 when the site is unknown.
-fn restart_clear_minutes(settings: &Settings, id: StreamerId) -> u64 {
+/// The streamer's site auto-clear time for warnings, in minutes; 0 when the site is unknown.
+fn warning_clear_minutes(settings: &Settings, id: StreamerId) -> u64 {
     let site_id = settings.streamers.iter().find(|s| s.id == id).map(|s| s.site_id);
-    site_id.and_then(|sid| settings.sites.iter().find(|s| s.id == sid)).map_or(0, |s| s.restart_clear_or_default())
+    site_id.and_then(|sid| settings.sites.iter().find(|s| s.id == sid)).map_or(0, |s| s.warning_clear_or_default())
 }
 
 /// The site's output folder, or the global one when the site has none.
@@ -1820,7 +1885,7 @@ mod tests {
             growth_grace_secs: Some(60),
             stall_window_secs: Some(120),
             file_check_interval_secs: Some(30),
-            restart_clear_minutes: Some(0),
+            warning_clear_minutes: Some(0),
             restart_threshold: Some(1),
             forward_output: false,
             interrupt_patterns: String::new(),
@@ -1851,6 +1916,7 @@ mod tests {
             upgrade_quality: false,
             quick_check: false,
             quick_check_secs: None,
+            restart_stalled: true,
         }
     }
 
@@ -1924,7 +1990,7 @@ mod e2e {
                 growth_grace_secs: Some(60),
                 stall_window_secs: Some(120),
                 file_check_interval_secs: Some(30),
-                restart_clear_minutes: Some(1440),
+                warning_clear_minutes: Some(1440),
                 restart_threshold: Some(1),
                 forward_output: false,
                 interrupt_patterns: String::new(),
@@ -1955,6 +2021,7 @@ mod e2e {
                 upgrade_quality: false,
                 quick_check: false,
                 quick_check_secs: None,
+                restart_stalled: true,
             }));
             let ev = wait_for(&mut p, 10, |e| matches!(e, PolicyEvent::Settings(s) if !s.sites.is_empty())).await;
             let PolicyEvent::Settings(s) = ev else { unreachable!() };
