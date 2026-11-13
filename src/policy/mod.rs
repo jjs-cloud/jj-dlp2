@@ -28,6 +28,7 @@ mod probe;
 mod quality;
 mod quick;
 mod restarts;
+mod runaway;
 mod schedule;
 mod segments;
 mod stalls;
@@ -43,6 +44,7 @@ use notify::{Gate, Kind, LiveStatus, Message, Targets};
 use quality::QualityTracker;
 use quick::{Fire, QuickChecks};
 use restarts::{Change, RestartTracker};
+use runaway::{Finding, Runaway};
 use segments::{Plan, Splitter, Step};
 use stalls::{Restart, StallChips, StallRestarts};
 use update::UpdateConfig;
@@ -358,6 +360,7 @@ struct Policy {
     part_pending: HashSet<StreamerId>,
     /// Follows each streamer's recorders and the split in flight.
     splitter: Splitter,
+    runaway: Runaway,
     /// Recorders stopped on purpose by a split, so their exit is not a restart.
     retiring: HashSet<RecorderId>,
     /// Part-1 files to rename once the recorder writing them has exited.
@@ -426,6 +429,7 @@ impl Policy {
             waiting: HashSet::new(),
             part_pending: HashSet::new(),
             splitter: Splitter::default(),
+            runaway: Runaway::default(),
             retiring: HashSet::new(),
             rename_on_exit: HashMap::new(),
             override_part: HashMap::new(),
@@ -516,6 +520,7 @@ impl Policy {
                     }
                     self.release_due_delays();
                     self.split_tick();
+                    self.runaway_tick();
                     self.quality_tick();
                     self.quick_check_tick();
                 }
@@ -605,6 +610,7 @@ impl Policy {
             Event::ProcessUpdate(p) => self.on_process_update(p),
             Event::ProcessRemoved(id) => {
                 self.recorder_pids.remove(id);
+                self.runaway.remove(*id);
                 let was_retiring = self.retiring.remove(id);
                 if let Some((streamer_id, path)) = self.rename_on_exit.remove(id) {
                     self.rename_part_one(streamer_id, &path);
@@ -898,6 +904,7 @@ impl Policy {
         if matches!(p.state, RecorderState::Starting | RecorderState::Running) {
             self.splitter.on_running(p.streamer_id, p.id, Instant::now());
         }
+        self.runaway.on_update(p.id, p.streamer_id, p.ffmpeg.len(), p.uptime_secs);
         match (&p.state, &p.root) {
             (RecorderState::Exited(_), _) | (_, None) => {
                 self.recorder_pids.remove(&p.id);
@@ -1336,6 +1343,42 @@ impl Policy {
     }
 
     /// A streamer's name, or blank when it is unknown.
+    /// Logs any streamer holding more recorders or ffmpeg processes than expected; it never stops anything.
+    fn runaway_tick(&mut self) {
+        let describe = |shares: &[runaway::Share]| {
+            shares
+                .iter()
+                .map(|s| format!("recording {} ({} ffmpeg, running {}s)", s.recorder, s.ffmpeg, s.uptime_secs))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        for f in self.runaway.check(Instant::now()) {
+            let line = match f {
+                Finding::Excess { streamer, shares, ffmpeg, for_secs } => format!(
+                    "warning: {}: has {} recording(s) holding {ffmpeg} ffmpeg process(es) in total for over {for_secs}s, but a streamer should have at most \
+                     {} recordings and {} ffmpeg (and only briefly during a split). Nothing was stopped. Recordings: [{}]. Check the log for earlier \
+                     \"owns N ffmpeg processes\" or \"process tree of N recordings\" warnings from the sampler, which say whether the processes really \
+                     belong to this streamer.",
+                    self.streamer_name(streamer),
+                    shares.len(),
+                    crate::api::MAX_RECORDERS_PER_STREAMER,
+                    crate::api::MAX_FFMPEG_PER_STREAMER,
+                    describe(&shares),
+                ),
+                Finding::Overlap { streamer, shares, for_secs } => format!(
+                    "warning: {}: {} recordings have been running together for over {for_secs}s (so the Processes tab shows {} rows for it), but a \
+                     split overlap should last seconds. Nothing was stopped. Recordings: [{}]. The older recording may be stuck stopping, or a \
+                     split may not have been committed or aborted.",
+                    self.streamer_name(streamer),
+                    shares.len(),
+                    shares.len(),
+                    describe(&shares),
+                ),
+            };
+            self.log(line);
+        }
+    }
+
     fn streamer_name(&self, id: StreamerId) -> String {
         self.settings.streamers.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default()
     }

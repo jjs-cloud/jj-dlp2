@@ -656,6 +656,7 @@ impl Engine {
             return;
         };
         let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id).cloned() else { return };
+        self.warn_if_too_many_recorders(&streamer.name, streamer_id, extra);
 
         let out_dir = [site.output_dir.trim(), self.settings.default_output_dir.trim()]
             .into_iter()
@@ -692,6 +693,39 @@ impl Engine {
             }
             Err(e) => self.log(format!("could not record {}: {e}", streamer.name)),
         }
+    }
+
+    /// Logs (without blocking the start) when this streamer already has the maximum number of recorders.
+    fn warn_if_too_many_recorders(&self, name: &str, streamer_id: StreamerId, extra: bool) {
+        let ids: Vec<RecorderId> =
+            self.recorders.iter().filter(|(_, r)| r.streamer_id == streamer_id).map(|(id, _)| *id).collect();
+        if ids.len() < MAX_RECORDERS_PER_STREAMER {
+            return;
+        }
+        let tracked = self.tracked.lock().unwrap();
+        let existing: Vec<String> = ids
+            .iter()
+            .map(|id| match tracked.get(id) {
+                Some(t) => format!(
+                    "recording {id} (root pid {}, running {}s, stopping: {}, root exited: {}, all processes gone: {})",
+                    t.root_pid,
+                    t.started.elapsed().as_secs(),
+                    t.stopping,
+                    t.root_exit.is_some(),
+                    t.gone_sent
+                ),
+                None => format!("recording {id} (not tracked by the sampler)"),
+            })
+            .collect();
+        drop(tracked);
+        self.log(format!(
+            "warning: {name}: starting another recording ({}) while {} already exist, but a streamer should have at most \
+             {MAX_RECORDERS_PER_STREAMER} (only briefly during a split). Starting it anyway, nothing was stopped. Existing: [{}]. \
+             If the older ones are stuck, a stop or an orphan cleanup did not finish.",
+            if extra { "a new part" } else { "a first recording" },
+            ids.len(),
+            existing.join("; ")
+        ));
     }
 
     fn stop_recorder(&mut self, id: RecorderId) {

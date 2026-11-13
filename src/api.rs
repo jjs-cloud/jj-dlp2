@@ -8,6 +8,11 @@ pub type SiteId = u64;
 pub type StreamerId = u64;
 pub type RecorderId = u64;
 
+/// Most recorders one streamer should ever have at once (old part plus new part during a split).
+pub const MAX_RECORDERS_PER_STREAMER: usize = 2;
+/// Most ffmpeg processes one streamer should ever have at once.
+pub const MAX_FFMPEG_PER_STREAMER: usize = 2;
+
 /// How a site's checker output is parsed, chosen from its checker arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckOutput {
