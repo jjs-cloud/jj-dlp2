@@ -765,10 +765,8 @@ impl PostsMonitor {
             (Some(f), None) => format!("File not found at {f}; marked the post as not saved"),
             (None, None) => "No file to delete".to_string(),
         };
-        let _ = std::fs::remove_file(post.thumb_path());
         if let Some(p) = self.post_mut(id) {
             p.file = None;
-            p.has_thumb = false;
             p.state = PostState::Remote;
             p.error.clear();
             p.error_at = None;

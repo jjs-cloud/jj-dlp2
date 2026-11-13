@@ -335,7 +335,16 @@ pub(super) fn find_by_id(dir: &Path, id: &str, depth: u32) -> Option<PathBuf> {
     None
 }
 
-/// Deletes unfinished download files of a post.
+/// True when `name` contains `id` as a whole token, not inside a longer id.
+fn has_id_token(name: &str, id: &str) -> bool {
+    name.match_indices(id).any(|(i, _)| {
+        let before = name[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+        let after = name[i + id.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+        before && after
+    })
+}
+
+/// Deletes unfinished download files of a post, including a truncated media file written with `--no-part`.
 fn remove_partials(dir: &Path, id: &str, depth: u32) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for path in entries.flatten().map(|e| e.path()) {
@@ -346,8 +355,10 @@ fn remove_partials(dir: &Path, id: &str, depth: u32) {
             continue;
         }
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let named = path.file_name().is_some_and(|n| n.to_string_lossy().contains(id));
-        if named && ["part", "ytdl", "temp"].contains(&ext.as_str()) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let temp = ["part", "ytdl", "temp"].contains(&ext.as_str()) && name.contains(id);
+        let media = !["json", "jpg", "jpeg", "webp", "png"].contains(&ext.as_str()) && has_id_token(&name, id);
+        if temp || media {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -386,15 +397,24 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
             let msg = "Over the time limit for auto-downloads".to_string();
             return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true, posted_at: None, duration: None };
         }
-        Err(e) => return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None },
+        Err(e) => {
+            let (dir, id) = (folder.clone(), post.id.clone());
+            let _ = tokio::task::spawn_blocking(move || remove_partials(&dir, &id, 3)).await;
+            return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None };
+        }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let (find_folder, find_id) = (folder.clone(), post.id.clone());
+    let (find_folder, find_id, exited_ok) = (folder.clone(), post.id.clone(), out.status.success());
     let found = tokio::task::spawn_blocking(move || {
         let reported = std::fs::read(&sidecar).ok().and_then(|b| String::from_utf8(b).ok());
         let _ = std::fs::remove_file(&sidecar);
         let from_sidecar = reported.as_deref().and_then(|t| path_lines(t).find(|p| p.is_file()));
-        let path = from_sidecar.or_else(|| path_lines(&stdout).find(|p| p.is_file())).or_else(|| find_by_id(&find_folder, &find_id, 3));
+        let path = from_sidecar.or_else(|| {
+            if !exited_ok {
+                return None;
+            }
+            path_lines(&stdout).find(|p| p.is_file()).or_else(|| find_by_id(&find_folder, &find_id, 3))
+        });
         (reported, path, stdout)
     })
     .await;
@@ -403,6 +423,10 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
     };
     let (posted_at, duration) = reported.as_deref().map_or((None, None), parse_meta);
     let Some(path) = path else {
+        if !out.status.success() {
+            let (dir, id) = (folder.clone(), post.id.clone());
+            let _ = tokio::task::spawn_blocking(move || remove_partials(&dir, &id, 3)).await;
+        }
         let stderr = String::from_utf8_lossy(&out.stderr);
         let skipped = max_mb.is_some() && (stdout.contains("larger than max-filesize") || stderr.contains("larger than max-filesize"));
         let msg = if skipped {
