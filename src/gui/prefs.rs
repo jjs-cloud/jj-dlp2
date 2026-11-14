@@ -133,7 +133,7 @@ struct Prefs {
 pub struct FilesPrefs {
     pub sort: String,
     pub asc: bool,
-    pub group: bool,
+    pub group_by: String,
     pub delete_empty: bool,
     pub hide_posts: bool,
     pub move_dir: String,
@@ -155,7 +155,7 @@ impl Default for PostsPrefs {
 
 impl Default for FilesPrefs {
     fn default() -> Self {
-        FilesPrefs { sort: "name".to_string(), asc: true, group: false, delete_empty: true, hide_posts: false, move_dir: String::new() }
+        FilesPrefs { sort: "name".to_string(), asc: true, group_by: "streamer".to_string(), delete_empty: true, hide_posts: false, move_dir: String::new() }
     }
 }
 

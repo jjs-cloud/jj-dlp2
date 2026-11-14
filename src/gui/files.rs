@@ -4,7 +4,8 @@ use super::{App, Msg, Tab, prefs};
 use crate::api::now_secs;
 use crate::filemgr::jobs::{self, FixupSpec, MoveSpec, Outcome, Token, TrimSpec};
 use crate::filemgr::ops::{self, DeleteMode};
-use crate::filemgr::rows::{self, Row, Sel, Sort, SortKey};
+use crate::filemgr::owners::{self, Who};
+use crate::filemgr::rows::{self, GroupBy, Row, Sel, Sort, SortKey};
 use crate::filemgr::scan::{self, FileRec, Root, ScanResult};
 use crate::filemgr::file_name;
 use crate::policy::layout;
@@ -112,7 +113,12 @@ pub struct FilesState {
     pub sel: Option<Sel>,
     pub collapsed: HashSet<PathBuf>,
     pub sort: Sort,
-    pub group: bool,
+    pub group: GroupBy,
+    /// Streamer and site name pairs used to match unrecorded files.
+    known: Vec<(String, String)>,
+    /// Each file's streamer and site as of the last rebuild.
+    who: HashMap<PathBuf, Who>,
+    built_owners: u64,
     pub delete_empty: bool,
     pub hide_posts: bool,
     pub move_dir: String,
@@ -137,7 +143,10 @@ impl FilesState {
             sel: None,
             collapsed: HashSet::new(),
             sort: Sort { key: SortKey::from_name(&p.sort), asc: p.asc },
-            group: p.group,
+            group: GroupBy::from_id(&p.group_by),
+            known: Vec::new(),
+            who: HashMap::new(),
+            built_owners: 0,
             delete_empty: p.delete_empty,
             hide_posts: p.hide_posts,
             move_dir: p.move_dir,
@@ -166,7 +175,7 @@ impl FilesState {
         prefs::save_files(&prefs::FilesPrefs {
             sort: self.sort.key.name().to_string(),
             asc: self.sort.asc,
-            group: self.group,
+            group_by: self.group.id().to_string(),
             delete_empty: self.delete_empty,
             hide_posts: self.hide_posts,
             move_dir: self.move_dir.clone(),
@@ -175,8 +184,15 @@ impl FilesState {
 
     fn rebuild(&mut self) {
         self.stale = false;
-        let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.collapsed, Instant::now());
-        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group);
+        self.built_owners = owners::version();
+        self.who = if self.group.is_virtual() {
+            let stored = owners::snapshot();
+            self.records.iter().map(|(p, r)| (p.clone(), owners::resolve(p, &r.root, &stored, &self.known))).collect()
+        } else {
+            HashMap::new()
+        };
+        let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.who, &self.collapsed, Instant::now());
+        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group == GroupBy::Folder);
         self.rows = rows;
     }
 
@@ -199,14 +215,23 @@ impl FilesState {
         matches!(self.sel, Some(Sel::File(_)))
     }
 
-    /// True when some subfolder is currently collapsed.
-    pub fn any_collapsed(&self) -> bool {
-        self.group && rows::subfolders(&self.records, &self.roots).iter().any(|d| self.collapsed.contains(d))
+    /// Every collapsible group below an output folder under the current grouping.
+    fn group_paths(&self) -> HashSet<PathBuf> {
+        match self.group {
+            GroupBy::None => HashSet::new(),
+            GroupBy::Folder => rows::subfolders(&self.records, &self.roots),
+            g => rows::group_keys(&self.records, &self.roots, g, &self.who),
+        }
     }
 
-    /// True when some subfolder is currently expanded.
+    /// True when some group is currently collapsed.
+    pub fn any_collapsed(&self) -> bool {
+        self.group_paths().iter().any(|d| self.collapsed.contains(d))
+    }
+
+    /// True when some group is currently expanded.
     pub fn any_expanded(&self) -> bool {
-        self.group && rows::subfolders(&self.records, &self.roots).iter().any(|d| !self.collapsed.contains(d))
+        self.group_paths().iter().any(|d| !self.collapsed.contains(d))
     }
 }
 
@@ -248,7 +273,7 @@ pub enum FilesMsg {
     Select(Sel),
     Activate(Sel),
     HeaderSort(SortKey),
-    ToggleGroup(bool),
+    SetGroup(GroupBy),
     ToggleDeleteEmpty(bool),
     ToggleHidePosts(bool),
     ExpandAll,
@@ -308,7 +333,14 @@ impl App {
         let moving = self.files.moving.as_ref().map(|m| m.tmp.clone());
         self.files.scanning = true;
         self.files.last_scan = Some(now);
-        self.files.stale |= self.files.roots != roots;
+        let known: Vec<(String, String)> = self
+            .settings
+            .streamers
+            .iter()
+            .filter_map(|st| Some((st.name.clone(), self.settings.sites.iter().find(|x| x.id == st.site_id)?.name.clone())))
+            .collect();
+        self.files.stale |= self.files.roots != roots || self.files.known != known;
+        self.files.known = known;
         self.files.roots = roots.clone();
         Task::perform(
             async move { tokio::task::spawn_blocking(move || scan::scan(&roots, moving.as_deref())).await.unwrap_or_default() },
@@ -424,7 +456,12 @@ impl App {
 
     fn files_reveal_selected(&mut self) {
         let path = match &self.files.sel {
-            Some(Sel::File(p)) | Some(Sel::Folder(p)) => p.clone(),
+            Some(Sel::File(p)) => p.clone(),
+            Some(Sel::Folder(p)) if rows::is_virtual(p) => {
+                self.files.say("That group is not a folder on disk");
+                return;
+            }
+            Some(Sel::Folder(p)) => p.clone(),
             None => return,
         };
         if let Err(e) = ops::reveal(&path) {
@@ -509,7 +546,7 @@ impl App {
                     mv.last_poll = now;
                 }
                 let writing = f.records.values().filter(|r| r.writing(now)).count();
-                if changed || f.stale || writing != f.built_writing {
+                if changed || f.stale || writing != f.built_writing || owners::version() != f.built_owners {
                     f.built_writing = writing;
                     f.rebuild();
                 }
@@ -531,8 +568,8 @@ impl App {
                 self.files.save_prefs();
                 self.files.rebuild();
             }
-            FilesMsg::ToggleGroup(on) => {
-                self.files.group = on;
+            FilesMsg::SetGroup(g) => {
+                self.files.group = g;
                 self.files.save_prefs();
                 self.files.rebuild();
             }
@@ -551,7 +588,7 @@ impl App {
                 self.files.rebuild();
             }
             FilesMsg::CollapseAll => {
-                let subs = rows::subfolders(&self.files.records, &self.files.roots);
+                let subs = self.files.group_paths();
                 self.files.collapsed.extend(subs);
                 self.files.rebuild();
             }

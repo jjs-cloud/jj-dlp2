@@ -4,11 +4,11 @@ use super::files::{FilesMsg, Panel, PanelKind, ROW_H, scroll_id, trim_id};
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, muted, t, warn_text};
 use super::{App, Msg};
-use crate::filemgr::rows::{Row as FRow, Sel, Sort, SortKey};
+use crate::filemgr::rows::{GroupBy, Row as FRow, Sel, Sort, SortKey};
 use crate::filemgr::{file_name, fmt_mtime, human_rate, human_size};
 use iced::border::Radius;
 use iced::widget::text::Wrapping;
-use iced::widget::{Column, Row, Space, button, column, container, mouse_area, row, scrollable, text_input, toggler};
+use iced::widget::{Column, Row, Space, button, column, container, mouse_area, pick_list, row, scrollable, text_input, toggler};
 use iced::{Alignment, Background, Border, Element, Length, Theme};
 use std::time::Instant;
 
@@ -115,7 +115,8 @@ impl App {
         let actions = row![
             act(s, "Expand all", f.any_collapsed().then_some(FilesMsg::ExpandAll), BtnKind::Ghost),
             act(s, "Collapse all", f.any_expanded().then_some(FilesMsg::CollapseAll), BtnKind::Ghost),
-            flag("Group by folder", f.group, FilesMsg::ToggleGroup),
+            t(&s, "Group by").size(12),
+            pick_list(GroupBy::ALL, Some(f.group), |g| Msg::Files(FilesMsg::SetGroup(g))).padding([3.0, 8.0]).text_size(12),
             Space::new().width(Length::Fill),
             act(s, "Open", has_file.then_some(FilesMsg::OpenSelected), BtnKind::Ghost),
             act(s, "Show in folder", f.sel.is_some().then_some(FilesMsg::RevealSelected), BtnKind::Ghost),

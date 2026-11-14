@@ -2,6 +2,7 @@
 
 use super::file_name;
 use super::ops::{self, DeleteMode, unique_path};
+use super::owners;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -247,6 +248,7 @@ pub async fn fixup(spec: FixupSpec, token: Arc<Token>) -> Outcome {
             }
         }
     }
+    owners::inherit(&spec.path, &fin);
     Outcome::Done(format!("Fixup complete: {}", file_name(&fin)))
 }
 
@@ -287,6 +289,7 @@ pub async fn trim(spec: TrimSpec, token: Arc<Token>) -> Outcome {
             return Outcome::Failed(format!("Trim finished but the original could not be deleted ({e}); output is {}", file_name(&work)));
         }
     }
+    owners::inherit(&spec.path, &work);
     Outcome::Done(format!("Trim complete: {}", file_name(&work)))
 }
 
@@ -362,6 +365,7 @@ pub async fn move_file(spec: MoveSpec, token: Arc<Token>) -> Outcome {
         }
     } else {
         if std::fs::rename(&spec.src, &spec.dest).is_ok() {
+            owners::inherit(&spec.src, &spec.dest);
             return Outcome::Done(moved_note(&spec));
         }
         let (s, d, t) = (spec.src.clone(), tmp.clone(), token.clone());
@@ -389,6 +393,7 @@ pub async fn move_file(spec: MoveSpec, token: Arc<Token>) -> Outcome {
     if let Err(e) = std::fs::remove_file(&spec.src) {
         return Outcome::Failed(format!("Move finished but the original could not be deleted ({e}); the new file is {}", spec.dest.display()));
     }
+    owners::inherit(&spec.src, &spec.dest);
     Outcome::Done(moved_note(&spec))
 }
 

@@ -936,6 +936,7 @@ impl Policy {
             self.probe_resolution(id, streamer_id);
         }
         self.note_part_one_file(id);
+        self.note_owner(id);
         for line in up.logs {
             self.log(line);
         }
@@ -1251,6 +1252,14 @@ impl Policy {
         }
     }
 
+    /// Records the streamer and site of a recording's verified file for the Files tab.
+    fn note_owner(&self, recorder: RecorderId) {
+        let Some(streamer_id) = self.recorder_pids.get(&recorder).map(|(sid, _)| *sid) else { return };
+        let (Some(path), Some(site)) = (self.files.trusted_path(recorder), self.site_of(streamer_id)) else { return };
+        let owner = crate::filemgr::owners::Owner { streamer: self.streamer_name(streamer_id), site: site.name.clone() };
+        crate::filemgr::owners::record(path, owner);
+    }
+
     /// Stores the verified path of a streamer's part 1 file so it can be renamed when a second part appears.
     fn note_part_one_file(&mut self, recorder: RecorderId) {
         let Some(streamer_id) = self.recorder_pids.get(&recorder).map(|(sid, _)| *sid) else { return };
@@ -1278,7 +1287,10 @@ impl Policy {
                 format!("{name}: not renaming {}: {} already exists", path.display(), target.display())
             } else {
                 match std::fs::rename(&path, &target) {
-                    Ok(()) => format!("{name}: renamed {} to {}", path.display(), target.display()),
+                    Ok(()) => {
+                        crate::filemgr::owners::inherit(&path, &target);
+                        format!("{name}: renamed {} to {}", path.display(), target.display())
+                    }
                     Err(e) => format!("{name}: could not rename {}: {e}", path.display()),
                 }
             };

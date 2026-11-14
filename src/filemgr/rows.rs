@@ -1,5 +1,6 @@
 //! Sorting and the folder/file row layout of the Files tab.
 
+use super::owners::Who;
 use super::scan::{FileRec, Root};
 use super::{file_name, natural_cmp};
 use std::cmp::Ordering;
@@ -54,6 +55,54 @@ impl Sort {
     /// The sort after a header click: the same column flips direction, a new one starts ascending.
     pub fn click(self, key: SortKey) -> Sort {
         if self.key == key { Sort { key, asc: !self.asc } } else { Sort { key, asc: true } }
+    }
+}
+
+/// How the Files tab groups its rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupBy {
+    None,
+    Folder,
+    Streamer,
+    Site,
+    SiteStreamer,
+    StreamerSite,
+}
+
+impl GroupBy {
+    pub const ALL: [GroupBy; 6] = [GroupBy::None, GroupBy::Folder, GroupBy::Streamer, GroupBy::Site, GroupBy::SiteStreamer, GroupBy::StreamerSite];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            GroupBy::None => "none",
+            GroupBy::Folder => "folder",
+            GroupBy::Streamer => "streamer",
+            GroupBy::Site => "site",
+            GroupBy::SiteStreamer => "site_streamer",
+            GroupBy::StreamerSite => "streamer_site",
+        }
+    }
+
+    pub fn from_id(s: &str) -> GroupBy {
+        GroupBy::ALL.into_iter().find(|g| g.id() == s).unwrap_or(GroupBy::Streamer)
+    }
+
+    /// True for the groupings that are not real folders and need each file's streamer or site.
+    pub fn is_virtual(self) -> bool {
+        !matches!(self, GroupBy::None | GroupBy::Folder)
+    }
+}
+
+impl std::fmt::Display for GroupBy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            GroupBy::None => "None",
+            GroupBy::Folder => "Folder",
+            GroupBy::Streamer => "Streamer",
+            GroupBy::Site => "Site",
+            GroupBy::SiteStreamer => "Site\\Streamer",
+            GroupBy::StreamerSite => "Streamer\\Site",
+        })
     }
 }
 
@@ -165,8 +214,99 @@ fn emit_folder(dir: &Path, depth: usize, files: &[PathBuf], cx: Cx, collapsed: &
     }
 }
 
+/// Marks the key path of a group that is not a folder on disk.
+const VIRTUAL: char = '\u{1}';
+/// Marks the key path of the "Other" group.
+const OTHER: char = '\u{2}';
+
+/// True for the key path of a streamer or site group, which is not a folder on disk.
+pub fn is_virtual(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str().to_string_lossy().starts_with(VIRTUAL))
+}
+
+/// The groups a file sits in under `group`, outermost first, as (key path, label).
+fn group_chain(group: GroupBy, root: &Path, who: &Who) -> Vec<(PathBuf, String)> {
+    let level = |parent: &Path, name: &str| (parent.join(format!("{VIRTUAL}{name}")), name.to_string());
+    let (first, second) = match group {
+        GroupBy::Streamer => (&who.streamer, None),
+        GroupBy::Site => (&who.site, None),
+        GroupBy::SiteStreamer => (&who.site, Some(&who.streamer)),
+        GroupBy::StreamerSite => (&who.streamer, Some(&who.site)),
+        GroupBy::None | GroupBy::Folder => return Vec::new(),
+    };
+    let (Some(a), second) = (first, second) else {
+        return vec![(root.join(format!("{VIRTUAL}{OTHER}")), "Other".to_string())];
+    };
+    let outer = level(root, a);
+    match second {
+        None => vec![outer],
+        Some(Some(b)) => {
+            let inner = level(&outer.0, b);
+            vec![outer, inner]
+        }
+        Some(None) => vec![(root.join(format!("{VIRTUAL}{OTHER}")), "Other".to_string())],
+    }
+}
+
+/// Every streamer or site group that holds at least one file.
+pub fn group_keys(recs: &Recs, roots: &[Root], group: GroupBy, who: &HashMap<PathBuf, Who>) -> HashSet<PathBuf> {
+    let mut out = HashSet::new();
+    for (path, rec) in recs {
+        if roots.iter().any(|r| r.dir == rec.root) {
+            let w = who.get(path).cloned().unwrap_or_default();
+            out.extend(group_chain(group, &rec.root, &w).into_iter().map(|(k, _)| k));
+        }
+    }
+    out
+}
+
+/// Emits files under streamer or site groups, `level` groups deep.
+fn emit_virtual(items: &[(PathBuf, Vec<(PathBuf, String)>)], level: usize, depth: usize, cx: Cx, collapsed: &HashSet<PathBuf>, rows: &mut Vec<Row>) {
+    let mut direct: Vec<&PathBuf> = items.iter().filter(|(_, c)| c.len() == level).map(|(p, _)| p).collect();
+    direct.sort_by(|a, b| cmp_paths(cx, a, b));
+    for p in direct {
+        rows.push(Row::File { path: p.clone(), prefix: String::new(), name: file_name(p).into_owned(), depth });
+    }
+    let mut keys: Vec<(PathBuf, String)> = Vec::new();
+    for (_, chain) in items.iter().filter(|(_, c)| c.len() > level) {
+        if !keys.iter().any(|(k, _)| *k == chain[level].0) {
+            keys.push(chain[level].clone());
+        }
+    }
+    let by_name = cx.sort.key == SortKey::Name;
+    keys.sort_by(|a, b| {
+        let other = |k: &PathBuf| k.to_string_lossy().contains(OTHER);
+        other(&a.0).cmp(&other(&b.0)).then_with(|| {
+            if by_name {
+                let o = natural_cmp(&a.1, &b.1);
+                if cx.sort.asc { o } else { o.reverse() }
+            } else {
+                match (first_of(cx, items, level, &a.0), first_of(cx, items, level, &b.0)) {
+                    (Some(x), Some(y)) => cmp_paths(cx, x, y),
+                    _ => Ordering::Equal,
+                }
+            }
+        })
+    });
+    for (key, label) in keys {
+        let inside: Vec<(PathBuf, Vec<(PathBuf, String)>)> = items.iter().filter(|(_, c)| c.len() > level && c[level].0 == key).cloned().collect();
+        let files: Vec<PathBuf> = inside.iter().map(|(p, _)| p.clone()).collect();
+        let is_collapsed = collapsed.contains(&key);
+        let writing = is_collapsed && any_writing(cx, &files);
+        rows.push(Row::Folder { path: key, name: label, count: files.len(), collapsed: is_collapsed, writing, depth });
+        if !is_collapsed {
+            emit_virtual(&inside, level + 1, depth + 1, cx, collapsed, rows);
+        }
+    }
+}
+
+/// The first file of a group under the sort, used to order groups.
+fn first_of<'a>(cx: Cx, items: &'a [(PathBuf, Vec<(PathBuf, String)>)], level: usize, key: &Path) -> Option<&'a PathBuf> {
+    items.iter().filter(|(_, c)| c.len() > level && c[level].0 == key).map(|(p, _)| p).min_by(|a, b| cmp_paths(cx, a, b))
+}
+
 /// Builds the visible rows. With several output folders each gets a collapsible header row.
-pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapsed: &HashSet<PathBuf>, now: Instant) -> Vec<Row> {
+pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: GroupBy, who: &HashMap<PathBuf, Who>, collapsed: &HashSet<PathBuf>, now: Instant) -> Vec<Row> {
     let cx = Cx { recs, sort, now };
     let multi = roots.len() > 1;
     let base = usize::from(multi);
@@ -188,8 +328,12 @@ pub fn build_rows(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapse
         }
         if files.is_empty() {
             rows.push(Row::Empty);
-        } else if group {
+        } else if group == GroupBy::Folder {
             emit_folder(&dir, base, &files, cx, collapsed, &mut rows);
+        } else if group.is_virtual() {
+            let items: Vec<(PathBuf, Vec<(PathBuf, String)>)> =
+                files.iter().map(|p| (p.clone(), group_chain(group, &dir, &who.get(p).cloned().unwrap_or_default()))).collect();
+            emit_virtual(&items, 0, base, cx, collapsed, &mut rows);
         } else {
             let mut flat: Vec<&PathBuf> = files.iter().collect();
             flat.sort_by(|a, b| cmp_paths(cx, a, b));
@@ -303,7 +447,8 @@ mod tests {
     }
 
     fn build(roots: &[Root], recs: &Recs, sort: Sort, group: bool, collapsed: &HashSet<PathBuf>) -> Vec<Row> {
-        build_rows(roots, recs, sort, group, collapsed, Instant::now())
+        let g = if group { GroupBy::Folder } else { GroupBy::None };
+        build_rows(roots, recs, sort, g, &HashMap::new(), collapsed, Instant::now())
     }
 
     fn roots(dirs: &[&str]) -> Vec<Root> {
@@ -432,9 +577,9 @@ mod tests {
         m.insert(PathBuf::from("/r/a.ts"), idle);
         m.insert(PathBuf::from("/r/b.ts"), rec("/r", 1, 0));
         let rs = roots(&["/r"]);
-        let asc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: true }, false, &HashSet::new(), now);
+        let asc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: true }, GroupBy::None, &HashMap::new(), &HashSet::new(), now);
         assert_eq!(names(&asc), ["a.ts", "b.ts"].map(String::from));
-        let desc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: false }, false, &HashSet::new(), now);
+        let desc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: false }, GroupBy::None, &HashMap::new(), &HashSet::new(), now);
         assert_eq!(names(&desc), ["b.ts", "a.ts"].map(String::from));
     }
 
@@ -443,5 +588,51 @@ mod tests {
         let s = Sort::default().click(SortKey::Name);
         assert_eq!(s, Sort { key: SortKey::Name, asc: false });
         assert_eq!(s.click(SortKey::Size), Sort { key: SortKey::Size, asc: true });
+    }
+
+    fn who_map(entries: &[(&str, Option<&str>, Option<&str>)]) -> HashMap<PathBuf, Who> {
+        let w = |s: Option<&str>| s.map(String::from);
+        entries.iter().map(|(p, st, si)| (PathBuf::from(p), Who { streamer: w(*st), site: w(*si) })).collect()
+    }
+
+    fn label_rows(rows: &[Row]) -> Vec<String> {
+        rows.iter()
+            .map(|r| match r {
+                Row::Folder { name, depth, .. } => format!("{}[{name}]", "-".repeat(*depth)),
+                Row::File { name, depth, prefix, .. } => format!("{}{prefix}{name}", "-".repeat(*depth)),
+                Row::Empty => String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn streamer_grouping_puts_unknown_files_in_other_last() {
+        let rs = roots(&["/r"]);
+        let who = who_map(&[("/r/a10.ts", Some("Zed"), Some("T")), ("/r/a2.ts", Some("Amy"), Some("K")), ("/r/s/x.ts", None, None)]);
+        let rows = build_rows(&rs, &sample(), Sort::default(), GroupBy::Streamer, &who, &HashSet::new(), Instant::now());
+        assert_eq!(label_rows(&rows), ["[Amy]", "-a2.ts", "[Zed]", "-a10.ts", "[Other]", "-x.ts"].map(String::from));
+    }
+
+    #[test]
+    fn nested_grouping_and_collapse() {
+        let rs = roots(&["/r"]);
+        let who = who_map(&[("/r/a10.ts", Some("Zed"), Some("T")), ("/r/a2.ts", Some("Amy"), Some("T")), ("/r/s/x.ts", Some("Bo"), Some("K"))]);
+        let rows = build_rows(&rs, &sample(), Sort::default(), GroupBy::SiteStreamer, &who, &HashSet::new(), Instant::now());
+        assert_eq!(label_rows(&rows), ["[K]", "-[Bo]", "--x.ts", "[T]", "-[Amy]", "--a2.ts", "-[Zed]", "--a10.ts"].map(String::from));
+        let keys = group_keys(&sample(), &rs, GroupBy::SiteStreamer, &who);
+        assert_eq!(keys.len(), 5);
+        assert!(keys.iter().all(|k| is_virtual(k)));
+        let collapsed: HashSet<PathBuf> = keys.into_iter().filter(|k| k.to_string_lossy().ends_with("T")).collect();
+        let rows = build_rows(&rs, &sample(), Sort::default(), GroupBy::SiteStreamer, &who, &collapsed, Instant::now());
+        assert_eq!(label_rows(&rows), ["[K]", "-[Bo]", "--x.ts", "[T]"].map(String::from));
+    }
+
+    #[test]
+    fn group_by_ids_round_trip() {
+        for g in GroupBy::ALL {
+            assert_eq!(GroupBy::from_id(g.id()), g);
+        }
+        assert_eq!(GroupBy::from_id("junk"), GroupBy::Streamer);
+        assert_eq!(GroupBy::SiteStreamer.to_string(), "Site\\Streamer");
     }
 }
