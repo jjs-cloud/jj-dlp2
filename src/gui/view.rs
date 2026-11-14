@@ -87,19 +87,6 @@ fn fmt_mem(bytes: u64) -> String {
     }
 }
 
-fn fmt_rate(bytes_per_sec: u64) -> String {
-    let b = bytes_per_sec as f64;
-    if b >= 1024.0 * 1024.0 * 1024.0 {
-        format!("{:.2} GB/s", b / (1024.0 * 1024.0 * 1024.0))
-    } else if b >= 1024.0 * 1024.0 {
-        format!("{:.1} MB/s", b / (1024.0 * 1024.0))
-    } else if b >= 1024.0 {
-        format!("{:.0} KB/s", b / 1024.0)
-    } else {
-        format!("{bytes_per_sec} B/s")
-    }
-}
-
 fn fmt_dur(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
     if h > 0 {
@@ -155,7 +142,6 @@ const PW_OPEN: u32 = 56;
 const PW_UP: u32 = 80;
 const PW_YT: u32 = 140;
 const PW_FF: u32 = 140;
-const PW_IO: u32 = 190;
 
 /// Sizes of one compact row, interpolated from its height; the site column fits the longest site chip and the name column takes the remaining width.
 #[derive(Clone, Copy)]
@@ -263,23 +249,13 @@ fn compact_chips<'a>(
     chips
 }
 
-/// CPU, memory and disk rates summed over processes.
-#[derive(Debug, Default, Clone, Copy)]
-struct ProcTotals {
-    cpu: f32,
-    mem: u64,
-    read: u64,
-    write: u64,
-}
-
-/// Totals across every process of one recording.
-fn proc_totals(p: &ProcessInfo) -> ProcTotals {
-    let mut total = ProcTotals::default();
+/// Total CPU and memory across every process of one recording.
+fn proc_totals(p: &ProcessInfo) -> (f32, u64) {
+    let mut cpu = 0.0_f32;
+    let mut mem = 0_u64;
     let mut add = |x: &ProcSample| {
-        total.cpu += x.cpu_percent;
-        total.mem += x.mem_bytes;
-        total.read += x.read_bytes_per_sec;
-        total.write += x.write_bytes_per_sec;
+        cpu += x.cpu_percent;
+        mem += x.mem_bytes;
     };
     if p.has_bootloader {
         if let Some(r) = &p.root {
@@ -297,7 +273,7 @@ fn proc_totals(p: &ProcessInfo) -> ProcTotals {
     for f in &p.ffmpeg {
         add(f);
     }
-    total
+    (cpu, mem)
 }
 
 impl App {
@@ -1099,16 +1075,15 @@ impl App {
     }
 
     fn proc_summary(&self, s: Skin) -> Element<'_, Msg> {
-        let total = self.processes.values().fold(ProcTotals::default(), |a, p| {
-            let t = proc_totals(p);
-            ProcTotals { cpu: a.cpu + t.cpu, mem: a.mem + t.mem, read: a.read + t.read, write: a.write + t.write }
+        let (cpu, mem) = self.processes.values().fold((0.0_f32, 0_u64), |(c, m), p| {
+            let (pc, pm) = proc_totals(p);
+            (c + pc, m + pm)
         });
         container(
             row![
                 t(&s, format!("{} recording(s)", self.processes.len())).size(13),
-                muted(&s, format!("CPU {:.1}% total", total.cpu)),
-                muted(&s, format!("MEM {} total", fmt_mem(total.mem))),
-                muted(&s, format!("DISK R {} · W {} total", fmt_rate(total.read), fmt_rate(total.write))),
+                muted(&s, format!("CPU {cpu:.1}% total")),
+                muted(&s, format!("MEM {} total", fmt_mem(mem))),
                 Space::new().width(Length::Fill),
                 muted(&s, "Click a row for PIDs and the full command line."),
             ]
@@ -1137,7 +1112,6 @@ impl App {
                 container(h("UPTIME")).width(PW_UP),
                 container(h("YT-DLP CPU · MEM")).width(PW_YT),
                 container(h("FFMPEG CPU · MEM")).width(PW_FF),
-                container(h("DISK READ · WRITE")).width(PW_IO),
                 container(h("LAST OUTPUT")).width(Length::FillPortion(4)),
                 Space::new().width(PW_OPEN),
             ]
@@ -1167,11 +1141,6 @@ impl App {
                 .color(s.text)
                 .width(96),
             iced::widget::text(format!("MEM {}", fmt_mem(p.mem_bytes)))
-                .font(s.font)
-                .size(12)
-                .color(s.text)
-                .width(110),
-            iced::widget::text(format!("DISK R {} · W {}", fmt_rate(p.read_bytes_per_sec), fmt_rate(p.write_bytes_per_sec)))
                 .font(s.font)
                 .size(12)
                 .color(s.text),
@@ -1214,8 +1183,6 @@ impl App {
             let mem: u64 = p.ffmpeg.iter().map(|f| f.mem_bytes).sum();
             format!("{cpu:.1}% · {}", fmt_mem(mem))
         };
-        let io = proc_totals(p);
-        let io_text = format!("R {} · W {}", fmt_rate(io.read), fmt_rate(io.write));
         let cell = |v: String, w: u32| -> iced::widget::Container<'a, Msg> {
             container(
                 iced::widget::text(v)
@@ -1252,7 +1219,6 @@ impl App {
             cell(fmt_dur(p.uptime_secs), PW_UP),
             cell(yt_text, PW_YT),
             cell(ff_text, PW_FF),
-            cell(io_text, PW_IO),
             container(
                 iced::widget::text(p.last_line.as_str())
                     .font(s.font)

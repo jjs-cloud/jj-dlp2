@@ -517,10 +517,6 @@ pub struct ProcSample {
     pub name: String,
     pub cpu_percent: f32,
     pub mem_bytes: u64,
-    /// Smoothed disk read rate in bytes per second.
-    pub read_bytes_per_sec: u64,
-    /// Smoothed disk write rate in bytes per second.
-    pub write_bytes_per_sec: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -5,23 +5,13 @@ use super::recorder::SharedTracked;
 use super::Internal;
 use crate::api::{Event, ProcSample, ProcessInfo, RecorderId, RecorderState};
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
 use tokio::sync::mpsc::UnboundedSender;
 
 const ORPHAN_GRACE: Duration = Duration::from_secs(20);
 /// Samples between updates for a recorder whose state has not changed.
 const IDLE_UPDATE_EVERY: u64 = 2;
-/// Weight of the newest second in the disk rate average.
-const IO_SMOOTHING: f64 = 0.25;
-
-/// One process's disk rate average, keyed by pid and start time.
-struct IoState {
-    /// When its disk counters were last read.
-    at: Instant,
-    /// Smoothed (read, write) bytes per second; `None` until the first usable reading.
-    avg: Option<(f64, f64)>,
-}
 
 pub fn spawn_sampler(
     tracked: SharedTracked,
@@ -44,7 +34,6 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
     let mut primed = false;
     let mut tick: u64 = 0;
     let mut last_state: HashMap<RecorderId, RecorderState> = HashMap::new();
-    let mut io: HashMap<(u32, u64), IoState> = HashMap::new();
     loop {
         std::thread::sleep(Duration::from_secs(1));
         if events.is_closed() {
@@ -54,7 +43,6 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
         if !any_tracked(&tracked) {
             pidfile::update(std::iter::empty());
             primed = false;
-            io.clear();
             continue;
         }
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cpu().with_memory());
@@ -66,7 +54,6 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
         }
         let fresh = fresh_system();
         let children = children_map(&fresh);
-        let tick_at = Instant::now();
         let mut map = tracked.lock().unwrap();
         last_state.retain(|id, _| map.contains_key(id));
         for (&id, t) in map.iter_mut() {
@@ -74,13 +61,12 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
                 continue;
             }
             let alive = alive_tree(&fresh, &children, t.root_pid, &mut t.seen);
-            let rates = io_rates(&mut sys, &mut io, &alive, tick_at);
             if t.root_name.is_none() {
                 t.root_name = fresh
                     .process(Pid::from_u32(t.root_pid))
                     .map(|p| p.name().to_string_lossy().to_lowercase());
             }
-            let (root, ytdlp, has_bootloader, ffmpeg) = classify(&fresh, &sys, &rates, &alive, t.root_pid, t.root_name.as_deref());
+            let (root, ytdlp, has_bootloader, ffmpeg) = classify(&fresh, &sys, &alive, t.root_pid, t.root_name.as_deref());
 
             if t.root_exit.is_some() && alive.is_empty() {
                 t.gone_sent = true;
@@ -122,38 +108,8 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
                 cmdline: t.cmdline.clone(),
             }));
         }
-        io.retain(|_, st| st.at == tick_at);
         pidfile::update(map.values().filter(|t| !t.gone_sent).flat_map(|t| t.seen.iter().copied()));
     }
-}
-
-/// Reads the disk counters of `pids` and returns each one's smoothed (read, write) bytes per second.
-fn io_rates(sys: &mut System, state: &mut HashMap<(u32, u64), IoState>, pids: &[Pid], now: Instant) -> HashMap<u32, (u64, u64)> {
-    let mut out = HashMap::new();
-    if pids.is_empty() {
-        return out;
-    }
-    sys.refresh_processes_specifics(ProcessesToUpdate::Some(pids), false, ProcessRefreshKind::nothing().with_disk_usage());
-    for &pid in pids {
-        let Some(p) = sys.process(pid) else { continue };
-        let usage = p.disk_usage();
-        let key = (pid.as_u32(), p.start_time());
-        let Some(st) = state.get_mut(&key) else {
-            // The first reading per process is discarded.
-            state.insert(key, IoState { at: now, avg: None });
-            continue;
-        };
-        let secs = now.duration_since(st.at).as_secs_f64().max(0.1);
-        st.at = now;
-        let (read, write) = (usage.read_bytes as f64 / secs, usage.written_bytes as f64 / secs);
-        let avg = match st.avg {
-            None => (read, write),
-            Some((r, w)) => (r + IO_SMOOTHING * (read - r), w + IO_SMOOTHING * (write - w)),
-        };
-        st.avg = Some(avg);
-        out.insert(pid.as_u32(), (avg.0.round() as u64, avg.1.round() as u64));
-    }
-    out
 }
 
 /// Saves the processes of the running recorders so a relaunch can clean up after a crash.
@@ -236,17 +192,14 @@ fn alive_tree(
 }
 
 /// Name from the fresh snapshot; CPU and memory from the long-lived system when it is the same process.
-fn sample(fresh: &System, sys: &System, rates: &HashMap<u32, (u64, u64)>, pid: Pid) -> Option<ProcSample> {
+fn sample(fresh: &System, sys: &System, pid: Pid) -> Option<ProcSample> {
     let p = fresh.process(pid)?;
     let live = sys.process(pid).filter(|s| s.start_time() == p.start_time());
-    let (read, write) = rates.get(&pid.as_u32()).copied().unwrap_or_default();
     Some(ProcSample {
         pid: pid.as_u32(),
         name: p.name().to_string_lossy().into_owned(),
         cpu_percent: live.map_or(0.0, |s| s.cpu_usage()),
         mem_bytes: live.map_or(0, |s| s.memory()),
-        read_bytes_per_sec: read,
-        write_bytes_per_sec: write,
     })
 }
 
@@ -271,7 +224,6 @@ fn depth(sys: &System, pid: Pid, root: Pid) -> usize {
 fn classify(
     fresh: &System,
     sys: &System,
-    rates: &HashMap<u32, (u64, u64)>,
     alive: &[Pid],
     root_pid: u32,
     root_name: Option<&str>,
@@ -288,12 +240,12 @@ fn classify(
     same.sort_by_key(|p| depth(fresh, *p, root));
     let has_bootloader = same.len() > 1;
     let ytdlp_pid = same.last().copied();
-    let root_sample = if alive.contains(&root) { sample(fresh, sys, rates, root) } else { None };
-    let ytdlp = ytdlp_pid.and_then(|p| sample(fresh, sys, rates, p));
+    let root_sample = if alive.contains(&root) { sample(fresh, sys, root) } else { None };
+    let ytdlp = ytdlp_pid.and_then(|p| sample(fresh, sys, p));
     let mut ffmpeg: Vec<ProcSample> = alive
         .iter()
         .filter(|p| name_of(**p).contains("ffmpeg"))
-        .filter_map(|p| sample(fresh, sys, rates, *p))
+        .filter_map(|p| sample(fresh, sys, *p))
         .collect();
     ffmpeg.sort_by_key(|s| s.pid);
     (root_sample, ytdlp, has_bootloader, ffmpeg)
