@@ -104,7 +104,7 @@ fn main() {
                     attach_console();
                     eprintln!("{}", instance::MESSAGE);
                 }
-                std::process::exit(1);
+                std::process::exit(if watcher::is_child() { watcher::EXIT_ALREADY_RUNNING } else { 1 });
             }
         }
     };
@@ -122,6 +122,7 @@ fn main() {
     if tracked {
         crash::start_session();
         watcher::announce_restart();
+        watcher::guard_watcher();
         // Make sure the startup lines are saved before the Log tab reads its history.
         persist::flush();
     }

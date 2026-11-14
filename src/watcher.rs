@@ -5,15 +5,25 @@ use std::ffi::OsString;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 /// Set in the child process so it knows a watcher is supervising it.
 pub const CHILD_ENV: &str = "JJ_DLP_CHILD";
+
+/// Set in the child to the watcher's pid, so the child can notice if the watcher disappears.
+const WATCHER_PID_ENV: &str = "JJ_DLP_WATCHER_PID";
 
 /// Set in a relaunched child to describe how the previous run ended.
 const RESTART_ENV: &str = "JJ_DLP_RESTARTED";
 
 /// Exit code the child uses when the GUI failed, so the watcher relaunches it.
 pub const EXIT_GUI_ERROR: i32 = 70;
+
+/// Exit code the child uses when another instance holds the lock; the watcher does not relaunch it.
+pub const EXIT_ALREADY_RUNNING: i32 = 75;
+
+/// How often the child checks that its watcher is still running.
+const GUARD_EVERY: Duration = Duration::from_secs(3);
 
 /// Wait before the first relaunch; doubles after each quick failure.
 const FIRST_DELAY: Duration = Duration::from_secs(2);
@@ -37,6 +47,29 @@ pub fn announce_restart() {
     if let Ok(reason) = std::env::var(RESTART_ENV) {
         crate::policy::uilog::append(&format!("Restarted automatically by the watcher after jj-dlp exited unexpectedly ({reason})."));
     }
+}
+
+/// Starts a thread that stops this child's recorders and exits if the watcher disappears.
+pub fn guard_watcher() {
+    let Some(pid) = std::env::var(WATCHER_PID_ENV).ok().and_then(|v| v.parse::<u32>().ok()) else { return };
+    let _ = std::thread::Builder::new().name("watcher-guard".into()).spawn(move || {
+        let pid = Pid::from_u32(pid);
+        let mut sys = System::new();
+        let start = process_start(&mut sys, pid);
+        while start.is_some() && process_start(&mut sys, pid) == start {
+            std::thread::sleep(GUARD_EVERY);
+        }
+        crash::note("Watcher is gone; stopping recorders and exiting.");
+        crate::engine::pidfile::reap();
+        crash::end_session();
+        std::process::exit(0);
+    });
+}
+
+/// Start time of process `pid`, or `None` if it is not running.
+fn process_start(sys: &mut System, pid: Pid) -> Option<u64> {
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing());
+    sys.process(pid).map(|p| p.start_time())
 }
 
 /// Runs the app as a child and relaunches it until it exits on purpose; returns the process exit code.
@@ -71,7 +104,7 @@ pub fn run(gui: bool) -> i32 {
     loop {
         let started = Instant::now();
         let mut cmd = Command::new(&exe);
-        cmd.args(&args).env(CHILD_ENV, "1");
+        cmd.args(&args).env(CHILD_ENV, "1").env(WATCHER_PID_ENV, std::process::id().to_string());
         match &reason {
             Some(reason) => cmd.env(RESTART_ENV, reason),
             None => cmd.env_remove(RESTART_ENV),
@@ -86,16 +119,15 @@ pub fn run(gui: bool) -> i32 {
                 None
             }
         };
-        if let Some(status) = &status {
-            if !should_restart(status) {
-                return status.code().unwrap_or(0);
-            }
-        }
         if started.elapsed() >= STABLE_AFTER {
             delay = FIRST_DELAY;
         }
         if let Some(status) = &status {
             let how = format!("{} after {}s", describe(status), started.elapsed().as_secs());
+            if !should_restart(status) {
+                crash::note(&format!("Watcher: jj-dlp exited ({how}); not restarting."));
+                return status.code().unwrap_or(0);
+            }
             crash::note(&format!("Watcher: jj-dlp exited unexpectedly ({how}); restarting in {}s.", delay.as_secs()));
             reason = Some(how);
         }
@@ -149,10 +181,10 @@ fn sleep_or_stop(total: Duration) -> bool {
     STOP.load(Ordering::SeqCst)
 }
 
-/// True unless the child finished normally, found another instance running, or was stopped by the user.
+/// True unless the child finished normally, found another instance running, or was stopped by a terminal signal.
 fn should_restart(status: &ExitStatus) -> bool {
     match status.code() {
-        Some(code) => code != 0 && code != 1,
+        Some(code) => code != 0 && code != EXIT_ALREADY_RUNNING,
         None => !stopped_by_user(status),
     }
 }
@@ -233,12 +265,12 @@ mod tests {
         #[cfg(unix)]
         {
             assert!(!should_restart(&status(0)));
-            assert!(!should_restart(&status(1 << 8)));
+            assert!(!should_restart(&status(EXIT_ALREADY_RUNNING << 8)));
         }
         #[cfg(windows)]
         {
             assert!(!should_restart(&status(0)));
-            assert!(!should_restart(&status(1)));
+            assert!(!should_restart(&status(EXIT_ALREADY_RUNNING)));
         }
     }
 
@@ -247,6 +279,7 @@ mod tests {
         #[cfg(unix)]
         {
             assert!(should_restart(&status(101 << 8)));
+            assert!(should_restart(&status(1 << 8)));
             assert!(should_restart(&status(libc::SIGSEGV)));
             assert!(should_restart(&status(libc::SIGKILL)));
             assert!(!should_restart(&status(libc::SIGINT)));
@@ -254,6 +287,7 @@ mod tests {
         }
         #[cfg(windows)]
         {
+            assert!(should_restart(&status(1)));
             assert!(should_restart(&status(101)));
             assert!(should_restart(&status(0xC000_0005_u32 as i32)));
         }
