@@ -10,7 +10,7 @@ pub const ROW_MIN_DEFAULT: f32 = 15.0;
 pub const ROW_MAX_DEFAULT: f32 = 31.0;
 pub const TWO_COL_MIN_LIMIT: f32 = 700.0;
 pub const TWO_COL_MAX_LIMIT: f32 = 2600.0;
-pub const TWO_COL_DEFAULT: f32 = 1100.0;
+pub const TWO_COL_DEFAULT: f32 = 1080.0;
 pub const THREE_COL_DEFAULT: f32 = 1700.0;
 pub const FULL_TWO_COL_DEFAULT: f32 = 1700.0;
 pub const NAME_CLIP_MIN_LIMIT: f32 = 6.0;
@@ -68,18 +68,19 @@ impl std::fmt::Display for SortKey {
     }
 }
 
-/// A row of the Sort dropdown: the Live first switch, a divider, or a sort key.
+/// A row of the Sort dropdown: the Live first and Group by site switches, a divider, or a sort key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortItem {
     LiveFirst(bool),
+    GroupBySite(bool),
     Divider,
     Key(SortKey),
 }
 
 impl SortItem {
-    /// The dropdown's rows: Live first, a divider, then every sort key.
-    pub fn rows(live_first: bool) -> Vec<SortItem> {
-        let mut rows = vec![SortItem::LiveFirst(live_first), SortItem::Divider];
+    /// The dropdown's rows: Live first, Group by site, a divider, then every sort key.
+    pub fn rows(live_first: bool, group_by_site: bool) -> Vec<SortItem> {
+        let mut rows = vec![SortItem::LiveFirst(live_first), SortItem::GroupBySite(group_by_site), SortItem::Divider];
         rows.extend(SortKey::ALL.map(SortItem::Key));
         rows
     }
@@ -88,8 +89,10 @@ impl SortItem {
 impl std::fmt::Display for SortItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SortItem::LiveFirst(true) => f.write_str("✓ Live first"),
+            SortItem::LiveFirst(true) => f.write_str("Live first ✓"),
             SortItem::LiveFirst(false) => f.write_str("Live first"),
+            SortItem::GroupBySite(true) => f.write_str("Group by site ✓"),
+            SortItem::GroupBySite(false) => f.write_str("Group by site"),
             SortItem::Divider => f.write_str("──────────"),
             SortItem::Key(k) => std::fmt::Display::fmt(k, f),
         }
@@ -100,6 +103,7 @@ impl std::fmt::Display for SortItem {
 #[serde(default)]
 struct Prefs {
     live_first: bool,
+    group_by_site: bool,
     sort_key: String,
     sort_asc: bool,
     theme: String,
@@ -157,7 +161,7 @@ impl Default for FilesPrefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { live_first: true, sort_key: SortKey::Priority.id().to_string(), sort_asc: true, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
+        Prefs { live_first: true, group_by_site: false, sort_key: SortKey::Priority.id().to_string(), sort_asc: true, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
             three_col_w: THREE_COL_DEFAULT,
             full_two_col_w: FULL_TWO_COL_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,
@@ -313,16 +317,17 @@ pub fn save_disk_limits(limits: crate::policy::disks::Limits) {
     write(&prefs);
 }
 
-/// Reads the saved Live first, sort key and ascending settings.
-pub fn load_sort() -> (bool, SortKey, bool) {
+/// Reads the saved Live first, Group by site, sort key and ascending settings.
+pub fn load_sort() -> (bool, bool, SortKey, bool) {
     let p = read();
-    (p.live_first, SortKey::from_id(&p.sort_key), p.sort_asc)
+    (p.live_first, p.group_by_site, SortKey::from_id(&p.sort_key), p.sort_asc)
 }
 
-/// Saves the Live first, sort key and ascending settings.
-pub fn save_sort(live_first: bool, key: SortKey, asc: bool) {
+/// Saves the Live first, Group by site, sort key and ascending settings.
+pub fn save_sort(live_first: bool, group_by_site: bool, key: SortKey, asc: bool) {
     let mut prefs = read();
     prefs.live_first = live_first;
+    prefs.group_by_site = group_by_site;
     prefs.sort_key = key.id().to_string();
     prefs.sort_asc = asc;
     write(&prefs);
@@ -489,12 +494,14 @@ mod tests {
     }
 
     #[test]
-    fn sort_rows_start_with_live_first_then_a_divider_then_every_key() {
-        let rows = SortItem::rows(true);
-        assert_eq!(rows[..2], [SortItem::LiveFirst(true), SortItem::Divider]);
-        assert_eq!(rows[2..], SortKey::ALL.map(SortItem::Key));
-        assert_eq!(SortItem::LiveFirst(true).to_string(), "✓ Live first");
+    fn sort_rows_start_with_the_switches_then_a_divider_then_every_key() {
+        let rows = SortItem::rows(true, true);
+        assert_eq!(rows[..3], [SortItem::LiveFirst(true), SortItem::GroupBySite(true), SortItem::Divider]);
+        assert_eq!(rows[3..], SortKey::ALL.map(SortItem::Key));
+        assert_eq!(SortItem::LiveFirst(true).to_string(), "Live first ✓");
         assert_eq!(SortItem::LiveFirst(false).to_string(), "Live first");
+        assert_eq!(SortItem::GroupBySite(true).to_string(), "Group by site ✓");
+        assert_eq!(SortItem::GroupBySite(false).to_string(), "Group by site");
         assert_eq!(SortItem::Key(SortKey::LastLive).to_string(), "Last live");
     }
 

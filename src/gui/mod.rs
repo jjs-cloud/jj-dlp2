@@ -989,6 +989,7 @@ pub struct App {
     wrap_output: bool,
     compact: bool,
     live_first: bool,
+    group_by_site: bool,
     sort_key: prefs::SortKey,
     sort_asc: bool,
     row_min: f32,
@@ -1075,8 +1076,9 @@ impl App {
             wrap_output: prefs::load_wrap_output(),
             compact: prefs::load_compact(),
             live_first: prefs::load_sort().0,
-            sort_key: prefs::load_sort().1,
-            sort_asc: prefs::load_sort().2,
+            group_by_site: prefs::load_sort().1,
+            sort_key: prefs::load_sort().2,
+            sort_asc: prefs::load_sort().3,
             row_min,
             row_max,
             two_col_w: prefs::load_two_col_width(),
@@ -1627,14 +1629,15 @@ impl App {
             Msg::SetSortItem(item) => {
                 match item {
                     prefs::SortItem::LiveFirst(_) => self.live_first = !self.live_first,
+                    prefs::SortItem::GroupBySite(_) => self.group_by_site = !self.group_by_site,
                     prefs::SortItem::Key(k) => self.sort_key = k,
                     prefs::SortItem::Divider => return Task::none(),
                 }
-                prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
+                prefs::save_sort(self.live_first, self.group_by_site, self.sort_key, self.sort_asc);
             }
             Msg::ToggleSortDir => {
                 self.sort_asc = !self.sort_asc;
-                prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
+                prefs::save_sort(self.live_first, self.group_by_site, self.sort_key, self.sort_asc);
             }
             Msg::SetCompact(on) => {
                 self.compact = on;

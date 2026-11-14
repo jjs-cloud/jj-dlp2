@@ -530,7 +530,7 @@ impl App {
                 .style(skin::btn(s, BtnKind::Ghost)),
         );
         title = title.push(
-            pick_list(prefs::SortItem::rows(self.live_first), Some(prefs::SortItem::Key(self.sort_key)), Msg::SetSortItem)
+            pick_list(prefs::SortItem::rows(self.live_first, self.group_by_site), Some(prefs::SortItem::Key(self.sort_key)), Msg::SetSortItem)
                 .padding([3.0, 8.0])
                 .text_size(12),
         );
@@ -560,6 +560,12 @@ impl App {
             if !live.is_empty() {
                 col = col.push(self.live_block(s, live));
             }
+            if !self.group_by_site {
+                if !rest.is_empty() {
+                    col = col.push(self.offline_block(s, rest));
+                }
+                return self.livestreams_frame(s, title, col);
+            }
             let shown: Vec<(&Site, Vec<&Streamer>)> = self
                 .settings
                 .sites
@@ -574,6 +580,11 @@ impl App {
                 col = col.push(self.site_block(s, site, list, up, down));
             }
         }
+        self.livestreams_frame(s, title, col)
+    }
+
+    /// The Livestreams tab: the title bar, the scrolling panels and the add bar.
+    fn livestreams_frame<'a>(&'a self, s: Skin, title: Row<'a, Msg>, col: Column<'a, Msg>) -> Element<'a, Msg> {
         column![title, scrollable(col).id(super::livestreams_scroll_id()).height(Length::Fill)]
             .spacing(12)
             .push(container(self.streamer_add_bar(s)).padding(iced::Padding { right: 8.0, ..Default::default() }))
@@ -624,6 +635,13 @@ impl App {
     /// The "Live" panel shown above the site panels.
     fn live_block<'a>(&'a self, s: Skin, streamers: Vec<&'a Streamer>) -> Element<'a, Msg> {
         let head = iced::widget::text("Live").font(s.font).size(18).color(s.live);
+        let top = self.push_streamers(s, Column::new().spacing(8).push(head), streamers);
+        container(top).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
+    }
+
+    /// The ungrouped panel for all sites: "Offline" under Live first, else "Streamers".
+    fn offline_block<'a>(&'a self, s: Skin, streamers: Vec<&'a Streamer>) -> Element<'a, Msg> {
+        let head = iced::widget::text(if self.live_first { "Offline" } else { "Streamers" }).font(s.font).size(18).color(s.muted);
         let top = self.push_streamers(s, Column::new().spacing(8).push(head), streamers);
         container(top).padding(14).width(Length::Fill).style(skin::card(s, None)).into()
     }
@@ -717,9 +735,17 @@ impl App {
                 entries.push((site, st));
             }
         }
-        for site in &self.settings.sites {
-            for st in rest.iter().copied().filter(|x| x.site_id == site.id) {
-                entries.push((site, st));
+        if self.group_by_site {
+            for site in &self.settings.sites {
+                for st in rest.iter().copied().filter(|x| x.site_id == site.id) {
+                    entries.push((site, st));
+                }
+            }
+        } else {
+            for st in rest {
+                if let Some(site) = self.settings.sites.iter().find(|x| x.id == st.site_id) {
+                    entries.push((site, st));
+                }
             }
         }
         if entries.is_empty() {
