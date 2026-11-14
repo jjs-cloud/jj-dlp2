@@ -891,7 +891,7 @@ impl Policy {
     }
 
     fn emit_warnings(&self) {
-        self.emit(PolicyEvent::Warnings(self.warnings.counts()));
+        self.emit(PolicyEvent::Warnings(self.warnings.chip_counts()));
     }
 
     fn on_process_update(&mut self, p: &ProcessInfo) {

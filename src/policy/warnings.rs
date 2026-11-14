@@ -208,6 +208,20 @@ impl WarnTracker {
         out
     }
 
+    /// Like `counts`, but drops Error when Interrupt also fired in the same live span, even if its chip was dismissed.
+    pub fn chip_counts(&self) -> HashMap<StreamerId, Warnings> {
+        let mut out = self.counts();
+        for (id, w) in out.iter_mut() {
+            if let (Some(i), Some(e)) = (self.counts.get(&(*id, WarnKind::Interrupt)), self.counts.get(&(*id, WarnKind::Error))) {
+                if i.span == e.span {
+                    w.errors = 0;
+                }
+            }
+        }
+        out.retain(|_, w| w.interrupts > 0 || w.errors > 0);
+        out
+    }
+
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
     }
@@ -281,6 +295,18 @@ mod tests {
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 0, errors: 1 }));
         t.on_line(1, Some(200), &site, AD_TAG);
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 1 }));
+    }
+
+    #[test]
+    fn error_stays_hidden_after_its_interrupt_is_dismissed_in_the_same_span() {
+        let (mut t, site) = (WarnTracker::default(), twitch());
+        t.on_line(1, Some(100), &site, PACKET);
+        t.on_line(1, Some(100), &site, AD_TAG);
+        assert_eq!(t.chip_counts().get(&1), Some(&Warnings { interrupts: 1, errors: 0 }));
+        t.clear_kind(1, WarnKind::Interrupt);
+        assert!(t.chip_counts().is_empty());
+        t.on_line(1, Some(200), &site, PACKET);
+        assert_eq!(t.chip_counts().get(&1), Some(&Warnings { interrupts: 0, errors: 1 }));
     }
 
     #[test]

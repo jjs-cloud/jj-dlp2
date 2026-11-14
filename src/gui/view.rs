@@ -231,7 +231,7 @@ fn compact_chips<'a>(
     if st.options.schedule.enabled {
         chips = chips.push(mini_chip(s, m, "SCH", s.muted));
     }
-    if status.live {
+    if status.live && !(status.recording && st.enabled) {
         chips = chips.push(mini_chip(s, m, "LIVE", s.live));
     }
     if restarts > 0 {
