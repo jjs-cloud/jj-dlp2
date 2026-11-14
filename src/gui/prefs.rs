@@ -35,8 +35,8 @@ const FIT_MARGIN_H: f32 = 100.0;
 pub enum SortKey {
     Name,
     Added,
-    LastLive,
     #[default]
+    LastLive,
     Priority,
 }
 
@@ -161,7 +161,7 @@ impl Default for FilesPrefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { live_first: true, group_by_site: false, sort_key: SortKey::Priority.id().to_string(), sort_asc: true, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
+        Prefs { live_first: true, group_by_site: false, sort_key: SortKey::LastLive.id().to_string(), sort_asc: false, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
             three_col_w: THREE_COL_DEFAULT,
             full_two_col_w: FULL_TWO_COL_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,

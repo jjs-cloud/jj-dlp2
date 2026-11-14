@@ -615,12 +615,20 @@ impl App {
             let o = match self.sort_key {
                 prefs::SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 prefs::SortKey::Added => a.id.cmp(&b.id),
-                prefs::SortKey::LastLive => self.last_live.get(&a.id).cmp(&self.last_live.get(&b.id)),
+                prefs::SortKey::LastLive => self.last_live_rank(a.id).cmp(&self.last_live_rank(b.id)),
                 prefs::SortKey::Priority => ia.cmp(ib),
             };
             (if self.sort_asc { o } else { o.reverse() }).then(ia.cmp(ib))
         });
         v.into_iter().map(|(_, st)| st).collect()
+    }
+
+    /// Last-live sort value: live streamers rank newest and tie, so polling times don't reorder them.
+    fn last_live_rank(&self, id: StreamerId) -> Option<u64> {
+        if self.statuses.get(&id).is_some_and(|x| x.live) {
+            return Some(u64::MAX);
+        }
+        self.last_live.get(&id).copied()
     }
 
     /// Splits the sorted streamers into the currently live ones (only with Live first on) and the rest.
