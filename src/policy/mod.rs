@@ -927,6 +927,7 @@ impl Policy {
         if let Some(streamer_id) = up.confirmed_for {
             self.quick.arm(streamer_id);
             self.on_growth_confirmed(streamer_id);
+            self.commit_part_one(streamer_id, id);
             if let Some(step) = self.splitter.on_confirmed(streamer_id, id) {
                 self.run_step(step);
             }
@@ -1192,7 +1193,7 @@ impl Policy {
         self.override_part.insert(id, part);
     }
 
-    /// Before a recorder starts: moves a restarted recording on to its next part and renames part 1 to match.
+    /// Before a recorder starts: moves a restarted recording on to its next part and queues part 1's rename.
     fn prepare_part(&mut self, id: StreamerId) {
         let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
         let Some(site) = self.settings.sites.iter().find(|s| s.id == streamer.site_id) else { return };
@@ -1208,7 +1209,7 @@ impl Policy {
             opts.effective_auto_suffix(site) || opts.effective_split_minutes(site).is_some() || opts.intro_split_minutes().is_some();
         let part = match self.live.part(id).cloned() {
             None => {
-                self.live.set_part(id, PartRecord { span, part: 1, file: None, unused: false });
+                self.live.set_part(id, PartRecord { span, part: 1, file: None, unused: false, pending_one: None });
                 1
             }
             Some(rec) if rec.unused => {
@@ -1217,15 +1218,25 @@ impl Policy {
             }
             Some(rec) if continuing => {
                 let next = rec.part + 1;
-                if let Some(file) = rec.file {
-                    self.rename_part_one(id, Path::new(&file));
-                }
-                self.live.set_part(id, PartRecord { span, part: next, file: None, unused: false });
+                let pending_one = rec.file.or(rec.pending_one);
+                self.live.set_part(id, PartRecord { span, part: next, file: None, unused: false, pending_one });
                 next
             }
             Some(rec) => rec.part,
         };
         self.send_part_override(id, part);
+        self.flush_live();
+    }
+
+    /// Renames the queued part 1 file to `_part1` once the streamer's new part is confirmed growing.
+    fn commit_part_one(&mut self, streamer_id: StreamerId, recorder: RecorderId) {
+        if self.splitter.current(streamer_id) != Some(recorder) {
+            return;
+        }
+        let Some(rec) = self.live.part(streamer_id).cloned() else { return };
+        let Some(file) = rec.pending_one.clone() else { return };
+        self.rename_part_one(streamer_id, Path::new(&file));
+        self.live.set_part(streamer_id, PartRecord { pending_one: None, ..rec });
         self.flush_live();
     }
 
@@ -1312,7 +1323,7 @@ impl Policy {
             Step::Commit { streamer, old, part } => {
                 let Some(span) = self.live.span_start(streamer) else { return };
                 let first = self.live.part(streamer).and_then(|r| r.file.clone().filter(|_| r.part == 1));
-                self.live.set_part(streamer, PartRecord { span, part, file: None, unused: false });
+                self.live.set_part(streamer, PartRecord { span, part, file: None, unused: false, pending_one: None });
                 self.flush_live();
                 self.log(format!("{}: recording part {part}", self.streamer_name(streamer)));
                 if self.recorder_pids.contains_key(&old) {
@@ -2195,6 +2206,23 @@ mod e2e {
             matches!(cmds.as_slice(), [Command::SetRecorderOverride { streamer_id: 2, args: Some(a) }, Command::StartRecording { id: 2 }] if a.contains("_part2")),
             "{cmds:?}"
         );
+    }
+
+    #[test]
+    fn restart_queues_the_part_one_rename_instead_of_doing_it() {
+        let _sb = Sandbox::new("policy-restart-queued-rename");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), true);
+        let now = now_secs();
+        live_status(&mut p, false, now);
+        live_status(&mut p, true, now + 1);
+        sent(&mut rx);
+        let rec = p.live.part(2).cloned().unwrap();
+        p.live.set_part(2, PartRecord { file: Some("/rec/a.mp4".into()), ..rec });
+        live_status(&mut p, false, now + 2);
+        sent(&mut rx);
+        let rec = p.live.part(2).unwrap();
+        assert_eq!((rec.part, rec.file.as_deref(), rec.pending_one.as_deref()), (2, None, Some("/rec/a.mp4")));
     }
 
     #[test]
