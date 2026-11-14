@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 /// Most stalled recordings restarted for one streamer during one live span.
 pub const MAX_RESTARTS_PER_SPAN: u32 = 20;
 
-/// A streamer's showing STALLED chip.
+/// A streamer's STALLED chip; the count outlives the chip being hidden.
 struct Chip {
     span: Option<u64>,
     count: u32,
+    /// False once the chip is dismissed or timed out.
+    shown: bool,
     /// Set once no recording of the streamer is stalled any more.
     quiet_since: Option<Instant>,
 }
@@ -23,14 +25,15 @@ pub struct StallChips {
 }
 
 impl StallChips {
-    /// Counts a new stall, starting the count over in a new live span; returns the count.
+    /// Counts a new stall and shows the chip, starting the count over in a new live span; returns the count.
     pub fn on_stall(&mut self, id: StreamerId, span: Option<u64>) -> u32 {
-        let chip = self.chips.entry(id).or_insert(Chip { span, count: 0, quiet_since: None });
+        let chip = self.chips.entry(id).or_insert(Chip { span, count: 0, shown: false, quiet_since: None });
         if chip.span != span {
             chip.span = span;
             chip.count = 0;
         }
         chip.count += 1;
+        chip.shown = true;
         chip.quiet_since = None;
         self.dirty = true;
         chip.count
@@ -47,46 +50,46 @@ impl StallChips {
         }
     }
 
-    /// Removes chips that have been quiet for the streamer's auto-clear minutes; 0 never clears.
+    /// Hides chips that have been quiet for the streamer's auto-clear minutes, keeping their counts; 0 never clears.
     pub fn expire(&mut self, now: Instant, clear_minutes: impl Fn(StreamerId) -> u64) {
-        let before = self.chips.len();
-        self.chips.retain(|id, chip| {
+        for (id, chip) in self.chips.iter_mut().filter(|(_, c)| c.shown) {
             let minutes = clear_minutes(*id);
             let due = minutes > 0 && chip.quiet_since.is_some_and(|at| now.duration_since(at) >= Duration::from_secs(minutes * 60));
-            !due
-        });
-        if self.chips.len() != before {
-            self.dirty = true;
+            if due {
+                chip.shown = false;
+                self.dirty = true;
+            }
         }
     }
 
-    /// Removes every chip.
+    /// Hides every chip, keeping the counts.
     pub fn clear(&mut self) {
-        if !self.chips.is_empty() {
+        for chip in self.chips.values_mut().filter(|c| c.shown) {
+            chip.shown = false;
             self.dirty = true;
         }
-        self.chips.clear();
     }
 
-    /// Removes the streamer's chip.
+    /// Hides the streamer's chip, keeping its count.
     pub fn clear_one(&mut self, id: StreamerId) {
-        if self.chips.remove(&id).is_some() {
+        if let Some(chip) = self.chips.get_mut(&id).filter(|c| c.shown) {
+            chip.shown = false;
             self.dirty = true;
         }
     }
 
     /// Keeps only the streamers the predicate accepts.
     pub fn retain(&mut self, mut keep: impl FnMut(StreamerId) -> bool) {
-        let before = self.chips.len();
+        let shown = self.chips.values().filter(|c| c.shown).count();
         self.chips.retain(|id, _| keep(*id));
-        if self.chips.len() != before {
+        if self.chips.values().filter(|c| c.shown).count() != shown {
             self.dirty = true;
         }
     }
 
-    /// Streamer id to its stall count; streamers without a chip are absent.
+    /// Streamer id to its stall count; streamers without a showing chip are absent.
     pub fn counts(&self) -> HashMap<StreamerId, u32> {
-        self.chips.iter().map(|(id, c)| (*id, c.count)).collect()
+        self.chips.iter().filter(|(_, c)| c.shown).map(|(id, c)| (*id, c.count)).collect()
     }
 
     pub fn take_dirty(&mut self) -> bool {
@@ -185,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn dismissing_resets_the_count_and_clear_removes_all() {
+    fn dismissing_hides_the_chip_but_keeps_the_count_within_a_span() {
         let mut c = StallChips::default();
         c.on_stall(1, Some(5));
         c.on_stall(1, Some(5));
@@ -193,12 +196,34 @@ mod tests {
         c.take_dirty();
         c.clear_one(1);
         assert!(c.take_dirty() && c.counts().len() == 1);
-        assert_eq!(c.on_stall(1, Some(5)), 1);
+        assert_eq!(c.on_stall(1, Some(5)), 3);
+        assert_eq!(c.counts().get(&1), Some(&3));
         c.take_dirty();
         c.clear();
         assert!(c.take_dirty() && c.counts().is_empty());
         c.clear();
         assert!(!c.take_dirty());
+    }
+
+    #[test]
+    fn a_hidden_count_starts_over_only_with_the_next_stall_in_a_new_span() {
+        let mut c = StallChips::default();
+        c.on_stall(1, Some(5));
+        c.on_stall(1, Some(5));
+        c.clear_one(1);
+        assert!(c.counts().is_empty());
+        assert_eq!(c.on_stall(1, Some(6)), 1);
+    }
+
+    #[test]
+    fn timing_out_hides_the_chip_but_keeps_the_count() {
+        let (mut c, t0) = (StallChips::default(), Instant::now());
+        c.on_stall(1, Some(5));
+        c.on_stall(1, Some(5));
+        c.sync(&HashSet::new(), t0);
+        c.expire(at(t0, 11), |_| 10);
+        assert!(c.counts().is_empty());
+        assert_eq!(c.on_stall(1, Some(5)), 3);
     }
 
     #[test]

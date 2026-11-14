@@ -85,9 +85,17 @@ fn first_match<'a>(line: &str, patterns: &'a [String]) -> Option<&'a str> {
     patterns.iter().map(String::as_str).find(|p| line.contains(p))
 }
 
+/// One kind's count for a streamer; the count outlives the chip being hidden.
+struct Tally {
+    span: Option<u64>,
+    count: u32,
+    /// False once the chip is dismissed or timed out.
+    shown: bool,
+}
+
 #[derive(Default)]
 pub struct WarnTracker {
-    counts: HashMap<StreamerId, Warnings>,
+    counts: HashMap<(StreamerId, WarnKind), Tally>,
     /// Kinds already logged in each streamer's current live span.
     logged: HashSet<(StreamerId, WarnKind)>,
     /// When each counted kind last matched, for auto-clearing.
@@ -98,7 +106,8 @@ pub struct WarnTracker {
 
 impl WarnTracker {
     /// Matches `line` against the site's patterns, counting each kind whose warning is on; returns every match.
-    pub fn on_line(&mut self, id: StreamerId, site: &Site, line: &str) -> Vec<Hit> {
+    /// A count starts over when its kind matches again in a new live `span`.
+    pub fn on_line(&mut self, id: StreamerId, span: Option<u64>, site: &Site, line: &str) -> Vec<Hit> {
         let c = self.compiled.entry(site.id).or_default();
         if !c.is_current(site) {
             *c = Compiled::of(site);
@@ -119,11 +128,13 @@ impl WarnTracker {
                 WarnKind::Error => c.warn_errors,
             };
             if counted {
-                let w = self.counts.entry(id).or_default();
-                match kind {
-                    WarnKind::Interrupt => w.interrupts += 1,
-                    WarnKind::Error => w.errors += 1,
+                let tally = self.counts.entry((id, kind)).or_insert(Tally { span, count: 0, shown: false });
+                if tally.span != span {
+                    tally.span = span;
+                    tally.count = 0;
                 }
+                tally.count += 1;
+                tally.shown = true;
                 self.last_hit.insert((id, kind), Instant::now());
                 self.dirty = true;
             }
@@ -138,16 +149,16 @@ impl WarnTracker {
         self.logged.retain(|(sid, _)| *sid != id);
     }
 
-    /// Resets every count.
+    /// Hides every chip, keeping the counts.
     pub fn clear(&mut self) {
-        if !self.counts.is_empty() {
+        for t in self.counts.values_mut().filter(|t| t.shown) {
+            t.shown = false;
             self.dirty = true;
         }
-        self.counts.clear();
         self.last_hit.clear();
     }
 
-    /// Resets counts whose latest match is older than the streamer's auto-clear minutes; 0 never clears.
+    /// Hides counts whose latest match is older than the streamer's auto-clear minutes, keeping them; 0 never clears.
     pub fn expire(&mut self, now: Instant, clear_minutes: impl Fn(StreamerId) -> u64) {
         let due: Vec<(StreamerId, WarnKind)> = self
             .last_hit
@@ -163,38 +174,38 @@ impl WarnTracker {
         }
     }
 
-    /// Resets one kind of count for the streamer.
+    /// Hides one kind's chip for the streamer, keeping its count.
     pub fn clear_kind(&mut self, id: StreamerId, kind: WarnKind) {
         self.last_hit.remove(&(id, kind));
-        let Some(w) = self.counts.get_mut(&id) else { return };
-        let n = match kind {
-            WarnKind::Interrupt => &mut w.interrupts,
-            WarnKind::Error => &mut w.errors,
-        };
-        if *n > 0 {
-            *n = 0;
+        if let Some(t) = self.counts.get_mut(&(id, kind)).filter(|t| t.shown) {
+            t.shown = false;
             self.dirty = true;
-        }
-        if *w == Warnings::default() {
-            self.counts.remove(&id);
         }
     }
 
     /// Keeps only the streamers and sites the predicates accept.
     pub fn retain(&mut self, mut keep_streamer: impl FnMut(StreamerId) -> bool, mut keep_site: impl FnMut(SiteId) -> bool) {
-        let before = self.counts.len();
-        self.counts.retain(|id, _| keep_streamer(*id));
+        let shown = self.counts.values().filter(|t| t.shown).count();
+        self.counts.retain(|(id, _), _| keep_streamer(*id));
         self.logged.retain(|(id, _)| keep_streamer(*id));
         self.last_hit.retain(|(id, _), _| keep_streamer(*id));
         self.compiled.retain(|id, _| keep_site(*id));
-        if self.counts.len() != before {
+        if self.counts.values().filter(|t| t.shown).count() != shown {
             self.dirty = true;
         }
     }
 
-    /// Streamer id to its counts, leaving out streamers with none.
+    /// Streamer id to the counts of its showing chips, leaving out streamers with none.
     pub fn counts(&self) -> HashMap<StreamerId, Warnings> {
-        self.counts.clone()
+        let mut out: HashMap<StreamerId, Warnings> = HashMap::new();
+        for ((id, kind), t) in self.counts.iter().filter(|(_, t)| t.shown) {
+            let w = out.entry(*id).or_default();
+            match kind {
+                WarnKind::Interrupt => w.interrupts = t.count,
+                WarnKind::Error => w.errors = t.count,
+            }
+        }
+        out
     }
 
     pub fn take_dirty(&mut self) -> bool {
@@ -232,11 +243,11 @@ mod tests {
     #[test]
     fn counts_matches_per_kind_ignoring_case() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, PACKET);
-        t.on_line(1, &site, DISCONT);
-        t.on_line(1, &site, AD_TAG);
-        t.on_line(1, &site, SEGMENT);
-        t.on_line(2, &site, &PACKET.to_uppercase());
+        t.on_line(1, None, &site, PACKET);
+        t.on_line(1, None, &site, DISCONT);
+        t.on_line(1, None, &site, AD_TAG);
+        t.on_line(1, None, &site, SEGMENT);
+        t.on_line(2, None, &site, &PACKET.to_uppercase());
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 2 }));
         assert_eq!(t.counts().get(&2), Some(&Warnings { interrupts: 0, errors: 1 }));
         assert!(t.take_dirty() && !t.take_dirty());
@@ -245,7 +256,7 @@ mod tests {
     #[test]
     fn clear_kind_resets_only_that_kind() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, "Packet corrupt in /ad/ segment");
+        t.on_line(1, None, &site, "Packet corrupt in /ad/ segment");
         t.take_dirty();
         t.clear_kind(1, WarnKind::Error);
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 0 }));
@@ -255,9 +266,37 @@ mod tests {
     }
 
     #[test]
+    fn hidden_counts_continue_in_the_same_span_and_start_over_in_a_new_one() {
+        let (mut t, site) = (WarnTracker::default(), twitch());
+        t.on_line(1, Some(100), &site, PACKET);
+        t.on_line(1, Some(100), &site, PACKET);
+        t.on_line(1, Some(100), &site, AD_TAG);
+        t.clear_kind(1, WarnKind::Error);
+        assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 0 }));
+        t.on_line(1, Some(100), &site, PACKET);
+        assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 3 }));
+        t.clear();
+        assert!(t.counts().is_empty());
+        t.on_line(1, Some(200), &site, PACKET);
+        assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 0, errors: 1 }));
+        t.on_line(1, Some(200), &site, AD_TAG);
+        assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 1 }));
+    }
+
+    #[test]
+    fn expiring_hides_a_count_without_resetting_it() {
+        let (mut t, site) = (WarnTracker::default(), twitch());
+        t.on_line(1, Some(100), &site, PACKET);
+        t.expire(Instant::now() + Duration::from_secs(61 * 60), |_| 60);
+        assert!(t.counts().is_empty());
+        t.on_line(1, Some(100), &site, PACKET);
+        assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 0, errors: 2 }));
+    }
+
+    #[test]
     fn a_line_matching_both_kinds_counts_both() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, "Packet corrupt in /ad/ segment");
+        t.on_line(1, None, &site, "Packet corrupt in /ad/ segment");
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 1, errors: 1 }));
     }
 
@@ -265,10 +304,10 @@ mod tests {
     fn blank_patterns_turn_a_kind_off() {
         let (mut t, mut site) = (WarnTracker::default(), twitch());
         site.interrupt_patterns.clear();
-        t.on_line(1, &site, AD_TAG);
+        t.on_line(1, None, &site, AD_TAG);
         assert!(t.counts().is_empty());
         site.error_patterns.clear();
-        t.on_line(1, &site, PACKET);
+        t.on_line(1, None, &site, PACKET);
         assert!(t.counts().is_empty() && !t.take_dirty());
     }
 
@@ -276,10 +315,10 @@ mod tests {
     fn warn_toggles_turn_a_kind_off() {
         let (mut t, mut site) = (WarnTracker::default(), twitch());
         site.warn_interrupts = false;
-        t.on_line(1, &site, AD_TAG);
+        t.on_line(1, None, &site, AD_TAG);
         assert!(t.counts().is_empty());
         site.warn_errors = false;
-        t.on_line(1, &site, PACKET);
+        t.on_line(1, None, &site, PACKET);
         assert!(t.counts().is_empty() && !t.take_dirty());
     }
 
@@ -288,7 +327,7 @@ mod tests {
         let (mut t, mut site) = (WarnTracker::default(), twitch());
         site.warn_errors = false;
         site.notify_errors = true;
-        let hits = t.on_line(1, &site, PACKET);
+        let hits = t.on_line(1, None, &site, PACKET);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].kind, WarnKind::Error);
         assert!(t.counts().is_empty() && !t.take_dirty());
@@ -297,30 +336,30 @@ mod tests {
     #[test]
     fn edited_patterns_apply_to_the_next_line() {
         let (mut t, mut site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, "custom marker");
+        t.on_line(1, None, &site, "custom marker");
         assert!(t.counts().is_empty());
         site.error_patterns = "Custom Marker".into();
-        t.on_line(1, &site, "custom marker");
+        t.on_line(1, None, &site, "custom marker");
         assert_eq!(t.counts().get(&1), Some(&Warnings { interrupts: 0, errors: 1 }));
     }
 
     #[test]
     fn each_kind_is_logged_once_per_live_span() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        assert_eq!(fresh(t.on_line(1, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
-        assert!(fresh(t.on_line(1, &site, DISCONT)).is_empty());
-        assert_eq!(fresh(t.on_line(1, &site, AD_TAG)), [(WarnKind::Interrupt, "ext-x-discontinuity".to_string())]);
-        assert_eq!(fresh(t.on_line(2, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
+        assert_eq!(fresh(t.on_line(1, None, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
+        assert!(fresh(t.on_line(1, None, &site, DISCONT)).is_empty());
+        assert_eq!(fresh(t.on_line(1, None, &site, AD_TAG)), [(WarnKind::Interrupt, "ext-x-discontinuity".to_string())]);
+        assert_eq!(fresh(t.on_line(2, None, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
         t.end_span(1);
-        assert_eq!(fresh(t.on_line(1, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
-        assert!(fresh(t.on_line(2, &site, PACKET)).is_empty());
+        assert_eq!(fresh(t.on_line(1, None, &site, PACKET)), [(WarnKind::Error, "packet corrupt".to_string())]);
+        assert!(fresh(t.on_line(2, None, &site, PACKET)).is_empty());
     }
 
     #[test]
     fn expire_clears_a_kind_after_its_minutes_since_the_latest_match() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, PACKET);
-        t.on_line(1, &site, AD_TAG);
+        t.on_line(1, None, &site, PACKET);
+        t.on_line(1, None, &site, AD_TAG);
         t.take_dirty();
         let now = Instant::now();
         t.expire(now + Duration::from_secs(59 * 60), |_| 60);
@@ -332,7 +371,7 @@ mod tests {
     #[test]
     fn expire_with_zero_minutes_never_clears() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, PACKET);
+        t.on_line(1, None, &site, PACKET);
         t.take_dirty();
         t.expire(Instant::now() + Duration::from_secs(10 * 24 * 3600), |_| 0);
         assert!(!t.take_dirty() && t.counts().len() == 1);
@@ -341,8 +380,8 @@ mod tests {
     #[test]
     fn clear_and_retain_reset_counts() {
         let (mut t, site) = (WarnTracker::default(), twitch());
-        t.on_line(1, &site, PACKET);
-        t.on_line(2, &site, PACKET);
+        t.on_line(1, None, &site, PACKET);
+        t.on_line(2, None, &site, PACKET);
         t.take_dirty();
         t.retain(|id| id == 1, |_| true);
         assert!(t.take_dirty() && t.counts().len() == 1);

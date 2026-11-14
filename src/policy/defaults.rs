@@ -113,6 +113,7 @@ pub fn new_site(preset: Preset) -> NewSite {
         notify_on_launch: true,
         notify_live: true,
         warnings_enabled: true,
+        flash_warnings: true,
         notify_interrupts: false,
         notify_errors: false,
         warn_stalled: false,

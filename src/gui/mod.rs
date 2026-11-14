@@ -181,6 +181,7 @@ pub struct SiteDraft {
     pub notify_on_launch: bool,
     pub notify_live: bool,
     pub warnings_enabled: bool,
+    pub flash_warnings: bool,
     pub notify_interrupts: bool,
     pub notify_errors: bool,
     pub warn_stalled: bool,
@@ -234,6 +235,7 @@ impl SiteDraft {
             notify_on_launch: s.notify_on_launch,
             notify_live: s.notify_live,
             warnings_enabled: s.warnings_enabled,
+            flash_warnings: s.flash_warnings,
             notify_interrupts: s.notify_interrupts,
             notify_errors: s.notify_errors,
             warn_stalled: s.warn_stalled,
@@ -289,6 +291,7 @@ impl SiteDraft {
             notify_on_launch: n.notify_on_launch,
             notify_live: n.notify_live,
             warnings_enabled: n.warnings_enabled,
+            flash_warnings: n.flash_warnings,
             notify_interrupts: n.notify_interrupts,
             notify_errors: n.notify_errors,
             warn_stalled: n.warn_stalled,
@@ -399,6 +402,7 @@ impl SiteDraft {
     fn copy_notify_from(&mut self, d: &SiteDraft) {
         self.notify = d.notify;
         self.warnings_enabled = d.warnings_enabled;
+        self.flash_warnings = d.flash_warnings;
         self.notify_desktop = d.notify_desktop;
         self.notify_ntfy = d.notify_ntfy;
         self.ntfy_topic = d.ntfy_topic.clone();
@@ -483,6 +487,7 @@ impl SiteDraft {
             notify_on_launch: self.notify_on_launch,
             notify_live: self.notify_live,
             warnings_enabled: self.warnings_enabled,
+            flash_warnings: self.flash_warnings,
             notify_interrupts: self.notify_interrupts,
             notify_errors: self.notify_errors,
             warn_stalled: self.warn_stalled,
@@ -517,6 +522,7 @@ fn parse_opt<T: std::str::FromStr + PartialOrd>(text: &str, min: T) -> Option<Op
 pub enum DraftField {
     NotifyLive(bool),
     WarningsEnabled(bool),
+    FlashWarnings(bool),
     Name(String),
     Exe(String),
     Interval(String),
@@ -803,8 +809,7 @@ pub enum Msg {
     SetWrapOutput(bool),
     CopyOutput(RecorderId),
     SetCompact(bool),
-    SetLiveFirst(bool),
-    SetSortKey(prefs::SortKey),
+    SetSortItem(prefs::SortItem),
     ToggleSortDir,
     SetRowMin(f32),
     SetRowMax(f32),
@@ -1527,6 +1532,7 @@ impl App {
                         DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
                         DraftField::NotifyLive(v) => d.notify_live = v,
                         DraftField::WarningsEnabled(v) => d.warnings_enabled = v,
+                        DraftField::FlashWarnings(v) => d.flash_warnings = v,
                         DraftField::NotifyInterrupts(v) => d.notify_interrupts = v,
                         DraftField::NotifyErrors(v) => d.notify_errors = v,
                         DraftField::WarnStalled(v) => d.warn_stalled = v,
@@ -1618,12 +1624,12 @@ impl App {
             Msg::ClearWarnings => self.client.send(PolicyCommand::ClearWarnings),
             Msg::DismissWarning(id, chip) => self.client.send(PolicyCommand::DismissWarning(id, chip)),
             Msg::CopyText(text) => return iced::clipboard::write(text),
-            Msg::SetLiveFirst(on) => {
-                self.live_first = on;
-                prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
-            }
-            Msg::SetSortKey(k) => {
-                self.sort_key = k;
+            Msg::SetSortItem(item) => {
+                match item {
+                    prefs::SortItem::LiveFirst(_) => self.live_first = !self.live_first,
+                    prefs::SortItem::Key(k) => self.sort_key = k,
+                    prefs::SortItem::Divider => return Task::none(),
+                }
                 prefs::save_sort(self.live_first, self.sort_key, self.sort_asc);
             }
             Msg::ToggleSortDir => {

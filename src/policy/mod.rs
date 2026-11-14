@@ -91,6 +91,7 @@ pub struct NewSite {
     pub notify_on_launch: bool,
     pub notify_live: bool,
     pub warnings_enabled: bool,
+    pub flash_warnings: bool,
     pub notify_interrupts: bool,
     pub notify_errors: bool,
     pub warn_stalled: bool,
@@ -145,6 +146,7 @@ impl NewSite {
             notify_on_launch: self.notify_on_launch,
             notify_live: self.notify_live,
             warnings_enabled: self.warnings_enabled,
+            flash_warnings: self.flash_warnings,
             notify_interrupts: self.notify_interrupts,
             notify_errors: self.notify_errors,
             warn_stalled: self.warn_stalled,
@@ -197,9 +199,9 @@ pub enum PolicyCommand {
     TestNotification { site_name: String, targets: Targets, folder: PathBuf },
     /// Re-runs the engine's setup checks.
     Recheck,
-    /// Resets every streamer's restart, interrupt and error counts and dismisses stall warnings.
+    /// Hides every warning chip; the counts stay until the next warning of that kind in a new live span.
     ClearWarnings,
-    /// Dismisses one warning chip on one streamer's row.
+    /// Hides one warning chip on one streamer's row, keeping its count.
     DismissWarning(StreamerId, WarningChip),
     /// Looks for a new release now, even when automatic checks are off.
     CheckForUpdate,
@@ -231,11 +233,11 @@ pub enum PolicyEvent {
     RecordingFiles(HashMap<RecorderId, RecordingFile>),
     /// A streamer's recording resolution and frame rate; `None` once it has no recording.
     Resolution(StreamerId, Option<Quality>),
-    /// Streamer id to its restart count; streamers with none are absent.
+    /// Streamer id to its restart count; streamers whose chip is hidden are absent.
     Restarts(HashMap<StreamerId, u32>),
-    /// Streamer id to its stall count per live span; streamers without a STALLED chip are absent.
+    /// Streamer id to its stall count per live span; streamers without a showing STALLED chip are absent.
     Stalls(HashMap<StreamerId, u32>),
-    /// Streamer id to its interrupt and error counts; streamers with none are absent.
+    /// Streamer id to its interrupt and error counts; streamers with no showing chip are absent.
     Warnings(HashMap<StreamerId, Warnings>),
     /// New output lines per recording, oldest first; batched, and sent only for sites with output on.
     Output(HashMap<RecorderId, Vec<String>>),
@@ -680,7 +682,8 @@ impl Policy {
         let Some((_, end_after_secs)) = live::lookup(&self.settings, id) else { return };
         let enabled = self.settings.streamers.iter().any(|s| s.id == id && s.enabled);
         let before = self.restarts.count(id);
-        let change = self.restarts.on_status(id, recording, enabled, Duration::from_secs(end_after_secs), Instant::now());
+        let span = self.live.span_start(id);
+        let change = self.restarts.on_status(id, recording, enabled, Duration::from_secs(end_after_secs), Instant::now(), span);
         match change {
             Change::Started => self.quick.cancel(id),
             Change::Ended { unexpected: true } => self.schedule_quick_check(id),
@@ -819,7 +822,7 @@ impl Policy {
         });
     }
 
-    /// Clears restart, interrupt, error and stall warnings older than each site's auto-clear time.
+    /// Hides restart, interrupt, error and stall chips older than each site's auto-clear time.
     fn expire_warnings(&mut self) {
         let now = Instant::now();
         let settings = &self.settings;
@@ -856,7 +859,7 @@ impl Policy {
         let settings = &self.settings;
         let site = settings.streamers.iter().find(|s| s.id == id).and_then(|st| settings.sites.iter().find(|x| x.id == st.site_id));
         let Some(site) = site else { return };
-        let hits = self.warnings.on_line(id, site, line);
+        let hits = self.warnings.on_line(id, self.live.span_start(id), site, line);
         if hits.is_empty() {
             return;
         }
@@ -1905,6 +1908,7 @@ mod tests {
             notify_on_launch: false,
             notify_live: true,
             warnings_enabled: true,
+            flash_warnings: true,
             notify_interrupts: false,
             notify_errors: false,
             warn_stalled: true,
@@ -2010,6 +2014,7 @@ mod e2e {
                 notify_on_launch: false,
                 notify_live: true,
                 warnings_enabled: true,
+                flash_warnings: true,
                 notify_interrupts: false,
                 notify_errors: false,
                 warn_stalled: true,

@@ -145,6 +145,7 @@ impl App {
                 .label(format!("Enable Warnings for {} Livestreams", site.name))
                 .on_toggle_maybe((!no_warn).then(|| move |v: bool| Msg::Draft(id, DraftField::WarningsEnabled(v))))
                 .text_size(12),
+            toggle("Flash warnings", d.flash_warnings, !no_warn && d.warnings_enabled, DraftField::FlashWarnings),
             toggle("Desktop Notifications", d.notify_desktop, notify_on, DraftField::NotifyDesktop),
             toggle("Mobile Notifications (ntfy)", d.notify_ntfy, notify_on, DraftField::NotifyNtfy),
             Space::new().width(Length::Fill),

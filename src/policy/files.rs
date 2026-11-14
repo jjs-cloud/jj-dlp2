@@ -399,7 +399,7 @@ mod tests {
             has_bootloader: false,
             ffmpeg: pids
                 .iter()
-                .map(|pid| ProcSample { pid: *pid, name: "ffmpeg".into(), cpu_percent: 0.0, mem_bytes: 0 })
+                .map(|pid| ProcSample { pid: *pid, name: "ffmpeg".into(), cpu_percent: 0.0, mem_bytes: 0, read_bytes_per_sec: 0, write_bytes_per_sec: 0 })
                 .collect(),
             last_line: String::new(),
             cmdline: String::new(),

@@ -163,6 +163,9 @@ pub struct Site {
     /// Master switch for showing this site's warning chips.
     #[serde(default = "default_true")]
     pub warnings_enabled: bool,
+    /// Tint the Livestreams tab and the streamer's row while a warning chip shows.
+    #[serde(default = "default_true")]
+    pub flash_warnings: bool,
     /// Notify when recorder output matches an interrupt pattern.
     #[serde(default)]
     pub notify_interrupts: bool,
@@ -514,6 +517,10 @@ pub struct ProcSample {
     pub name: String,
     pub cpu_percent: f32,
     pub mem_bytes: u64,
+    /// Smoothed disk read rate in bytes per second.
+    pub read_bytes_per_sec: u64,
+    /// Smoothed disk write rate in bytes per second.
+    pub write_bytes_per_sec: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -625,6 +632,7 @@ mod tests {
             notify_on_launch: false,
             notify_live: true,
             warnings_enabled: true,
+            flash_warnings: true,
             notify_interrupts: false,
             notify_errors: false,
             warn_stalled: true,
@@ -712,11 +720,11 @@ mod tests {
     #[test]
     fn site_without_live_and_warning_switches_keeps_them_on() {
         let mut value = serde_json::to_value(site_with(false, None)).unwrap();
-        for key in ["notify_live", "warnings_enabled"] {
+        for key in ["notify_live", "warnings_enabled", "flash_warnings"] {
             value.as_object_mut().unwrap().remove(key);
         }
         let site: Site = serde_json::from_value(value).unwrap();
-        assert!(site.notify_live && site.warnings_enabled);
+        assert!(site.notify_live && site.warnings_enabled && site.flash_warnings);
     }
 
     #[test]

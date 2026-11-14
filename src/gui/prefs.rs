@@ -68,6 +68,34 @@ impl std::fmt::Display for SortKey {
     }
 }
 
+/// A row of the Sort dropdown: the Live first switch, a divider, or a sort key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortItem {
+    LiveFirst(bool),
+    Divider,
+    Key(SortKey),
+}
+
+impl SortItem {
+    /// The dropdown's rows: Live first, a divider, then every sort key.
+    pub fn rows(live_first: bool) -> Vec<SortItem> {
+        let mut rows = vec![SortItem::LiveFirst(live_first), SortItem::Divider];
+        rows.extend(SortKey::ALL.map(SortItem::Key));
+        rows
+    }
+}
+
+impl std::fmt::Display for SortItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SortItem::LiveFirst(true) => f.write_str("✓ Live first"),
+            SortItem::LiveFirst(false) => f.write_str("Live first"),
+            SortItem::Divider => f.write_str("──────────"),
+            SortItem::Key(k) => std::fmt::Display::fmt(k, f),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Prefs {
@@ -458,6 +486,16 @@ mod tests {
         assert_eq!(fit_to_monitor(1180.0, 845.0, 1280.0, 720.0), (1180.0, 620.0));
         assert_eq!(fit_to_monitor(1180.0, 845.0, 1920.0, 1080.0), (1180.0, 845.0));
         assert_eq!(fit_to_monitor(1180.0, 845.0, 500.0, 300.0), (WIN_MIN_W, WIN_MIN_H));
+    }
+
+    #[test]
+    fn sort_rows_start_with_live_first_then_a_divider_then_every_key() {
+        let rows = SortItem::rows(true);
+        assert_eq!(rows[..2], [SortItem::LiveFirst(true), SortItem::Divider]);
+        assert_eq!(rows[2..], SortKey::ALL.map(SortItem::Key));
+        assert_eq!(SortItem::LiveFirst(true).to_string(), "✓ Live first");
+        assert_eq!(SortItem::LiveFirst(false).to_string(), "Live first");
+        assert_eq!(SortItem::Key(SortKey::LastLive).to_string(), "Last live");
     }
 
     #[test]
