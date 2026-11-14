@@ -288,6 +288,7 @@ pub fn finish_pending() {
     let _ = std::process::Command::new(&exe)
         .args(std::env::args_os().skip(1))
         .env(crate::instance::RELAUNCH_ENV, "1")
+        .env_remove(crate::watcher::CHILD_ENV)
         .spawn();
 }
 

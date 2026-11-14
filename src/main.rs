@@ -13,10 +13,11 @@ mod resets;
 mod settings;
 #[cfg(all(test, unix))]
 mod testutil;
+mod watcher;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
-const USAGE: &str = "Usage: jj-dlp [--config-dir=<path>] [--perf] [--backend=<name>] [--no-gui | --engine-only | --update [--rc]]\n  --config-dir  keep config, logs and the instance lock in <path>, so several instances can run\n  --perf        write slow-operation timings to perf.log in the config folder\n  --backend     draw with dx12, vulkan, gl or software instead of the automatic choice\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
+const USAGE: &str = "Usage: jj-dlp [--config-dir=<path>] [--perf] [--backend=<name>] [--no-watcher] [--no-gui | --engine-only | --update [--rc]]\n  --config-dir  keep config, logs and the instance lock in <path>, so several instances can run\n  --perf        write slow-operation timings to perf.log in the config folder\n  --backend     draw with dx12, vulkan, gl or software instead of the automatic choice\n  --no-watcher  run the app directly, without the watcher that relaunches it after a crash\n  (default)     engine + policy + GUI\n  --no-gui      engine + policy, no window\n  --engine-only engine only, reads the config files at launch\n  --update      install the latest release and exit (--rc includes release candidates)";
 
 enum Mode {
     Gui,
@@ -61,6 +62,11 @@ fn main() {
         args.remove(i);
         perf::enable();
     }
+    let mut watch = true;
+    if let Some(i) = args.iter().position(|a| a == "--no-watcher") {
+        args.remove(i);
+        watch = false;
+    }
     let mode = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] => Mode::Gui,
         ["--no-gui"] => Mode::NoGui,
@@ -78,10 +84,13 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if watch && !watcher::is_child() && matches!(mode, Mode::Gui | Mode::NoGui | Mode::EngineOnly) {
+        std::process::exit(watcher::run(matches!(mode, Mode::Gui)));
+    }
     let _instance = if matches!(mode, Mode::Update(_)) {
         None
     } else {
-        let lock = if std::env::var_os(instance::RELAUNCH_ENV).is_some() {
+        let lock = if std::env::var_os(instance::RELAUNCH_ENV).is_some() || watcher::is_child() {
             instance::acquire_waiting(std::time::Duration::from_secs(15))
         } else {
             instance::acquire()
@@ -107,8 +116,9 @@ fn main() {
     if tracked {
         crash::start_session();
     }
+    let mut gui_failed = false;
     match mode {
-        Mode::Gui => run_gui(),
+        Mode::Gui => gui_failed = !run_gui(),
         Mode::NoGui => run_no_gui(),
         Mode::EngineOnly => run_engine_only(),
         Mode::Update(rc) => run_update(rc),
@@ -116,17 +126,25 @@ fn main() {
     if tracked {
         crash::end_session();
     }
+    if gui_failed && watcher::is_child() {
+        std::process::exit(watcher::EXIT_GUI_ERROR);
+    }
 }
 
-fn run_gui() {
+/// Runs the GUI; returns false if it ended with an error.
+fn run_gui() -> bool {
     let policy = policy::start();
     gui::install_event_stream(policy.events);
+    let mut ok = true;
     if let Err(e) = gui::run(policy.client.clone()) {
         eprintln!("GUI error: {e}");
+        crash::note(&format!("GUI error: {e}"));
+        ok = false;
     }
     // Stop recorders gracefully before exiting.
     policy.client.send(policy::PolicyCommand::Shutdown);
     let _ = policy.thread.join();
+    ok
 }
 
 fn run_no_gui() {

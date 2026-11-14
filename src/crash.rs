@@ -73,6 +73,11 @@ fn record_panic(info: &PanicHookInfo<'_>) {
     ));
 }
 
+/// Appends one timestamped line to crash.log.
+pub fn note(text: &str) {
+    append(&format!("{}  {text}\n\n", stamp()));
+}
+
 fn write_marker(session: &Session) {
     if let Ok(json) = serde_json::to_vec(session) {
         let _ = std::fs::write(marker_path(), json);

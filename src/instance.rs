@@ -23,6 +23,18 @@ pub fn acquire() -> Result<InstanceLock, AlreadyRunning> {
     acquire_at(&dir.join("instance.lock"))
 }
 
+/// Takes the lock that keeps a second watcher from starting; waits briefly after an update relaunch.
+pub fn acquire_watcher() -> Result<InstanceLock, AlreadyRunning> {
+    let dir = crate::settings::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("watcher.lock");
+    if std::env::var_os(RELAUNCH_ENV).is_some() {
+        acquire_at_waiting(&path, Duration::from_secs(15))
+    } else {
+        acquire_at(&path)
+    }
+}
+
 /// Like `acquire`, but keeps retrying for up to `wait` while the previous instance exits.
 pub fn acquire_waiting(wait: Duration) -> Result<InstanceLock, AlreadyRunning> {
     let dir = crate::settings::config_dir();
