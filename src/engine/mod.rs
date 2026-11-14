@@ -8,6 +8,7 @@ mod checker;
 mod diagnose;
 pub(crate) mod exepath;
 pub(crate) mod logfile;
+pub(crate) mod pidfile;
 mod preflight;
 mod recorder;
 mod sampler;
@@ -184,6 +185,9 @@ impl Engine {
         }
         for (_, w) in self.workers.drain() {
             w.handle.abort();
+        }
+        if self.recorders.is_empty() {
+            pidfile::update(std::iter::empty());
         }
     }
 

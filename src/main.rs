@@ -111,10 +111,19 @@ fn main() {
     if !matches!(mode, Mode::Update(_)) {
         policy::update::cleanup_stale();
         resets::run();
+        let reaped = engine::pidfile::reap();
+        if reaped > 0 {
+            let msg = format!("Stopped {reaped} recorder process(es) left running by the previous session.");
+            crash::note(&msg);
+            policy::uilog::append(&msg);
+        }
     }
     let tracked = !matches!(mode, Mode::Update(_));
     if tracked {
         crash::start_session();
+        watcher::announce_restart();
+        // Make sure the startup lines are saved before the Log tab reads its history.
+        persist::flush();
     }
     let mut gui_failed = false;
     match mode {

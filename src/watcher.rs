@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 /// Set in the child process so it knows a watcher is supervising it.
 pub const CHILD_ENV: &str = "JJ_DLP_CHILD";
 
+/// Set in a relaunched child to describe how the previous run ended.
+const RESTART_ENV: &str = "JJ_DLP_RESTARTED";
+
 /// Exit code the child uses when the GUI failed, so the watcher relaunches it.
 pub const EXIT_GUI_ERROR: i32 = 70;
 
@@ -27,6 +30,13 @@ static STOP: AtomicBool = AtomicBool::new(false);
 /// True in the process the watcher launched.
 pub fn is_child() -> bool {
     std::env::var_os(CHILD_ENV).is_some()
+}
+
+/// Adds a line to the in-app log when the watcher relaunched this process after a crash.
+pub fn announce_restart() {
+    if let Ok(reason) = std::env::var(RESTART_ENV) {
+        crate::policy::uilog::append(&format!("Restarted automatically by the watcher after jj-dlp exited unexpectedly ({reason})."));
+    }
 }
 
 /// Runs the app as a child and relaunches it until it exits on purpose; returns the process exit code.
@@ -57,9 +67,16 @@ pub fn run(gui: bool) -> i32 {
     install_stop_handlers();
 
     let mut delay = FIRST_DELAY;
+    let mut reason: Option<String> = None;
     loop {
         let started = Instant::now();
-        let status = match Command::new(&exe).args(&args).env(CHILD_ENV, "1").spawn() {
+        let mut cmd = Command::new(&exe);
+        cmd.args(&args).env(CHILD_ENV, "1");
+        match &reason {
+            Some(reason) => cmd.env(RESTART_ENV, reason),
+            None => cmd.env_remove(RESTART_ENV),
+        };
+        let status = match cmd.spawn() {
             Ok(mut child) => match wait_child(&mut child) {
                 Some(status) => Some(status),
                 None => return 0,
@@ -78,12 +95,9 @@ pub fn run(gui: bool) -> i32 {
             delay = FIRST_DELAY;
         }
         if let Some(status) = &status {
-            crash::note(&format!(
-                "Watcher: jj-dlp exited unexpectedly ({}) after {}s; restarting in {}s.",
-                describe(status),
-                started.elapsed().as_secs(),
-                delay.as_secs()
-            ));
+            let how = format!("{} after {}s", describe(status), started.elapsed().as_secs());
+            crash::note(&format!("Watcher: jj-dlp exited unexpectedly ({how}); restarting in {}s.", delay.as_secs()));
+            reason = Some(how);
         }
         if sleep_or_stop(delay) {
             return 0;

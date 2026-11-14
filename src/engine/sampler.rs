@@ -1,5 +1,6 @@
 //! Samples each recorder's process tree once a second and confirms when it is fully gone.
 
+use super::pidfile;
 use super::recorder::SharedTracked;
 use super::Internal;
 use crate::api::{Event, ProcSample, ProcessInfo, RecorderId, RecorderState};
@@ -40,6 +41,7 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
         }
         tick += 1;
         if !any_tracked(&tracked) {
+            pidfile::update(std::iter::empty());
             primed = false;
             continue;
         }
@@ -47,6 +49,7 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
         // The first refresh after idling only seeds CPU readings.
         if !primed {
             primed = true;
+            register(&tracked);
             continue;
         }
         let fresh = fresh_system();
@@ -105,7 +108,19 @@ fn sampler_loop(tracked: SharedTracked, events: UnboundedSender<Event>, internal
                 cmdline: t.cmdline.clone(),
             }));
         }
+        pidfile::update(map.values().filter(|t| !t.gone_sent).flat_map(|t| t.seen.iter().copied()));
     }
+}
+
+/// Saves the processes of the running recorders so a relaunch can clean up after a crash.
+fn register(tracked: &SharedTracked) {
+    let fresh = fresh_system();
+    let children = children_map(&fresh);
+    let mut map = tracked.lock().unwrap();
+    for t in map.values_mut().filter(|t| !t.gone_sent) {
+        alive_tree(&fresh, &children, t.root_pid, &mut t.seen);
+    }
+    pidfile::update(map.values().filter(|t| !t.gone_sent).flat_map(|t| t.seen.iter().copied()));
 }
 
 /// A new `System` read from scratch, so a reused pid never keeps the old process's start time or name.
