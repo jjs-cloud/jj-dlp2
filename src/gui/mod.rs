@@ -772,6 +772,7 @@ pub enum Msg {
     OpenConfigDir,
     OpenRecording(RecorderId),
     OpenUrl(String),
+    HoverUrl(Option<StreamerId>),
     NewStreamerUsername(String),
     PickStreamerSite(SiteTarget),
     AddStreamer,
@@ -968,6 +969,7 @@ pub struct App {
     new_streamer: String,
     add_site: Option<SiteTarget>,
     open_streamer_settings: HashSet<StreamerId>,
+    hovered_url: Option<StreamerId>,
     schedule_picker: Option<(StreamerId, PickerTarget)>,
     streamer_drafts: HashMap<StreamerId, StreamerDraft>,
     settings_tab: SettingsTab,
@@ -1057,6 +1059,7 @@ impl App {
             add_site: None,
             pending_jump: None,
             open_streamer_settings: HashSet::new(),
+            hovered_url: None,
             schedule_picker: None,
             streamer_drafts: HashMap::new(),
             settings_tab: SettingsTab::Sites,
@@ -1401,6 +1404,7 @@ impl App {
             Msg::DisksRefreshed(snap) => self.on_disks(snap),
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
+            Msg::HoverUrl(id) => self.hovered_url = id,
             Msg::OpenUrl(url) => {
                 if url.starts_with("http://") || url.starts_with("https://") {
                     if let Err(e) = open::that_detached(&url) {

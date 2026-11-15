@@ -11,7 +11,7 @@ use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use crate::policy::{layout, WarningChip, Warnings};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    Column, Row, Space, Text, button, column, container, pick_list, row, scrollable, slider,
+    Column, Row, Space, Text, button, column, container, mouse_area, pick_list, row, scrollable, slider,
     text_input, toggler, tooltip,
 };
 use iced::{Alignment, Color, Element, Length};
@@ -211,7 +211,7 @@ fn site_chip_btn<'a>(s: Skin, m: RowMetrics, label: impl IntoFragment<'a>, color
     button(iced::widget::text(label).font(s.font).size(m.chip).color(color))
         .on_press(Msg::OpenUrl(url))
         .padding([m.chip_pad_v, m.chip_pad_h])
-        .style(skin::chip_btn(s, color))
+        .style(skin::chip_btn_flat(s, color))
         .into()
 }
 
@@ -1513,10 +1513,16 @@ impl App {
                         Some(i) => (tail[..i].to_string(), tail[i..].to_string()),
                         None => (tail, String::new()),
                     };
-                    let link = button(row![muted(&s, head), muted(&s, host).color(site_color), muted(&s, url_tail)])
-                        .on_press(Msg::OpenUrl(st.url.clone()))
-                        .padding(0.0)
-                        .style(skin::link_btn(s));
+                    let amt = if self.hovered_url == Some(id) { 0.45 } else { 0.0 };
+                    let link = button(row![
+                        muted(&s, head).color(skin::brighten(s.muted, amt)),
+                        muted(&s, host).color(skin::brighten(site_color, amt)),
+                        muted(&s, url_tail).color(skin::brighten(s.muted, amt)),
+                    ])
+                    .on_press(Msg::OpenUrl(st.url.clone()))
+                    .padding(0.0)
+                    .style(skin::link_btn(s));
+                    let link = mouse_area(link).on_enter(Msg::HoverUrl(Some(id))).on_exit(Msg::HoverUrl(None));
                     row![link, muted(&s, last_live)]
                 },
             ]

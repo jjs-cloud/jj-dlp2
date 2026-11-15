@@ -231,6 +231,24 @@ pub fn chip_btn(_s: Skin, color: Color) -> impl Fn(&Theme, button::Status) -> bu
     }
 }
 
+/// A chip that looks like a plain `chip` until hovered, then glows like `chip_btn`.
+pub fn chip_btn_flat(s: Skin, color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
+    let glow = chip_btn(s, color);
+    move |theme, status| {
+        if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            glow(theme, status)
+        } else {
+            button::Style {
+                background: Some(Background::Color(with_alpha(color, 0.14))),
+                border: Border { color: with_alpha(color, 0.65), width: 1.0, radius: Radius::from(999.0) },
+                text_color: color,
+                shadow: Shadow::default(),
+                ..Default::default()
+            }
+        }
+    }
+}
+
 /// A small round colour button; `selected` draws a bright outline.
 pub fn swatch(s: Skin, color: Color, selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
@@ -311,18 +329,20 @@ pub fn btn(s: Skin, kind: BtnKind) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
-/// Borderless text button that gets a faint highlight on hover.
-pub fn link_btn(s: Skin) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        button::Style {
-            background: hovered.then(|| Background::Color(with_alpha(s.accent2, 0.16))),
-            text_color: s.text,
-            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: Radius::from(3.0) },
-            shadow: Shadow::default(),
-            snap: false,
-        }
+/// Borderless, backgroundless button for text links.
+pub fn link_btn(_s: Skin) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, _| button::Style {
+        background: None,
+        text_color: Color::WHITE,
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: false,
     }
+}
+
+/// `c` mixed toward white by `amount` (0 to 1).
+pub fn brighten(c: Color, amount: f32) -> Color {
+    Color { r: c.r + (1.0 - c.r) * amount, g: c.g + (1.0 - c.g) * amount, b: c.b + (1.0 - c.b) * amount, a: c.a }
 }
 
 /// Borderless text-only button that turns danger-colored on hover.
