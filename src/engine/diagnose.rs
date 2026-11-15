@@ -3,7 +3,7 @@
 use super::preflight;
 
 /// ERROR text that is normal during checks because the channel is simply offline.
-const BENIGN: [&str; 3] = ["not currently live", "currently offline", "live event will begin"];
+const BENIGN: [&str; 4] = ["not currently live", "currently offline", "live event will begin", "private show"];
 
 /// An unexpected yt-dlp error, with a fix when it is a known setup problem.
 #[derive(Debug, Clone, PartialEq)]
