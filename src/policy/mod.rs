@@ -358,6 +358,8 @@ struct Policy {
     waiting: HashSet<StreamerId>,
     /// Streamers whose current part was prepared but whose recorder has not started yet.
     part_pending: HashSet<StreamerId>,
+    /// Set once the engine has been told to shut down, so no new recordings are prepared.
+    shutting_down: bool,
     /// Follows each streamer's recorders and the split in flight.
     splitter: Splitter,
     /// Recorders stopped on purpose by a split, so their exit is not a restart.
@@ -427,6 +429,7 @@ impl Policy {
             statuses: HashMap::new(),
             waiting: HashSet::new(),
             part_pending: HashSet::new(),
+            shutting_down: false,
             splitter: Splitter::default(),
             retiring: HashSet::new(),
             rename_on_exit: HashMap::new(),
@@ -486,7 +489,7 @@ impl Policy {
                     }
                     None => {
                         cmds_open = false;
-                        self.engine.send(Command::Shutdown);
+                        self.begin_shutdown();
                     }
                 },
                 ev = engine_events.recv() => match ev {
@@ -1116,8 +1119,17 @@ impl Policy {
         }
     }
 
+    /// Tells the engine to shut down and stops the policy from starting or preparing recordings.
+    fn begin_shutdown(&mut self) {
+        self.shutting_down = true;
+        self.engine.send(Command::Shutdown);
+    }
+
     /// Starts a live streamer that should record and stops one that should not.
     fn apply_decision(&mut self, id: StreamerId) {
+        if self.shutting_down {
+            return;
+        }
         let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { return };
         let status = self.statuses.get(&id).copied().unwrap_or_default();
         let decision = self.decision_for(&streamer);
@@ -1555,7 +1567,7 @@ impl Policy {
                 self.log(format!("update v{} ready; restarting", staged.version));
                 update::set_pending(staged);
                 self.emit(PolicyEvent::Update(UpdateEvent::Restarting));
-                self.engine.send(Command::Shutdown);
+                self.begin_shutdown();
             }
             UpdateMsg::Staged(Err(e)) => {
                 self.installing = false;
@@ -1849,7 +1861,7 @@ impl Policy {
                 self.run_check(false);
             }
             PolicyCommand::Posts(cmd) => self.posts.handle(cmd),
-            PolicyCommand::Shutdown => self.engine.send(Command::Shutdown),
+            PolicyCommand::Shutdown => self.begin_shutdown(),
         }
     }
 }
@@ -2235,6 +2247,21 @@ mod e2e {
         sent(&mut rx);
         let rec = p.live.part(2).unwrap();
         assert_eq!((rec.part, rec.file.as_deref(), rec.pending_one.as_deref()), (2, None, Some("/rec/a.mp4")));
+    }
+
+    #[test]
+    fn no_part_is_prepared_once_shutdown_begins() {
+        let _sb = Sandbox::new("policy-shutdown-part");
+        let (mut p, mut rx) = bare_policy();
+        one_streamer(&mut p, StreamerOptions::default(), true);
+        let now = now_secs();
+        live_status(&mut p, false, now);
+        live_status(&mut p, true, now + 1);
+        p.handle(PolicyCommand::Shutdown);
+        sent(&mut rx);
+        live_status(&mut p, false, now + 2);
+        assert!(sent(&mut rx).is_empty());
+        assert_eq!(p.live.part(2).map(|r| r.part), Some(1));
     }
 
     #[test]
