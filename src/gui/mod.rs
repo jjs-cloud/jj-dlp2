@@ -771,6 +771,7 @@ pub enum Msg {
     ThemeChosen(ThemeKind),
     OpenConfigDir,
     OpenRecording(RecorderId),
+    OpenUrl(String),
     NewStreamerUsername(String),
     PickStreamerSite(SiteTarget),
     AddStreamer,
@@ -1400,6 +1401,13 @@ impl App {
             Msg::DisksRefreshed(snap) => self.on_disks(snap),
             Msg::OpenConfigDir => self.client.send(PolicyCommand::OpenConfigDir),
             Msg::OpenRecording(id) => self.client.send(PolicyCommand::OpenRecording(id)),
+            Msg::OpenUrl(url) => {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    if let Err(e) = open::that_detached(&url) {
+                        self.note(format!("could not open {url}: {e}"));
+                    }
+                }
+            }
             Msg::NewStreamerUsername(v) => self.new_streamer = v,
             Msg::PickStreamerSite(target) => self.add_site = Some(target),
             Msg::AddStreamer => {

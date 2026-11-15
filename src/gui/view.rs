@@ -206,6 +206,15 @@ fn mini_chip<'a>(
     .into()
 }
 
+/// The compact-row site chip; clicking opens the streamer's URL in the browser.
+fn site_chip_btn<'a>(s: Skin, m: RowMetrics, label: impl IntoFragment<'a>, color: Color, url: String) -> Element<'a, Msg> {
+    button(iced::widget::text(label).font(s.font).size(m.chip).color(color))
+        .on_press(Msg::OpenUrl(url))
+        .padding([m.chip_pad_v, m.chip_pad_h])
+        .style(skin::chip_btn(s, color))
+        .into()
+}
+
 fn compact_chips<'a>(
     s: Skin,
     m: RowMetrics,
@@ -975,11 +984,12 @@ impl App {
         };
         let line = row![
             mini_dot(m, color, glow),
-            container(mini_chip(
+            container(site_chip_btn(
                 s,
                 m,
                 clip(&site.name, SITE_CLIP_CHARS),
-                s.site_color(site.color.as_deref())
+                s.site_color(site.color.as_deref()),
+                st.url.clone(),
             ))
             .width(m.site_w)
             .clip(true),
@@ -1499,7 +1509,15 @@ impl App {
                         tail.push_str(&format!(" · last live {}", fmt_ago(d)));
                     }
                     let site_color = self.settings.sites.iter().find(|x| x.id == st.site_id).map_or(s.accent2, |x| s.site_color(x.color.as_deref()));
-                    row![muted(&s, head), muted(&s, host).color(site_color), muted(&s, tail)]
+                    let (url_tail, last_live) = match tail.find(" · last live") {
+                        Some(i) => (tail[..i].to_string(), tail[i..].to_string()),
+                        None => (tail, String::new()),
+                    };
+                    let link = button(row![muted(&s, head), muted(&s, host).color(site_color), muted(&s, url_tail)])
+                        .on_press(Msg::OpenUrl(st.url.clone()))
+                        .padding(0.0)
+                        .style(skin::link_btn(s));
+                    row![link, muted(&s, last_live)]
                 },
             ]
             .spacing(2)

@@ -311,6 +311,20 @@ pub fn btn(s: Skin, kind: BtnKind) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
+/// Borderless text button that gets a faint highlight on hover.
+pub fn link_btn(s: Skin) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: hovered.then(|| Background::Color(with_alpha(s.accent2, 0.16))),
+            text_color: s.text,
+            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: Radius::from(3.0) },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
 /// Borderless text-only button that turns danger-colored on hover.
 pub fn bare_x(s: Skin) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
