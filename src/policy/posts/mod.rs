@@ -26,6 +26,8 @@ pub enum PostsCommand {
     Reveal(String),
     /// Sends the downloaded file to the recycle bin and hides the post.
     Delete(String),
+    /// Removes a post that is not downloaded from the library, so it is never fetched again.
+    Dismiss(String),
     /// Queues a post that is not downloaded, or retries a failed one.
     Download(String),
     /// Stops a queued or running download.

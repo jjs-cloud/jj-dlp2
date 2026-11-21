@@ -1030,6 +1030,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
             - When a site's list of posts does not include the time a post was made or the length of its video, the time the post was found is used and no length is shown, until the post has been downloaded. Then the real time and length are shown
         - Viewed posts are shown dimmed
         - `Queued`, `Downloading…`, `Failed` and `Not saved` - The state of a post that has not been downloaded. The reason is shown under a `Failed` post
+        - X button - Shown in the top right corner of the thumbnail of a post that is `Not saved`. Removes the post from the library, and it is not found again by later checks. Downloaded and failed posts do not have it
         - **Save** - Downloads a post that is `Not saved`. The limits for auto-downloads do not apply to it (see [Auto-download limits](#auto-download-limits))
         - **Retry** - Downloads a `Failed` post again, also without the limits for auto-downloads
         - **Cancel** - Shown in place of **Save** and **Retry** while a post is `Queued` or `Downloading…`. Stops the download, deletes the unfinished files of the post and puts the post back to `Not saved`, without an error

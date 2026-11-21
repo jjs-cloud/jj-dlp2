@@ -262,7 +262,21 @@ impl App {
             PostState::Remote => Some(("Not saved", s.warn)),
             PostState::Ready | PostState::Removed => None,
         };
-        let top = state_badge.map_or_else(|| Space::new().into(), |(l, c)| badge(l.to_string(), c));
+        let top_left: Element<'a, Msg> = state_badge.map_or_else(|| Space::new().into(), |(l, c)| badge(l.to_string(), c));
+        let dismiss: Element<'a, Msg> = if post.state == PostState::Remote {
+            button(iced::widget::text("✕").size(11).color(Color::WHITE))
+                .on_press(send(PostsMsg::Dismiss(post.id.clone())))
+                .padding([2.0, 7.0])
+                .style(|_, _| button::Style {
+                    background: Some(Background::Color(Color { a: 0.72, ..Color::BLACK })),
+                    border: Border { radius: 6.0.into(), ..Default::default() },
+                    ..Default::default()
+                })
+                .into()
+        } else {
+            Space::new().into()
+        };
+        let top = row![top_left, Space::new().width(Length::Fill), dismiss].align_y(Alignment::Start);
         let bottom: Element<'a, Msg> = match post.duration {
             Some(d) => badge(fmt_clock(d), Color::WHITE),
             None => Space::new().into(),

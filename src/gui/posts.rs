@@ -446,6 +446,7 @@ pub enum PostsMsg {
     CancelDownload(String),
     Reveal(String),
     Delete(String),
+    Dismiss(String),
     MarkAllViewed,
     NewestFirst(bool),
     CardWidth(f32),
@@ -519,6 +520,7 @@ impl App {
             PostsMsg::CancelDownload(id) => self.posts_send(PostsCommand::CancelDownload(id)),
             PostsMsg::Reveal(id) => self.posts_send(PostsCommand::Reveal(id)),
             PostsMsg::Delete(id) => self.posts_send(PostsCommand::Delete(id)),
+            PostsMsg::Dismiss(id) => self.posts_send(PostsCommand::Dismiss(id)),
             PostsMsg::MarkAllViewed => {
                 let ids: Vec<String> = self.posts.visible().iter().map(|p| p.id.clone()).collect();
                 self.posts.say(format!("Marked {} as viewed", ids.len()));
