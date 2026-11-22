@@ -146,6 +146,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Release candidates - Optional, off by default
 - `jj-dlp --update` - Installs the latest release from the command line
 - Settings resets - A release can set chosen settings back, once, the first time the new version starts (see [Settings resets](#settings-resets))
+- What's new - The changelog opens after each update and can be reopened from the Updates card (see [Changelog](#changelog))
 
 ## Requirements
 
@@ -1544,6 +1545,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Updates card - Sets how jj-dlp checks for new releases (see [Updates](#updates)). Changes apply immediately
         - Check for updates automatically - Turn off to stop jj-dlp from contacting GitHub on its own (default on)
         - Include release candidates - Also offers pre-release versions such as `2.0.1-rc.1` (default off)
+        - What's new button - Shown in the card header. Opens the changelog (see [Changelog](#changelog))
         - Check now button - Shown in the card header. Looks for a new release right away, even when automatic checks are off
         - The running version is shown under the toggles
     - Window card - Sets whether jj-dlp remembers the window size and resets it to the default (see [Settings](#settings)). Changes apply immediately
@@ -1681,6 +1683,17 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Release builds - Windows (64-bit), Linux (64-bit) and macOS (Apple Silicon)
 - Release candidates - A release candidate is only offered when **Include release candidates** is on. Once the final version is released, it is offered to release candidate users even with the toggle off
 - `update.json` - Holds `enabled` (default `true`) and `include_rc` (default `false`). Unlike `settings.json`, `sites.json`, `streamers.json` and `state.json`, it is read again at every check, so edits made by hand are picked up without a restart
+
+## Changelog
+
+- What's new window - Lists the changes of every version, newest first, over a dimmed window. The changelog is built into jj-dlp, so it needs no download and works offline
+- When it opens - At launch, when the running version is different from the version whose changelog was last shown. This covers updates from the banner, `jj-dlp --update` and manual installs
+    - A new install does not open it
+    - A version that was installed before this feature existed opens it once
+    - It opens for release candidates too
+- **Close** button - Closes the window and records that this version's changelog was shown. If jj-dlp is closed without pressing it, the window opens again at the next launch
+- What's new button - In the Updates card in Settings. Opens the window again at any time
+- `changelog_seen.json` - Holds `version`, the version whose changelog was last shown. Deleting it while the other files exist makes the window open at the next launch (see [Settings](#settings))
 
 ## Settings resets
 
@@ -1852,6 +1865,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - `post_thumbs` folder - Holds the thumbnail of each post (see [Posts](#posts))
     - `live.json` - Holds when each live streamer was first seen live, when each streamer was last seen live, when jj-dlp last looked up last live times on Twitch, which recording part each live streamer is on, and which live streamers have had their quality upgraded (see [Live time](#live-time), [Last live](#last-live), [Split recordings](#split-recordings) and [Upgrade quality](#upgrade-quality))
     - `update.json` - Holds the update settings (see [Updates](#updates))
+    - `changelog_seen.json` - Holds the version whose changelog was last shown (see [Changelog](#changelog))
     - `config_rev.json` - Holds the number of the last settings resets that were applied. Deleting it while the other files exist makes every settings reset apply again at the next launch (see [Settings resets](#settings-resets))
     - `*.bad` files - Copies of files that could not be loaded, such as `sites.json.bad` (see [Config problems](#config-problems))
     - `ui.log.txt` - Holds the saved history of the Log tab (see [Log tab](#log-tab))

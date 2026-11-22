@@ -882,6 +882,8 @@ pub enum Msg {
     UpdateCancel,
     UpdateConfirm,
     CheckUpdateNow,
+    ShowChangelog,
+    CloseChangelog,
     SetUpdateChecks(bool),
     SetIncludeRc(bool),
     StartFresh,
@@ -1057,6 +1059,7 @@ pub struct App {
     update_stage: UpdateStage,
     update_error: Option<String>,
     update_cfg: UpdateConfig,
+    changelog_open: bool,
     files: files::FilesState,
     posts: posts::PostsState,
     priority: priority::PriorityState,
@@ -1149,6 +1152,7 @@ impl App {
             update_stage: UpdateStage::Idle,
             update_error: None,
             update_cfg: UpdateConfig::default(),
+            changelog_open: crate::changelog::pending(),
             files: files::FilesState::new(),
             posts: posts::PostsState::new(),
             priority: priority::PriorityState::default(),
@@ -1896,6 +1900,11 @@ impl App {
                 }
             }
             Msg::CheckUpdateNow => self.client.send(PolicyCommand::CheckForUpdate),
+            Msg::ShowChangelog => self.changelog_open = true,
+            Msg::CloseChangelog => {
+                self.changelog_open = false;
+                crate::changelog::mark_seen();
+            }
             Msg::SetUpdateChecks(on) => {
                 self.update_cfg.enabled = on;
                 self.client.send(PolicyCommand::SetUpdateConfig(self.update_cfg));

@@ -1,6 +1,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 mod api;
+mod changelog;
 mod crash;
 mod engine;
 mod filemgr;
@@ -111,6 +112,9 @@ fn main() {
     if !matches!(mode, Mode::Update(_)) {
         policy::update::cleanup_stale();
         resets::run();
+        if matches!(mode, Mode::Gui) {
+            changelog::init();
+        }
         let reaped = engine::pidfile::reap();
         if reaped > 0 {
             let msg = format!("Stopped {reaped} recorder process(es) left running by the previous session.");

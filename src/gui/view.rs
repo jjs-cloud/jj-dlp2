@@ -11,7 +11,7 @@ use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use crate::policy::{layout, WarningChip, Warnings};
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    Column, Row, Space, Text, button, column, container, mouse_area, pick_list, row, scrollable, slider,
+    Column, Row, Space, Text, button, column, container, mouse_area, opaque, pick_list, row, scrollable, slider, stack,
     text_input, toggler, tooltip,
 };
 use iced::{Alignment, Color, Element, Length};
@@ -308,12 +308,61 @@ impl App {
         if let Some(banner) = self.update_banner(s) {
             page = page.push(banner);
         }
-        container(page.push(self.tabs(s)).push(body))
+        let base: Element<'_, Msg> = container(page.push(self.tabs(s)).push(body))
             .padding(18)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(skin::app_bg(s))
-            .into()
+            .into();
+        if self.changelog_open {
+            stack([base, self.changelog_window(s)]).into()
+        } else {
+            base
+        }
+    }
+
+    /// The "What's new" window: the full changelog over a dimmed page.
+    fn changelog_window(&self, s: Skin) -> Element<'_, Msg> {
+        let mut lines = Column::new().spacing(6);
+        for line in crate::changelog::text().lines() {
+            let line = line.trim_end();
+            if let Some(h) = line.strip_prefix("## ") {
+                lines = lines.push(Space::new().height(8));
+                lines = lines.push(iced::widget::text(format!("v{}", h.trim())).font(s.font).size(16).color(s.accent2));
+            } else if let Some(b) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+                lines = lines.push(t(&s, format!("•  {b}")).size(13));
+            } else if !line.trim().is_empty() {
+                lines = lines.push(t(&s, line.to_string()).size(13));
+            }
+        }
+        let card = container(
+            column![
+                iced::widget::text("What's new").font(s.font).size(18).color(s.accent2),
+                scrollable(container(lines).padding([0.0, 12.0])).height(Length::Fill),
+                button(t(&s, "Close").size(13))
+                    .on_press(Msg::CloseChangelog)
+                    .padding([6.0, 14.0])
+                    .style(skin::btn(s, BtnKind::Primary)),
+            ]
+            .spacing(12),
+        )
+        .padding(18)
+        .width(Length::Fill)
+        .max_width(680.0)
+        .height(Length::Fill)
+        .max_height(600.0)
+        .style(skin::card(s, None));
+        let dim = |_: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.6))),
+            ..Default::default()
+        };
+        opaque(
+            container(card)
+                .padding(40.0)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(dim),
+        )
     }
 
     fn header(&self, s: Skin) -> Element<'_, Msg> {
@@ -2161,11 +2210,16 @@ impl App {
             row![
                 self.section_title(s, "UPDATES"),
                 Space::new().width(Length::Fill),
+                button(t(&s, "What's new").size(12))
+                    .on_press(Msg::ShowChangelog)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
                 button(t(&s, "Check now").size(12))
                     .on_press(Msg::CheckUpdateNow)
                     .padding([5.0, 10.0])
                     .style(skin::btn(s, BtnKind::Ghost)),
             ]
+            .spacing(8)
             .align_y(Alignment::Center),
             toggler(self.update_cfg.enabled)
                 .label("Check for updates automatically")
