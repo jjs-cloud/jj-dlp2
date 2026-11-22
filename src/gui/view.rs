@@ -860,15 +860,24 @@ impl App {
             || (self.tab == Tab::Livestreams && self.settings.streamers.is_empty())
     }
 
-    /// True while a warning chip shows for a streamer whose site has Flash warnings on.
+    /// True while a warning chip shows for a streamer whose site has Flash on for that chip's kind.
     fn monitor_alert(&self) -> bool {
-        self.settings.streamers.iter().any(|st| self.flashes(st.id) && self.any_chip_shows(st))
+        self.settings.streamers.iter().any(|st| self.flash_chip_shows(st))
     }
 
-    /// True when the streamer's site has Flash warnings on; also true when the site is unknown.
-    fn flashes(&self, streamer_id: StreamerId) -> bool {
+    /// True when flash picked by `on` is set for the streamer's site; also true when the site is unknown.
+    fn flash_on(&self, streamer_id: StreamerId, on: impl Fn(&Site) -> bool) -> bool {
         let st = self.settings.streamers.iter().find(|st| st.id == streamer_id);
-        st.and_then(|st| self.settings.sites.iter().find(|x| x.id == st.site_id)).is_none_or(|x| x.flash_warnings)
+        st.and_then(|st| self.settings.sites.iter().find(|x| x.id == st.site_id)).is_none_or(on)
+    }
+
+    /// True when a warning chip of the streamer is showing and its kind has Flash on.
+    fn flash_chip_shows(&self, st: &Streamer) -> bool {
+        let w = self.warns(st.id);
+        (self.stall_count(st.id) > 0 && self.flash_on(st.id, |x| x.flash_stalled))
+            || (self.shown_restarts(st) > 0 && self.flash_on(st.id, |x| x.flash_restarts))
+            || (w.interrupts > 0 && self.flash_on(st.id, |x| x.flash_interrupts))
+            || (w.errors > 0 && self.flash_on(st.id, |x| x.flash_errors))
     }
 
     /// True when at least one STALLED, RESTARTED, INTERRUPT or ERROR chip is showing.
@@ -886,13 +895,11 @@ impl App {
         self.processes.values().any(|p| p.streamer_id == id && self.recording_stalled(p.id))
     }
 
-    /// Row tint: red while a recording is stalled, else yellow while any warning chip shows; none with Flash warnings off.
+    /// Row tint: red while a recording is stalled, else yellow while a warning chip shows; each needs its kind's Flash on.
     fn row_tint(&self, s: Skin, st: &Streamer) -> Option<Color> {
-        if !self.flashes(st.id) {
-            None
-        } else if self.streamer_stalled(st.id) {
+        if self.streamer_stalled(st.id) && self.flash_on(st.id, |x| x.flash_stalled) {
             Some(s.danger)
-        } else if self.any_chip_shows(st) {
+        } else if self.flash_chip_shows(st) {
             Some(s.warn)
         } else {
             None

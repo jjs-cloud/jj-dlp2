@@ -184,7 +184,10 @@ pub struct SiteDraft {
     pub notify_on_launch: bool,
     pub notify_live: bool,
     pub warnings_enabled: bool,
-    pub flash_warnings: bool,
+    pub flash_stalled: bool,
+    pub flash_restarts: bool,
+    pub flash_interrupts: bool,
+    pub flash_errors: bool,
     pub notify_interrupts: bool,
     pub notify_errors: bool,
     pub warn_stalled: bool,
@@ -238,7 +241,10 @@ impl SiteDraft {
             notify_on_launch: s.notify_on_launch,
             notify_live: s.notify_live,
             warnings_enabled: s.warnings_enabled,
-            flash_warnings: s.flash_warnings,
+            flash_stalled: s.flash_stalled,
+            flash_restarts: s.flash_restarts,
+            flash_interrupts: s.flash_interrupts,
+            flash_errors: s.flash_errors,
             notify_interrupts: s.notify_interrupts,
             notify_errors: s.notify_errors,
             warn_stalled: s.warn_stalled,
@@ -294,7 +300,10 @@ impl SiteDraft {
             notify_on_launch: n.notify_on_launch,
             notify_live: n.notify_live,
             warnings_enabled: n.warnings_enabled,
-            flash_warnings: n.flash_warnings,
+            flash_stalled: n.flash_stalled,
+            flash_restarts: n.flash_restarts,
+            flash_interrupts: n.flash_interrupts,
+            flash_errors: n.flash_errors,
             notify_interrupts: n.notify_interrupts,
             notify_errors: n.notify_errors,
             warn_stalled: n.warn_stalled,
@@ -405,7 +414,10 @@ impl SiteDraft {
     fn copy_notify_from(&mut self, d: &SiteDraft) {
         self.notify = d.notify;
         self.warnings_enabled = d.warnings_enabled;
-        self.flash_warnings = d.flash_warnings;
+        self.flash_stalled = d.flash_stalled;
+        self.flash_restarts = d.flash_restarts;
+        self.flash_interrupts = d.flash_interrupts;
+        self.flash_errors = d.flash_errors;
         self.notify_desktop = d.notify_desktop;
         self.notify_ntfy = d.notify_ntfy;
         self.ntfy_topic = d.ntfy_topic.clone();
@@ -490,7 +502,10 @@ impl SiteDraft {
             notify_on_launch: self.notify_on_launch,
             notify_live: self.notify_live,
             warnings_enabled: self.warnings_enabled,
-            flash_warnings: self.flash_warnings,
+            flash_stalled: self.flash_stalled,
+            flash_restarts: self.flash_restarts,
+            flash_interrupts: self.flash_interrupts,
+            flash_errors: self.flash_errors,
             notify_interrupts: self.notify_interrupts,
             notify_errors: self.notify_errors,
             warn_stalled: self.warn_stalled,
@@ -525,7 +540,10 @@ fn parse_opt<T: std::str::FromStr + PartialOrd>(text: &str, min: T) -> Option<Op
 pub enum DraftField {
     NotifyLive(bool),
     WarningsEnabled(bool),
-    FlashWarnings(bool),
+    FlashStalled(bool),
+    FlashRestarts(bool),
+    FlashInterrupts(bool),
+    FlashErrors(bool),
     Name(String),
     Exe(String),
     Interval(String),
@@ -1598,7 +1616,10 @@ impl App {
                         DraftField::NotifyOnLaunch(v) => d.notify_on_launch = v,
                         DraftField::NotifyLive(v) => d.notify_live = v,
                         DraftField::WarningsEnabled(v) => d.warnings_enabled = v,
-                        DraftField::FlashWarnings(v) => d.flash_warnings = v,
+                        DraftField::FlashStalled(v) => d.flash_stalled = v,
+                        DraftField::FlashRestarts(v) => d.flash_restarts = v,
+                        DraftField::FlashInterrupts(v) => d.flash_interrupts = v,
+                        DraftField::FlashErrors(v) => d.flash_errors = v,
                         DraftField::NotifyInterrupts(v) => d.notify_interrupts = v,
                         DraftField::NotifyErrors(v) => d.notify_errors = v,
                         DraftField::WarnStalled(v) => d.warn_stalled = v,

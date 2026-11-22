@@ -113,10 +113,13 @@ pub fn new_site(preset: Preset) -> NewSite {
         notify_on_launch: true,
         notify_live: true,
         warnings_enabled: true,
-        flash_warnings: true,
+        flash_stalled: true,
+        flash_restarts: true,
+        flash_interrupts: true,
+        flash_errors: true,
         notify_interrupts: false,
         notify_errors: false,
-        warn_stalled: false,
+        warn_stalled: true,
         warn_restarts: false,
         split_enabled: false,
         split_minutes: None,
@@ -190,10 +193,11 @@ mod tests {
     }
 
     #[test]
-    fn stalled_and_restart_warnings_default_off_and_kick_uses_cookies() {
+    fn stalled_warn_and_flash_default_on_for_every_preset_and_kick_uses_cookies() {
         for preset in [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube, Preset::Blank] {
             let site = new_site(preset);
-            assert!(!site.warn_stalled && !site.warn_restarts);
+            assert!(site.warn_stalled && site.flash_stalled);
+            assert!(!site.warn_restarts);
         }
         assert!(new_site(Preset::Kick).recorder_args.contains("--cookies-from-browser firefox"));
     }

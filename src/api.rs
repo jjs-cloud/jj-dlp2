@@ -163,9 +163,18 @@ pub struct Site {
     /// Master switch for showing this site's warning chips.
     #[serde(default = "default_true")]
     pub warnings_enabled: bool,
-    /// Tint the Livestreams tab and the streamer's row while a warning chip shows.
+    /// Tint the Livestreams tab and the streamer's row while the STALLED chip shows.
     #[serde(default = "default_true")]
-    pub flash_warnings: bool,
+    pub flash_stalled: bool,
+    /// Tint the Livestreams tab and the streamer's row while the RESTARTED chip shows.
+    #[serde(default = "default_true")]
+    pub flash_restarts: bool,
+    /// Tint the Livestreams tab and the streamer's row while the INTERRUPT chip shows.
+    #[serde(default = "default_true")]
+    pub flash_interrupts: bool,
+    /// Tint the Livestreams tab and the streamer's row while the ERROR chip shows.
+    #[serde(default = "default_true")]
+    pub flash_errors: bool,
     /// Notify when recorder output matches an interrupt pattern.
     #[serde(default)]
     pub notify_interrupts: bool,
@@ -628,7 +637,10 @@ mod tests {
             notify_on_launch: false,
             notify_live: true,
             warnings_enabled: true,
-            flash_warnings: true,
+            flash_stalled: true,
+            flash_restarts: true,
+            flash_interrupts: true,
+            flash_errors: true,
             notify_interrupts: false,
             notify_errors: false,
             warn_stalled: true,
@@ -716,11 +728,12 @@ mod tests {
     #[test]
     fn site_without_live_and_warning_switches_keeps_them_on() {
         let mut value = serde_json::to_value(site_with(false, None)).unwrap();
-        for key in ["notify_live", "warnings_enabled", "flash_warnings"] {
+        for key in ["notify_live", "warnings_enabled", "flash_stalled", "flash_restarts", "flash_interrupts", "flash_errors"] {
             value.as_object_mut().unwrap().remove(key);
         }
         let site: Site = serde_json::from_value(value).unwrap();
-        assert!(site.notify_live && site.warnings_enabled && site.flash_warnings);
+        assert!(site.notify_live && site.warnings_enabled);
+        assert!(site.flash_stalled && site.flash_restarts && site.flash_interrupts && site.flash_errors);
     }
 
     #[test]

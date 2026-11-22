@@ -145,7 +145,6 @@ impl App {
                 .label(format!("Enable Warnings for {} Livestreams", site.name))
                 .on_toggle_maybe((!no_warn).then(|| move |v: bool| Msg::Draft(id, DraftField::WarningsEnabled(v))))
                 .text_size(12),
-            toggle("Flash warnings", d.flash_warnings, !no_warn && d.warnings_enabled, DraftField::FlashWarnings),
             toggle("Desktop Notifications", d.notify_desktop, notify_on, DraftField::NotifyDesktop),
             toggle("Mobile Notifications (ntfy)", d.notify_ntfy, notify_on, DraftField::NotifyNtfy),
             Space::new().width(Length::Fill),
@@ -189,13 +188,21 @@ impl App {
                 .align_x(Horizontal::Center)
                 .into()
         };
-        let matrix_line = |label: &'static str, notify_cell: Element<'a, Msg>, warn_cell: Element<'a, Msg>| -> Element<'a, Msg> {
-            row![container(t(&s, label).size(12)).width(NAME_W), notify_cell, warn_cell].spacing(GAP).align_y(Alignment::Center).into()
+        let matrix_line = |label: &'static str,
+                           notify_cell: Element<'a, Msg>,
+                           warn_cell: Element<'a, Msg>,
+                           flash_cell: Element<'a, Msg>|
+         -> Element<'a, Msg> {
+            row![container(t(&s, label).size(12)).width(NAME_W), notify_cell, warn_cell, flash_cell]
+                .spacing(GAP)
+                .align_y(Alignment::Center)
+                .into()
         };
         let heads = row![
             Space::new().width(NAME_W),
             container(muted(&s, "Notify")).width(COL_W).align_x(Horizontal::Center),
             container(muted(&s, "Warn")).width(COL_W).align_x(Horizontal::Center),
+            container(muted(&s, "Flash")).width(COL_W).align_x(Horizontal::Center),
         ]
         .spacing(GAP);
         let notify_cells = notify_on && channels_on;
@@ -207,26 +214,31 @@ impl App {
                 "Live",
                 matrix_cell(d.notify_live, notify_cells, DraftField::NotifyLive),
                 Space::new().width(COL_W).into(),
+                Space::new().width(COL_W).into(),
             ),
             matrix_line(
                 "Stalled",
                 matrix_cell(d.notify_stalled, notify_cells, DraftField::NotifyStalled),
                 matrix_cell(d.warn_stalled, warn_cells, DraftField::WarnStalled),
+                matrix_cell(d.flash_stalled, warn_cells && d.warn_stalled, DraftField::FlashStalled),
             ),
             matrix_line(
                 "Restarts",
                 matrix_cell(d.notify_restarted, notify_cells, DraftField::NotifyRestarted),
                 matrix_cell(d.warn_restarts, warn_cells, DraftField::WarnRestarts),
+                matrix_cell(d.flash_restarts, warn_cells && d.warn_restarts, DraftField::FlashRestarts),
             ),
             matrix_line(
                 "Interrupts",
                 matrix_cell(d.notify_interrupts, notify_cells && output_on, DraftField::NotifyInterrupts),
                 matrix_cell(d.warn_interrupts, warn_cells && output_on, DraftField::WarnInterrupts),
+                matrix_cell(d.flash_interrupts, warn_cells && output_on && d.warn_interrupts, DraftField::FlashInterrupts),
             ),
             matrix_line(
                 "Errors",
                 matrix_cell(d.notify_errors, notify_cells && output_on, DraftField::NotifyErrors),
                 matrix_cell(d.warn_errors, warn_cells && output_on, DraftField::WarnErrors),
+                matrix_cell(d.flash_errors, warn_cells && output_on && d.warn_errors, DraftField::FlashErrors),
             ),
         ]
         .spacing(6);
