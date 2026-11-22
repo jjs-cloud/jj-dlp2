@@ -1041,7 +1041,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
             - When a site's list of posts does not include the time a post was made or the length of its video, the time the post was found is used and no length is shown, until the post has been downloaded. Then the real time and length are shown
         - Viewed posts are shown dimmed
         - `Queued`, `Downloading…`, `Failed` and `Not saved` - The state of a post that has not been downloaded. The reason is shown under a `Failed` post
-        - X button - Shown in the top right corner of the thumbnail of a post that is `Not saved`. Removes the post from the library, and it is not found again by later checks. Downloaded and failed posts do not have it
+        - X button - Shown in the top right corner of the thumbnail of a post that is `Not saved` or `Failed`. Turns red when the mouse is over it. Removes the post from the library, and it is not found again by later checks. Downloaded posts do not have it
         - **Save** - Downloads a post that is `Not saved`. The limits for auto-downloads do not apply to it (see [Auto-download limits](#auto-download-limits))
         - **Retry** - Downloads a `Failed` post again, also without the limits for auto-downloads
         - **Cancel** - Shown in place of **Save** and **Retry** while a post is `Queued` or `Downloading…`. Stops the download, deletes the unfinished files of the post and puts the post back to `Not saved`, without an error
@@ -1099,6 +1099,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - A template for a site's recorded streams (VODs) is offered with the others. It fills in a profile URL template that points to the account's recorded streams, and uses their stream link instead of the post's page (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
 																																											  
         - A template for a site that needs your login adds `--cookies-from-browser firefox` to its **Checker arguments** and **Downloader arguments**, so Firefox must have a profile (see [Requirements](#requirements))
+        - The **Youtube Videos** template, shown below **Youtube Shorts**, uses the profile URL template `https://www.youtube.com/@{username}`, checks only the newest post (`--playlist-end 1`), and starts with a size limit of 1000 MB and a time limit of 120 seconds for auto-downloads
         - A template does not need to be chosen before accounts can be added. Its site is created when the first account is added to it from the Posts tab, in the same way as on the **Livestreams** page (see [Posts](#posts))
         - Posts settings are no longer shown in a General section. Every one of them is set per site
     - Site card

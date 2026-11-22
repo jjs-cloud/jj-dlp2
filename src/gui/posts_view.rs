@@ -263,14 +263,18 @@ impl App {
             PostState::Ready | PostState::Removed => None,
         };
         let top_left: Element<'a, Msg> = state_badge.map_or_else(|| Space::new().into(), |(l, c)| badge(l.to_string(), c));
-        let dismiss: Element<'a, Msg> = if post.state == PostState::Remote {
+        let dismiss: Element<'a, Msg> = if matches!(post.state, PostState::Remote | PostState::Failed) {
             button(iced::widget::text("✕").size(11).color(Color::WHITE))
                 .on_press(send(PostsMsg::Dismiss(post.id.clone())))
                 .padding([2.0, 7.0])
-                .style(|_, _| button::Style {
-                    background: Some(Background::Color(Color { a: 0.72, ..Color::BLACK })),
-                    border: Border { radius: 6.0.into(), ..Default::default() },
-                    ..Default::default()
+                .style(|_, status| {
+                    let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                    let bg = if hot { Color { r: 0.85, g: 0.2, b: 0.2, a: 0.95 } } else { Color { a: 0.72, ..Color::BLACK } };
+                    button::Style {
+                        background: Some(Background::Color(bg)),
+                        border: Border { radius: 6.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }
                 })
                 .into()
         } else {

@@ -486,8 +486,10 @@ impl PostsMonitor {
                 Err(e) => self.notice(format!("Could not delete: {e}")),
             },
             PostsCommand::Dismiss(id) => {
-                if let Some(p) = self.post_mut(&id).filter(|p| p.state == PostState::Remote) {
+                if let Some(p) = self.post_mut(&id).filter(|p| matches!(p.state, PostState::Remote | PostState::Failed)) {
                     p.state = PostState::Removed;
+                    p.error.clear();
+                    p.error_at = None;
                 }
                 self.save_lib();
                 self.emit_changed(&[id]);
