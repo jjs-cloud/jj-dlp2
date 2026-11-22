@@ -16,8 +16,8 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(300);
 pub struct SiteSnapshot {
     pub site: Site,
     pub urls: Vec<String>,
-    /// Set when the worker checks one streamer on its own interval instead of the site's batch.
-    pub streamer: Option<StreamerId>,
+    /// Set when the worker checks a group of streamers that share this own interval instead of the site's batch.
+    pub group: Option<u64>,
 }
 
 /// A live stream reported by the checker.
@@ -60,7 +60,7 @@ pub fn spawn_quick_check(snap: SiteSnapshot, streamer_id: StreamerId, internal: 
     tokio::spawn(async move {
         let started = now_secs();
         let result = run_check(&snap, &internal).await;
-        let msg = Internal::StreamerCheckResult { site_id: snap.site.id, streamer_id, started, at: now_secs(), result, quick: true };
+        let msg = Internal::StreamerCheckResult { site_id: snap.site.id, streamer_id, started, at: now_secs(), result };
         let _ = internal.send(msg);
     });
 }
@@ -72,10 +72,7 @@ async fn worker_loop(mut rx: watch::Receiver<SiteSnapshot>, internal: UnboundedS
             let started = now_secs();
             let result = run_check(&snap, &internal).await;
             let (site_id, at) = (snap.site.id, now_secs());
-            let msg = match snap.streamer {
-                Some(streamer_id) => Internal::StreamerCheckResult { site_id, streamer_id, started, at, result, quick: false },
-                None => Internal::CheckResult { site_id, started, at, result },
-            };
+            let msg = Internal::CheckResult { site_id, group: snap.group, started, at, result };
             if internal.send(msg).is_err() {
                 return;
             }

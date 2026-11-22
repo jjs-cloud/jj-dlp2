@@ -7,7 +7,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 ### Monitoring
 
 - One checker per site
-    - All of a site's streamers are checked in a single yt-dlp call, except streamers that set their own check interval, which are checked on their own (see [Streamer settings](#streamer-settings))
+    - All of a site's streamers are checked in a single yt-dlp call, except streamers that set their own check interval, which are checked separately from the batch (see [Streamer settings](#streamer-settings))
 - Check interval - How often to run the yt-dlp checker command for that site, counted from when the previous check has finished. A streamer can set its own interval
 - Checker command - The yt-dlp arguments or options to pass when checking for livestreams. Whether it uses `--dump-json` or `--simulate` is detected from the arguments (see [Settings tab](#settings-tab))
 - Live time - Shows how long each live streamer has been live (see [Live time](#live-time))
@@ -987,10 +987,10 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - **On** and **Off** - Apply to this streamer only. The delay always comes from the site
     - Check every (seconds) - How often this streamer is checked, in seconds, from 5 up. The time is counted from when its previous check has finished
         - A blank box (the default) uses the site's **Check every (seconds)**, and the hint in the box shows the site's current value. Only digits can be typed, up to 6
-        - A streamer with its own value is left out of the site's single yt-dlp call, and is checked on its own, with one yt-dlp command for it, at that interval. It keeps being checked while it is recording
+        - A streamer with its own value is left out of the site's single yt-dlp call and is checked at that interval instead. Streamers on the same site with the same value are checked together in one yt-dlp call, and a streamer with a unique value gets a call of its own. It keeps being checked while it is recording
         - The box has a red border while it holds a value below 5. **Save changes** is unavailable until the box is blank or holds a number of at least 5
     - Pause checking - Stops this streamer from being checked. Off by default, and shown below **Check every (seconds)**
-        - A paused streamer is left out of the site's single yt-dlp call and is not checked on its own interval. No quick check is made for it either
+        - A paused streamer is left out of the site's single yt-dlp call and of any same-interval call. No quick check is made for it either
         - A recording that is already running carries on. A streamer that is not recording and was shown live is shown offline
         - It is separate from **Record**, which stops recording but keeps checking, and from the site's **Pause checking**, which stops the checks of every streamer on the site (see [Settings tab](#settings-tab))
     - Save changes button - Saves your edits. Unavailable while there are no edits, or while the intro delay, split length, check interval or schedule is invalid
