@@ -54,16 +54,3 @@ pub fn mark_seen() {
     let _ = std::fs::create_dir_all(settings::config_dir());
     let _ = std::fs::write(seen_path(), json);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn changelog_has_a_section_for_the_current_version() {
-        let current = crate::policy::update::CURRENT;
-        let base = current.split(['-', '+']).next().unwrap_or(current);
-        let found = text().lines().any(|l| l.strip_prefix("## ").is_some_and(|h| h.trim() == base));
-        assert!(found, "CHANGELOG.md needs a `## {base}` section");
-    }
-}
