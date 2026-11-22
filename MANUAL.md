@@ -1530,6 +1530,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Scale - Shown while **Automatic UI scale** is off. Sets the scale by hand, from 70% to 200% in steps of 5% (default 100%). It is applied when you release the slider
         - The scale applies to the text, rows, buttons and the window size together, and the sizes in the **Compact view** card and the Window card are measured at the scale
         - Reset button - Shown in the card header. Turns **Automatic UI scale** on and sets the manual scale to 100%
+        - On Wayland the desktop places the window, so it is not moved back to the center when the scale changes
         - The settings are saved right away
     - Updates card - Sets how jj-dlp checks for new releases (see [Updates](#updates)). Changes apply immediately
         - Check for updates automatically - Turn off to stop jj-dlp from contacting GitHub on its own (default on)

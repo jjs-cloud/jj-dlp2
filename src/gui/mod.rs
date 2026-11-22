@@ -43,6 +43,8 @@ pub const SITE_SWATCHES: [&str; 10] = [
 pub const NEW_SITE_ID: SiteId = 0;
 
 static EVENTS: Mutex<Option<UnboundedReceiver<PolicyEvent>>> = Mutex::new(None);
+/// How many times the monitor size is read again at startup while it is not known yet.
+const FIT_MAX_TRIES: u8 = 20;
 /// Latest window size, read when the app exits.
 static LAST_SIZE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 
@@ -834,10 +836,12 @@ pub enum Msg {
     ResetWindowSize,
     ResetRowRange,
     Resized(Size),
-    /// The monitor size and window position read at startup.
-    FitWindow(window::Id, Size, Point),
+    /// The monitor size and window position read at startup, with the number of retries so far.
+    FitWindow(window::Id, Option<Size>, Option<Point>, u8),
+    /// Reads the monitor size and window position again.
+    FitRetry(window::Id, u8),
     /// Fits the window to the monitor (size, window centre) once a new UI scale is in effect.
-    ApplyFit(window::Id, Size, Point),
+    ApplyFit(window::Id, Size, Option<Point>),
     UpdateClicked,
     UpdateCancel,
     UpdateConfirm,
@@ -1127,9 +1131,7 @@ impl App {
         if let Some(e) = crate::policy::update::take_last_error() {
             app.note(e);
         }
-        let fit = window::latest().and_then(|id| {
-            window::monitor_size(id).and_then(move |monitor| window::position(id).and_then(move |pos| Task::done(Msg::FitWindow(id, monitor, pos))))
-        });
+        let fit = window::latest().and_then(|id| App::fit_query(id, 0));
         (app, fit)
     }
 
@@ -1139,6 +1141,11 @@ impl App {
 
     fn theme(&self) -> Theme {
         self.skin().theme()
+    }
+
+    /// Reads the monitor size and window position, then sends `Msg::FitWindow`.
+    fn fit_query(id: window::Id, tries: u8) -> Task<Msg> {
+        window::monitor_size(id).then(move |monitor| window::position(id).map(move |pos| Msg::FitWindow(id, monitor, pos, tries)))
     }
 
     /// The UI scale applied to the whole window.
@@ -1157,7 +1164,7 @@ impl App {
     }
 
     /// Shrinks the window to fit a monitor of `mon` logical pixels, keeping its centre at `center`.
-    fn fit_window(&mut self, id: window::Id, mon: Size, center: Point, force: bool) -> Task<Msg> {
+    fn fit_window(&mut self, id: window::Id, mon: Size, center: Option<Point>, force: bool) -> Task<Msg> {
         let scale = self.scale_factor();
         let (w_px, h_px) = prefs::fit_to_monitor(self.win_w * scale, self.win_h * scale, mon.width, mon.height);
         if !force && (w_px, h_px) == (self.win_w * scale, self.win_h * scale) {
@@ -1167,8 +1174,11 @@ impl App {
         self.win_w = w;
         self.win_h = h;
         *LAST_SIZE.lock().unwrap() = Some((w, h));
-        let top_left = Point::new(center.x - w_px / 2.0, center.y - h_px / 2.0);
-        Task::batch([window::resize(id, Size::new(w, h)), window::move_to(id, top_left)])
+        let resize = window::resize(id, Size::new(w, h));
+        match center {
+            Some(c) => Task::batch([resize, window::move_to(id, Point::new(c.x - w_px / 2.0, c.y - h_px / 2.0))]),
+            None => resize,
+        }
     }
 
     fn subscription(&self) -> Subscription<Msg> {
@@ -1779,10 +1789,17 @@ impl App {
                 prefs::save_compact_col_width(self.compact_col_w);
                 prefs::save_name_clip(self.name_clip);
             }
-            Msg::FitWindow(id, monitor, pos) => {
+            Msg::FitWindow(id, monitor, pos, tries) => {
+                let Some(monitor) = monitor else {
+                    if tries >= FIT_MAX_TRIES {
+                        return Task::none();
+                    }
+                    let wait = tokio::time::sleep(Duration::from_millis(250));
+                    return Task::perform(wait, move |_| Msg::FitRetry(id, tries + 1));
+                };
                 let scale = self.scale_factor();
                 let mon = Size::new(monitor.width * scale, monitor.height * scale);
-                let center = Point::new(pos.x + self.win_w * scale / 2.0, pos.y + self.win_h * scale / 2.0);
+                let center = pos.map(|p| Point::new(p.x + self.win_w * scale / 2.0, p.y + self.win_h * scale / 2.0));
                 let target = prefs::auto_scale(mon.width, mon.height);
                 if target != self.auto_scale {
                     self.auto_scale = target;
@@ -1794,6 +1811,7 @@ impl App {
                 }
                 return self.fit_window(id, mon, center, false);
             }
+            Msg::FitRetry(id, tries) => return App::fit_query(id, tries),
             Msg::ApplyFit(id, mon, center) => return self.fit_window(id, mon, center, true),
             Msg::Resized(size) => {
                 self.minimized = size.width < 1.0 || size.height < 1.0;
