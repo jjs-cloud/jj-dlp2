@@ -27,8 +27,8 @@ const YOUTUBE_SHORTS_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --n
 const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
 const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
-const TIKTOK_CHECKER_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
-const TIKTOK_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
+const TIKTOK_CHECKER_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
+const TIKTOK_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s_%(resolution)s.%(ext)s" {url}"#;
 /// Failed downloads are retried until they have failed this many times.
 pub const MAX_ATTEMPTS: u8 = 3;
 

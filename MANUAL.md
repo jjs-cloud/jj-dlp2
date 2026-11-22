@@ -1096,7 +1096,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																																												  
         - A template for a site's recorded streams (VODs) is offered with the others. It fills in a profile URL template that points to the account's recorded streams, and uses their stream link instead of the post's page (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
 																																											  
-        - A template for a site that needs your login adds `--cookies-from-browser firefox` to its **Downloader arguments**, so Firefox must have a profile (see [Requirements](#requirements))
+        - A template for a site that needs your login adds `--cookies-from-browser firefox` to its **Checker arguments** and **Downloader arguments**, so Firefox must have a profile (see [Requirements](#requirements))
         - A template does not need to be chosen before accounts can be added. Its site is created when the first account is added to it from the Posts tab, in the same way as on the **Livestreams** page (see [Posts](#posts))
         - Posts settings are no longer shown in a General section. Every one of them is set per site
     - Site card
