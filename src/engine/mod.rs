@@ -286,6 +286,7 @@ impl Engine {
         self.recorder_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
         self.site_problems.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
         self.sync_workers();
+        self.clear_paused_states();
         self.start_preflight(false);
         let streamers = self.settings.streamers.clone();
         for s in streamers.iter().filter(|s| kept.contains(&s.id)) {
@@ -341,6 +342,18 @@ impl Engine {
                     self.emit_status(sid);
                 }
             }
+        }
+    }
+
+    /// Marks streamers with paused checking that are not recording as offline, so a stale live state cannot start a recording.
+    fn clear_paused_states(&mut self) {
+        let paused: Vec<StreamerId> = self.settings.streamers.iter().filter(|s| s.options.pause_checking).map(|s| s.id).collect();
+        for id in paused {
+            let recording = self.recording(id);
+            let Some(st) = self.states.get_mut(&id).filter(|st| st.live && !recording) else { continue };
+            st.live = false;
+            st.entry = None;
+            self.emit_status(id);
         }
     }
 
@@ -413,7 +426,7 @@ impl Engine {
             .settings
             .streamers
             .iter()
-            .filter(|s| s.site_id == site.id && s.options.interval_secs.is_none())
+            .filter(|s| s.site_id == site.id && s.options.interval_secs.is_none() && !s.options.pause_checking)
             .map(|s| s.url.clone())
             .collect();
         let mut site = site.clone();
@@ -428,7 +441,7 @@ impl Engine {
         let secs = streamer.options.interval_secs?;
         let mut snap = self.snapshot_for(site);
         snap.site.interval_secs = Some(secs);
-        snap.urls = vec![streamer.url.clone()];
+        snap.urls = if streamer.options.pause_checking { Vec::new() } else { vec![streamer.url.clone()] };
         snap.streamer = Some(streamer.id);
         Some(snap)
     }
@@ -444,7 +457,7 @@ impl Engine {
         let problem = report.problem.as_ref().map(|p| (p.log_text(), p.summary()));
         self.report_check(site_id, at, problem);
         let streamers: Vec<Streamer> =
-            self.settings.streamers.iter().filter(|s| s.site_id == site_id && s.options.interval_secs.is_none()).cloned().collect();
+            self.settings.streamers.iter().filter(|s| s.site_id == site_id && s.options.interval_secs.is_none() && !s.options.pause_checking).cloned().collect();
         let failed = failed_checks(&report, &streamers);
         let single = streamers.len() == 1;
         let stale: HashSet<StreamerId> = streamers
@@ -513,7 +526,7 @@ impl Engine {
         while let Some(id) = self.quick_queue.get_mut(&site_id).and_then(VecDeque::pop_front) {
             let Some(streamer) = self.settings.streamers.iter().find(|s| s.id == id).cloned() else { continue };
             let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else { continue };
-            if site.paused || self.recording(id) {
+            if site.paused || streamer.options.pause_checking || self.recording(id) {
                 continue;
             }
             let mut snap = self.snapshot_for(site);

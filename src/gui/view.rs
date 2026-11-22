@@ -1747,6 +1747,8 @@ impl App {
         ]
         .spacing(8);
 
+        let pause_row = toggle("Pause checking", d.pause_checking, StreamerField::PauseChecking);
+
         let intro_delay = column![
             row![
                 toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
@@ -1818,6 +1820,7 @@ impl App {
             upgrade_row,
             quick_row,
             interval_row,
+            pause_row,
             actions,
         ]
         .spacing(6)

@@ -666,6 +666,7 @@ impl Policy {
             let status = self.statuses.get(&id);
             let skip = !streamer.enabled
                 || site.paused
+                || streamer.options.pause_checking
                 || !streamer.options.effective_quick_check(site)
                 || status.is_some_and(|s| s.recording || s.live);
             if skip {

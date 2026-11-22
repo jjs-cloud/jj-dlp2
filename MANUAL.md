@@ -13,7 +13,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Live time - Shows how long each live streamer has been live (see [Live time](#live-time))
 - Last live - Shows how long ago each offline streamer was last live, and looks up the time for Twitch streamers at launch (see [Last live](#last-live))
 - Consider a stream ended after (minutes) - How long a streamer must go unseen live before the live time resets, per site
-- Pause checking - Stops a site's streamers from being checked, per site, while recordings that are already running carry on (see [Settings tab](#settings-tab))
+- Pause checking - Stops a site's streamers from being checked, per site or per streamer, while recordings that are already running carry on (see [Settings tab](#settings-tab) and [Streamer settings](#streamer-settings))
 - Quick check - Checks a streamer again on its own shortly after its recording ends, so a stream that starts again is picked up without waiting for the site's next check, per site and per streamer (see [Quick check](#quick-check))
 
 ### Recording
@@ -801,7 +801,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - The delay is counted from when the recorder exits
     - Once - One quick check is made for each recording that ends. A new recording has to be confirmed before it can arm another one, so quick checks never repeat on their own
     - A new recording that starts before the check is due, from the site's regular check or by turning **Record** on, cancels it
-    - Skipped when it is due - The check is not made when the streamer is paused or removed, the site's checking is paused, quick check has been turned off for the streamer, or the streamer is already shown as live or recording
+    - Skipped when it is due - The check is not made when the streamer is paused or removed, the site's checking or the streamer's checking is paused, quick check has been turned off for the streamer, or the streamer is already shown as live or recording
 - The check - Runs the site's checker command with only that streamer's URL (see [Settings tab](#settings-tab))
     - Runs alongside the site's regular check and does not wait for it
     - A site runs one quick check at a time. When several streamers are due together, they wait in turn, and a streamer waits in the queue only once
@@ -987,6 +987,10 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - A blank box (the default) uses the site's **Check every (seconds)**, and the hint in the box shows the site's current value. Only digits can be typed, up to 6
         - A streamer with its own value is left out of the site's single yt-dlp call, and is checked on its own, with one yt-dlp command for it, at that interval. It keeps being checked while it is recording
         - The box has a red border while it holds a value below 5. **Save changes** is unavailable until the box is blank or holds a number of at least 5
+    - Pause checking - Stops this streamer from being checked. Off by default, and shown below **Check every (seconds)**
+        - A paused streamer is left out of the site's single yt-dlp call and is not checked on its own interval. No quick check is made for it either
+        - A recording that is already running carries on. A streamer that is not recording and was shown live is shown offline
+        - It is separate from **Record**, which stops recording but keeps checking, and from the site's **Pause checking**, which stops the checks of every streamer on the site (see [Settings tab](#settings-tab))
     - Save changes button - Saves your edits. Unavailable while there are no edits, or while the intro delay, split length, check interval or schedule is invalid
     - Revert button - Discards your edits. Unavailable while there are no edits
     - Defaults button - Fills the panel with the settings a streamer starts with, and does not change the display name. Nothing is saved until you press **Save changes**, and **Revert** brings back the saved values
@@ -995,7 +999,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - A subfolder change applies to the next recording. A recording that is already running keeps its folder
 - An intro delay change never stops a recording that is already running (see [Intro delay](#intro-delay))
 - A schedule change applies as soon as the streamer's settings are saved (see [Schedule](#schedule))
-- A split change applies to a recording that is already running (see [Split recordings](#split-recordings)). An auto-suffix change applies the next time a recorder starts. An upgrade quality change applies from the next check (see [Upgrade quality](#upgrade-quality)). A quick check change applies from the next recording that ends, and turning it off cancels a quick check that is waiting (see [Quick check](#quick-check)). A check interval change applies as soon as it is saved, and the streamer is checked again right away
+- A split change applies to a recording that is already running (see [Split recordings](#split-recordings)). An auto-suffix change applies the next time a recorder starts. An upgrade quality change applies from the next check (see [Upgrade quality](#upgrade-quality)). A quick check change applies from the next recording that ends, and turning it off cancels a quick check that is waiting (see [Quick check](#quick-check)). A check interval change applies as soon as it is saved, and the streamer is checked again right away. A **Pause checking** change applies as soon as it is saved, and turning it off checks the streamer again right away
 																																										   
 
 ## Posts
@@ -1250,7 +1254,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - **Name** puts numbers in order by value, and ignores upper and lower case, so `part2` comes before `part10`
         - **Status** puts `IDLE` files first when ascending
         - **Modified** compares the time to the minute, and files in the same minute are put in name order
-        - **Rate** puts the fastest growing files last when ascending
+        - **Rate** sorts by the rate that is shown, so files that show `—` count as zero and are put together, in name order, ahead of the files that are writing when ascending. The fastest growing files come last when ascending
         - The column and the direction are saved
     - Group by - Chooses how the rows are grouped
         - **None** - One list, with the subfolder path shown in front of the file name

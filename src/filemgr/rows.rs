@@ -140,6 +140,11 @@ struct Cx<'a> {
     now: Instant,
 }
 
+/// The rate the Rate column shows: the write rate while the file is being written, else zero.
+fn shown_rate(r: &FileRec, now: Instant) -> f64 {
+    if r.writing(now) { r.rate } else { 0.0 }
+}
+
 /// Ascending order of two files for `key`; ties fall back to the natural name order.
 fn base_cmp(key: SortKey, now: Instant, ap: &Path, a: &FileRec, bp: &Path, b: &FileRec) -> Ordering {
     let primary = match key {
@@ -147,7 +152,7 @@ fn base_cmp(key: SortKey, now: Instant, ap: &Path, a: &FileRec, bp: &Path, b: &F
         SortKey::Status => a.writing(now).cmp(&b.writing(now)),
         SortKey::Modified => (a.mtime / 60).cmp(&(b.mtime / 60)),
         SortKey::Size => a.size.cmp(&b.size),
-        SortKey::Rate => a.rate.partial_cmp(&b.rate).unwrap_or(Ordering::Equal),
+        SortKey::Rate => shown_rate(a, now).total_cmp(&shown_rate(b, now)),
     };
     primary.then_with(|| natural_cmp(&file_name(ap), &file_name(bp)))
 }
@@ -605,6 +610,30 @@ mod tests {
         assert_eq!(names(&asc), ["a.ts", "b.ts"].map(String::from));
         let desc = build_rows(&rs, &m, Sort { key: SortKey::Status, asc: false }, GroupBy::None, &HashMap::new(), &HashSet::new(), now);
         assert_eq!(names(&desc), ["b.ts", "a.ts"].map(String::from));
+    }
+
+    #[test]
+    fn rate_sort_treats_idle_files_as_zero() {
+        let now = Instant::now();
+        let long_ago = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
+        let mut m = HashMap::new();
+        let mut stale = rec("/r", 1, 0);
+        stale.rate = 5000.0;
+        stale.last_change = long_ago;
+        let mut idle = rec("/r", 1, 0);
+        idle.last_change = long_ago;
+        let mut fast = rec("/r", 1, 0);
+        fast.rate = 9000.0;
+        let mut slow = rec("/r", 1, 0);
+        slow.rate = 100.0;
+        for (n, r) in [("a.ts", stale), ("b.ts", fast), ("c.ts", idle), ("d.ts", slow)] {
+            m.insert(PathBuf::from(format!("/r/{n}")), r);
+        }
+        let rs = roots(&["/r"]);
+        let asc = build_rows(&rs, &m, Sort { key: SortKey::Rate, asc: true }, GroupBy::None, &HashMap::new(), &HashSet::new(), now);
+        assert_eq!(names(&asc), ["a.ts", "c.ts", "d.ts", "b.ts"].map(String::from));
+        let desc = build_rows(&rs, &m, Sort { key: SortKey::Rate, asc: false }, GroupBy::None, &HashMap::new(), &HashSet::new(), now);
+        assert_eq!(names(&desc), ["b.ts", "d.ts", "c.ts", "a.ts"].map(String::from));
     }
 
     #[test]

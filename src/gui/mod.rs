@@ -601,6 +601,7 @@ pub enum StreamerField {
     UpgradeQuality(Option<bool>),
     QuickCheck(Option<bool>),
     Interval(String),
+    PauseChecking(bool),
     Split(Option<bool>),
     SplitMinutes(String),
     IntroEnabled(bool),
@@ -660,6 +661,7 @@ pub struct StreamerDraft {
     pub upgrade_quality: Option<bool>,
     pub quick_check: Option<bool>,
     pub interval: String,
+    pub pause_checking: bool,
     pub split: Option<bool>,
     pub split_minutes: String,
     pub intro_enabled: bool,
@@ -695,6 +697,7 @@ impl StreamerDraft {
             upgrade_quality: o.upgrade_quality,
             quick_check: o.quick_check,
             interval: opt_text(o.interval_secs),
+            pause_checking: o.pause_checking,
             split: o.split,
             split_minutes: opt_text(o.split_minutes),
             intro_enabled: o.intro_delay_enabled,
@@ -714,6 +717,7 @@ impl StreamerDraft {
             upgrade_quality: self.upgrade_quality,
             quick_check: self.quick_check,
             interval_secs: self.interval_secs().flatten(),
+            pause_checking: self.pause_checking,
             split: self.split,
             split_minutes: self.split_minutes.trim().parse().ok().filter(|m| *m > 0),
             intro_delay_enabled: self.intro_enabled,
@@ -1274,6 +1278,7 @@ impl App {
                 d.intro_minutes = v;
             }
             StreamerField::Interval(v) if digits(&v) => d.interval = v,
+            StreamerField::PauseChecking(v) => d.pause_checking = v,
             StreamerField::SplitMinutes(_) | StreamerField::IntroMinutes(_) | StreamerField::Interval(_) => {}
             StreamerField::ScheduleEnabled(v) => d.schedule.enabled = v,
             StreamerField::ScheduleMode(v) => d.schedule.mode = v,
@@ -2101,5 +2106,15 @@ mod tests {
         d.interval = "30".into();
         assert_eq!(d.to_options().interval_secs, Some(30));
         assert!(!d.invalid());
+    }
+
+    #[test]
+    fn streamer_pause_checking_round_trips_and_defaults_off() {
+        let mut d = StreamerDraft::from_options(&StreamerOptions::default());
+        assert!(!d.pause_checking && !d.to_options().pause_checking);
+        d.pause_checking = true;
+        let saved = StreamerOptions { pause_checking: true, ..Default::default() };
+        assert_eq!(d.to_options(), saved);
+        assert!(StreamerDraft::from_options(&saved).pause_checking);
     }
 }

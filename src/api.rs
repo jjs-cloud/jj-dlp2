@@ -332,6 +332,9 @@ pub struct StreamerOptions {
     /// Seconds between this streamer's own checks; `None` inherits the site's interval.
     #[serde(default)]
     pub interval_secs: Option<u64>,
+    /// Stops this streamer from being checked; a recording already running carries on.
+    #[serde(default)]
+    pub pause_checking: bool,
 }
 
 /// Whether a schedule runs once or repeats weekly.
@@ -751,6 +754,14 @@ mod tests {
     fn global_notify_fills_missing_fields_with_defaults() {
         let g: GlobalNotify = serde_json::from_str("{}").unwrap();
         assert_eq!(g, GlobalNotify::default());
+    }
+
+    #[test]
+    fn streamer_options_without_pause_checking_load_as_off() {
+        let mut value = serde_json::to_value(StreamerOptions::default()).unwrap();
+        value.as_object_mut().unwrap().remove("pause_checking");
+        let o: StreamerOptions = serde_json::from_value(value).unwrap();
+        assert!(!o.pause_checking);
     }
 
     #[test]
