@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_INTERVAL_SECS: u64 = 300;
 /// Days before unstarred posts are deleted, in every template but Twitch Vods.
 pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 30;
-/// Megabytes above which automatic downloads are skipped, in every template.
+/// Megabytes above which automatic downloads are skipped.
 pub const DEFAULT_AUTO_DOWNLOAD_LIMIT_MB: u64 = 15;
-/// Seconds after which automatic downloads are cancelled, in every template.
+/// Seconds after which automatic downloads are cancelled.
 pub const DEFAULT_AUTO_DOWNLOAD_SECS: u64 = 30;
 pub const MIN_INTERVAL_SECS: u64 = 15;
 /// Checker arguments used when a site's own are blank; `{url}` is the profile (or post) URL.
@@ -23,6 +23,10 @@ pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-pl
 pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
 const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
 const YOUTUBE_SHORTS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}/shorts";
+const YOUTUBE_VIDEOS_URL_TEMPLATE: &str = "https://www.youtube.com/@{username}";
+const YOUTUBE_VIDEOS_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 1 {url}";
+const YOUTUBE_VIDEOS_AUTO_DOWNLOAD_LIMIT_MB: u64 = 1000;
+const YOUTUBE_VIDEOS_AUTO_DOWNLOAD_SECS: u64 = 120;
 const YOUTUBE_SHORTS_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
 const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
 const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
@@ -39,6 +43,7 @@ pub type SiteId = u64;
 pub enum Preset {
     Tiktok,
     YoutubeShorts,
+    YoutubeVideos,
     TwitchVods,
     TwitterX,
     Blank,
@@ -46,13 +51,14 @@ pub enum Preset {
 
 impl Preset {
     /// Every named preset, in dropdown order.
-    pub const NAMED: [Preset; 4] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::TwitchVods, Preset::TwitterX];
+    pub const NAMED: [Preset; 5] = [Preset::Tiktok, Preset::YoutubeShorts, Preset::YoutubeVideos, Preset::TwitchVods, Preset::TwitterX];
 
     /// The button label, which is also the site name.
     pub fn label(self) -> &'static str {
         match self {
             Preset::Tiktok => "TikTok",
             Preset::YoutubeShorts => "Youtube Shorts",
+            Preset::YoutubeVideos => "Youtube Videos",
             Preset::TwitchVods => "Twitch Vods",
             Preset::TwitterX => "Twitter/X",
             Preset::Blank => "New Site",
@@ -211,6 +217,15 @@ impl PostSite {
                 name: Preset::YoutubeShorts.label().into(),
                 download_args: YOUTUBE_SHORTS_DOWNLOAD_ARGS.into(),
                 url_template: YOUTUBE_SHORTS_URL_TEMPLATE.into(),
+                ..Default::default()
+            },
+            Preset::YoutubeVideos => PostSite {
+                name: Preset::YoutubeVideos.label().into(),
+                checker_args: YOUTUBE_VIDEOS_CHECKER_ARGS.into(),
+                download_args: YOUTUBE_SHORTS_DOWNLOAD_ARGS.into(),
+                url_template: YOUTUBE_VIDEOS_URL_TEMPLATE.into(),
+                auto_download_limit_mb: Some(YOUTUBE_VIDEOS_AUTO_DOWNLOAD_LIMIT_MB),
+                auto_download_secs: Some(YOUTUBE_VIDEOS_AUTO_DOWNLOAD_SECS),
                 ..Default::default()
             },
             Preset::TwitchVods => PostSite {
@@ -606,6 +621,7 @@ mod tests {
     fn templates_default_cleanup_days() {
         assert_eq!(tiktok().auto_delete_days, Some(30));
         assert_eq!(PostSite::from_preset(Preset::YoutubeShorts).auto_delete_days, Some(30));
+        assert_eq!(PostSite::from_preset(Preset::YoutubeVideos).auto_delete_days, Some(30));
         assert_eq!(PostSite::from_preset(Preset::TwitterX).auto_delete_days, Some(30));
         assert_eq!(PostSite::from_preset(Preset::Blank).auto_delete_days, Some(30));
         assert_eq!(tiktok().interval_or_default(), 300);
@@ -641,15 +657,16 @@ mod tests {
     #[test]
     fn named_presets_are_every_preset_but_blank() {
         let names: Vec<&str> = Preset::NAMED.into_iter().map(Preset::label).collect();
-        assert_eq!(names, ["TikTok", "Youtube Shorts", "Twitch Vods", "Twitter/X"]);
+        assert_eq!(names, ["TikTok", "Youtube Shorts", "Youtube Videos", "Twitch Vods", "Twitter/X"]);
         assert!(!Preset::NAMED.contains(&Preset::Blank));
     }
 
     #[test]
-    fn auto_download_limits_default_everywhere_and_size_becomes_an_argument() {
+    fn auto_download_limits_default_except_youtube_videos_and_size_becomes_an_argument() {
         for preset in Preset::NAMED.into_iter().chain([Preset::Blank]) {
             let site = PostSite::from_preset(preset);
-            assert_eq!((site.auto_download_limit_mb, site.auto_download_secs), (Some(15), Some(30)));
+            let want = if preset == Preset::YoutubeVideos { (Some(1000), Some(120)) } else { (Some(15), Some(30)) };
+            assert_eq!((site.auto_download_limit_mb, site.auto_download_secs), want);
         }
         let dl = download_cmd(&tiktok(), "u", "d", Path::new("s.txt"), Some(15));
         assert!(dl.windows(2).any(|w| w == ["--max-filesize", "15M"]));
