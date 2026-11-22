@@ -616,7 +616,11 @@ mod tests {
         let mut site = tiktok();
         let dl = download_cmd(&site, "https://x/v/1", "C:\\out dir", Path::new("s%1.txt"), None);
         assert!(dl.contains(&"C:\\out dir".to_string()) && dl.contains(&"https://x/v/1".to_string()));
-        assert_eq!(&dl[dl.len() - 3..], ["--print-to-file", "after_move:filepath", "s%%1.txt"]);
+        let tail = [
+            "--print-to-file", "after_move:filepath", "s%%1.txt",
+            "--print-to-file", "after_move:%(.{timestamp,upload_date,duration})j", "s%%1.txt",
+        ];
+        assert_eq!(&dl[dl.len() - 6..], tail);
         assert!(site.user_agent().unwrap().starts_with("Mozilla/5.0"));
         site.checker_args = "--dump-json".into();
         assert_eq!(checker_cmd(&site, "u"), vec!["--dump-json", "u"]);
