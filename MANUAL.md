@@ -7,8 +7,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 ### Monitoring
 
 - One checker per site
-    - All of a site's streamers are checked in a single yt-dlp call
-- Check interval - How often to run the yt-dlp checker command for that site, counted from when the previous check has finished
+    - All of a site's streamers are checked in a single yt-dlp call, except streamers that set their own check interval, which are checked on their own (see [Streamer settings](#streamer-settings))
+- Check interval - How often to run the yt-dlp checker command for that site, counted from when the previous check has finished. A streamer can set its own interval
 - Checker command - The yt-dlp arguments or options to pass when checking for livestreams. Whether it uses `--dump-json` or `--simulate` is detected from the arguments (see [Settings tab](#settings-tab))
 - Live time - Shows how long each live streamer has been live (see [Live time](#live-time))
 - Last live - Shows how long ago each offline streamer was last live, and looks up the time for Twitch streamers at launch (see [Last live](#last-live))
@@ -983,7 +983,11 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Quick check ended streams - Whether this streamer is checked again on its own shortly after its recording ends (see [Quick check](#quick-check))
         - **Inherit** - Uses the site's switch. The entry shows the site's current setting (example: `Inherit (On)`)
         - **On** and **Off** - Apply to this streamer only. The delay always comes from the site
-    - Save changes button - Saves your edits. Unavailable while there are no edits, or while the intro delay, split length or schedule is invalid
+    - Check every (seconds) - How often this streamer is checked, in seconds, from 5 up. The time is counted from when its previous check has finished
+        - A blank box (the default) uses the site's **Check every (seconds)**, and the hint in the box shows the site's current value. Only digits can be typed, up to 6
+        - A streamer with its own value is left out of the site's single yt-dlp call, and is checked on its own, with one yt-dlp command for it, at that interval. It keeps being checked while it is recording
+        - The box has a red border while it holds a value below 5. **Save changes** is unavailable until the box is blank or holds a number of at least 5
+    - Save changes button - Saves your edits. Unavailable while there are no edits, or while the intro delay, split length, check interval or schedule is invalid
     - Revert button - Discards your edits. Unavailable while there are no edits
     - Defaults button - Fills the panel with the settings a streamer starts with, and does not change the display name. Nothing is saved until you press **Save changes**, and **Revert** brings back the saved values
     - unsaved changes - A chip shown beside the buttons while the draft is different from what is saved. **Always record** is set on the Priority page and is not part of the draft, so turning it on or off does not show the chip (see [Priority](#priority))
@@ -991,7 +995,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - A subfolder change applies to the next recording. A recording that is already running keeps its folder
 - An intro delay change never stops a recording that is already running (see [Intro delay](#intro-delay))
 - A schedule change applies as soon as the streamer's settings are saved (see [Schedule](#schedule))
-- A split change applies to a recording that is already running (see [Split recordings](#split-recordings)). An auto-suffix change applies the next time a recorder starts. An upgrade quality change applies from the next check (see [Upgrade quality](#upgrade-quality)). A quick check change applies from the next recording that ends, and turning it off cancels a quick check that is waiting (see [Quick check](#quick-check))
+- A split change applies to a recording that is already running (see [Split recordings](#split-recordings)). An auto-suffix change applies the next time a recorder starts. An upgrade quality change applies from the next check (see [Upgrade quality](#upgrade-quality)). A quick check change applies from the next recording that ends, and turning it off cancels a quick check that is waiting (see [Quick check](#quick-check)). A check interval change applies as soon as it is saved, and the streamer is checked again right away
 																																										   
 
 ## Posts
@@ -1417,7 +1421,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - A field that can be left blank shows its default as grey hint text (see [Site defaults](#site-defaults))
         - Site name (example) - The display name for the site. Required, with no default. The field has a red border while it is blank, and Save changes is unavailable until it has a name
         - URL template (example) - The stream address for the site, with `{username}` where the streamer's name goes. Set this before adding streamers to the site. Required, with no default. The field has a red border while it is blank, and Save changes is unavailable until it has a value
-        - Check every (seconds) - How often to run the yt-dlp checker command for that site, in seconds, from 5 up (default 60). The time is counted from when the previous check has finished, so a slow check does not shorten it. Save changes is unavailable until it is blank or a whole number of at least 5
+        - Check every (seconds) - How often to run the yt-dlp checker command for that site, in seconds, from 5 up (default 60). The time is counted from when the previous check has finished, so a slow check does not shorten it. Save changes is unavailable until it is blank or a whole number of at least 5. A streamer can set its own value in its settings (see [Streamer settings](#streamer-settings))
 																														  
         - Consider a stream ended after (minutes) - How many minutes the checker must go without seeing the streamer live before the live time is cleared, from 1 up (default 30). Save changes is unavailable until it is blank or a whole number of at least 1 (see [Live time](#live-time))
 																																																																																									

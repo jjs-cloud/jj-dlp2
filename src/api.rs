@@ -329,6 +329,9 @@ pub struct StreamerOptions {
     /// Overrides the site's quick-check switch; `None` inherits it.
     #[serde(default)]
     pub quick_check: Option<bool>,
+    /// Seconds between this streamer's own checks; `None` inherits the site's interval.
+    #[serde(default)]
+    pub interval_secs: Option<u64>,
 }
 
 /// Whether a schedule runs once or repeats weekly.
@@ -715,6 +718,14 @@ mod tests {
         }
         let site: Site = serde_json::from_value(value).unwrap();
         assert!(!site.notify_interrupts && !site.notify_errors && !site.warn_stalled && !site.warn_restarts && !site.upgrade_quality);
+    }
+
+    #[test]
+    fn streamer_options_without_interval_inherit_the_site() {
+        let mut value = serde_json::to_value(StreamerOptions::default()).unwrap();
+        value.as_object_mut().unwrap().remove("interval_secs");
+        let opts: StreamerOptions = serde_json::from_value(value).unwrap();
+        assert_eq!(opts.interval_secs, None);
     }
 
     #[test]

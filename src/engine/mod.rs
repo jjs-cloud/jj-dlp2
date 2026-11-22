@@ -32,8 +32,8 @@ const HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// Messages from engine background tasks back to the engine loop.
 pub(crate) enum Internal {
     CheckResult { site_id: SiteId, started: u64, at: u64, result: Result<CheckReport, String> },
-    /// The result of a one-streamer check requested by `Command::QuickCheck`.
-    QuickCheckResult { site_id: SiteId, streamer_id: StreamerId, started: u64, at: u64, result: Result<CheckReport, String> },
+    /// The result of a one-streamer check: a `Command::QuickCheck` (`quick`) or the streamer's own interval check.
+    StreamerCheckResult { site_id: SiteId, streamer_id: StreamerId, started: u64, at: u64, result: Result<CheckReport, String>, quick: bool },
     RecorderGone(RecorderId),
     Log(String),
     /// An informational line from a recorder, logged once per live session.
@@ -120,6 +120,8 @@ struct Engine {
     internal_tx: UnboundedSender<Internal>,
     internal_rx: Option<UnboundedReceiver<Internal>>,
     workers: HashMap<SiteId, SiteWorker>,
+    /// Workers for streamers that set their own check interval; they are left out of their site's batch.
+    streamer_workers: HashMap<StreamerId, SiteWorker>,
     recorders: HashMap<RecorderId, RecorderHandle>,
     states: HashMap<StreamerId, StreamState>,
     tracked: SharedTracked,
@@ -145,6 +147,7 @@ impl Engine {
             internal_tx,
             internal_rx: Some(internal_rx),
             workers: HashMap::new(),
+            streamer_workers: HashMap::new(),
             recorders: HashMap::new(),
             states: HashMap::new(),
             tracked: Arc::new(Mutex::new(HashMap::new())),
@@ -184,6 +187,9 @@ impl Engine {
             }
         }
         for (_, w) in self.workers.drain() {
+            w.handle.abort();
+        }
+        for (_, w) in self.streamer_workers.drain() {
             w.handle.abort();
         }
         if self.recorders.is_empty() {
@@ -302,10 +308,12 @@ impl Engine {
     fn handle_internal(&mut self, msg: Internal) {
         match msg {
             Internal::CheckResult { site_id, started, at, result } => self.on_check_result(site_id, started, at, result),
-            Internal::QuickCheckResult { site_id, streamer_id, started, at, result } => {
-                self.on_quick_check_result(streamer_id, started, at, result);
-                self.quick_running.remove(&site_id);
-                self.pump_quick_checks(site_id);
+            Internal::StreamerCheckResult { site_id, streamer_id, started, at, result, quick } => {
+                self.on_streamer_check_result(streamer_id, started, at, result, if quick { "quick check" } else { "check" });
+                if quick {
+                    self.quick_running.remove(&site_id);
+                    self.pump_quick_checks(site_id);
+                }
             }
             Internal::Log(msg) => self.log(msg),
             Internal::Note { streamer_id, text } => {
@@ -336,7 +344,7 @@ impl Engine {
         }
     }
 
-    /// Creates, updates and removes per-site workers to match the settings.
+    /// Creates, updates and removes the per-site and per-streamer workers to match the settings.
     fn sync_workers(&mut self) {
         let gone: Vec<SiteId> = self
             .workers
@@ -351,32 +359,78 @@ impl Engine {
         }
         for site in self.settings.sites.clone() {
             let snap = self.snapshot_for(&site);
-            match self.workers.get(&site.id) {
-                Some(w) => {
-                    w.tx.send_if_modified(|cur| {
-                        if *cur == snap {
-                            false
-                        } else {
-                            *cur = snap;
-                            true
-                        }
-                    });
-                }
-                None => {
-                    let w = checker::spawn_worker(snap, self.internal_tx.clone());
-                    self.workers.insert(site.id, w);
-                }
+            Self::sync_worker(&mut self.workers, site.id, snap, &self.internal_tx);
+        }
+        let own: Vec<(StreamerId, SiteSnapshot)> = self
+            .settings
+            .streamers
+            .iter()
+            .filter_map(|s| {
+                let site = self.settings.sites.iter().find(|x| x.id == s.site_id)?;
+                Some((s.id, self.snapshot_for_streamer(site, s)?))
+            })
+            .collect();
+        let stale: Vec<StreamerId> =
+            self.streamer_workers.keys().copied().filter(|id| !own.iter().any(|(sid, _)| sid == id)).collect();
+        for id in stale {
+            if let Some(w) = self.streamer_workers.remove(&id) {
+                w.handle.abort();
+            }
+        }
+        for (id, snap) in own {
+            Self::sync_worker(&mut self.streamer_workers, id, snap, &self.internal_tx);
+        }
+    }
+
+    /// Pushes the snapshot to the worker stored under `key`, spawning the worker when it is missing.
+    fn sync_worker<K: std::hash::Hash + Eq>(
+        workers: &mut HashMap<K, SiteWorker>,
+        key: K,
+        snap: SiteSnapshot,
+        internal: &UnboundedSender<Internal>,
+    ) {
+        match workers.get(&key) {
+            Some(w) => {
+                w.tx.send_if_modified(|cur| {
+                    if *cur == snap {
+                        false
+                    } else {
+                        *cur = snap;
+                        true
+                    }
+                });
+            }
+            None => {
+                let w = checker::spawn_worker(snap, internal.clone());
+                workers.insert(key, w);
             }
         }
     }
 
+    /// The site's batch: every streamer that does not set its own check interval.
     fn snapshot_for(&self, site: &Site) -> SiteSnapshot {
-        let urls = self.settings.streamers.iter().filter(|s| s.site_id == site.id).map(|s| s.url.clone()).collect();
+        let urls = self
+            .settings
+            .streamers
+            .iter()
+            .filter(|s| s.site_id == site.id && s.options.interval_secs.is_none())
+            .map(|s| s.url.clone())
+            .collect();
         let mut site = site.clone();
         if let Some(args) = self.checker_overrides.get(&site.id) {
             site.checker_args = args.clone();
         }
-        SiteSnapshot { site, urls }
+        SiteSnapshot { site, urls, streamer: None }
+    }
+
+    /// A one-streamer snapshot checked on the streamer's own interval; `None` when it inherits the site's.
+    fn snapshot_for_streamer(&self, site: &Site, streamer: &Streamer) -> Option<SiteSnapshot> {
+        let secs = streamer.options.interval_secs?;
+        let mut snap = self.snapshot_for(site);
+        snap.site.interval_secs = Some(secs);
+        snap.urls = vec![streamer.url.clone()];
+        snap.streamer = Some(streamer.id);
+        Some(snap)
     }
 
     fn on_check_result(&mut self, site_id: SiteId, started: u64, at: u64, result: Result<CheckReport, String>) {
@@ -390,7 +444,7 @@ impl Engine {
         let problem = report.problem.as_ref().map(|p| (p.log_text(), p.summary()));
         self.report_check(site_id, at, problem);
         let streamers: Vec<Streamer> =
-            self.settings.streamers.iter().filter(|s| s.site_id == site_id).cloned().collect();
+            self.settings.streamers.iter().filter(|s| s.site_id == site_id && s.options.interval_secs.is_none()).cloned().collect();
         let failed = failed_checks(&report, &streamers);
         let single = streamers.len() == 1;
         let stale: HashSet<StreamerId> = streamers
@@ -470,13 +524,13 @@ impl Engine {
         }
     }
 
-    /// Applies a one-streamer check to that streamer's state only.
-    fn on_quick_check_result(&mut self, streamer_id: StreamerId, started: u64, at: u64, result: Result<CheckReport, String>) {
+    /// Applies a one-streamer check to that streamer's state only; `label` names the check in the log.
+    fn on_streamer_check_result(&mut self, streamer_id: StreamerId, started: u64, at: u64, result: Result<CheckReport, String>, label: &str) {
         let Some(s) = self.settings.streamers.iter().find(|s| s.id == streamer_id).cloned() else { return };
         let report = match result {
             Ok(r) => r,
             Err(message) => {
-                self.log(format!("{}: quick check failed: {message}", s.name));
+                self.log(format!("{}: {label} failed: {message}", s.name));
                 return;
             }
         };

@@ -1729,6 +1729,24 @@ impl App {
         ]
         .spacing(8);
 
+        let interval_hint = self.inherited_interval(st).to_string();
+        let interval_row = row![
+            cell(
+                labeled(
+                    "Check every (seconds)",
+                    text_input(&interval_hint, &d.interval)
+                        .on_input(move |v| Msg::StreamerEdit(id, StreamerField::Interval(v)))
+                        .padding(5)
+                        .size(13)
+                        .style(skin::input_required(s, d.interval_invalid()))
+                        .into()
+                ),
+                Length::FillPortion(1)
+            ),
+            cell(Space::new().into(), Length::FillPortion(2)),
+        ]
+        .spacing(8);
+
         let intro_delay = column![
             row![
                 toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
@@ -1799,6 +1817,7 @@ impl App {
             suffix_row,
             upgrade_row,
             quick_row,
+            interval_row,
             actions,
         ]
         .spacing(6)

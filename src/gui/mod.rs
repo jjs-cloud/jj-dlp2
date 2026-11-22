@@ -600,6 +600,7 @@ pub enum StreamerField {
     AutoSuffix(Option<bool>),
     UpgradeQuality(Option<bool>),
     QuickCheck(Option<bool>),
+    Interval(String),
     Split(Option<bool>),
     SplitMinutes(String),
     IntroEnabled(bool),
@@ -658,6 +659,7 @@ pub struct StreamerDraft {
     pub auto_suffix: Option<bool>,
     pub upgrade_quality: Option<bool>,
     pub quick_check: Option<bool>,
+    pub interval: String,
     pub split: Option<bool>,
     pub split_minutes: String,
     pub intro_enabled: bool,
@@ -692,6 +694,7 @@ impl StreamerDraft {
             auto_suffix: o.auto_suffix,
             upgrade_quality: o.upgrade_quality,
             quick_check: o.quick_check,
+            interval: opt_text(o.interval_secs),
             split: o.split,
             split_minutes: opt_text(o.split_minutes),
             intro_enabled: o.intro_delay_enabled,
@@ -710,6 +713,7 @@ impl StreamerDraft {
             auto_suffix: self.auto_suffix,
             upgrade_quality: self.upgrade_quality,
             quick_check: self.quick_check,
+            interval_secs: self.interval_secs().flatten(),
             split: self.split,
             split_minutes: self.split_minutes.trim().parse().ok().filter(|m| *m > 0),
             intro_delay_enabled: self.intro_enabled,
@@ -743,6 +747,16 @@ impl StreamerDraft {
         }
     }
 
+    /// The streamer's own check interval: `Some(None)` when blank, `None` when unreadable or under 5 seconds.
+    pub fn interval_secs(&self) -> Option<Option<u64>> {
+        parse_opt(&self.interval, 5)
+    }
+
+    /// True while the check interval is unreadable or under 5 seconds.
+    pub fn interval_invalid(&self) -> bool {
+        self.interval_secs().is_none()
+    }
+
     /// True while the intro delay is on without a length of at least 1 minute.
     pub fn intro_invalid(&self) -> bool {
         self.intro_enabled && !matches!(parse_opt::<u64>(&self.intro_minutes, 1), Some(Some(_)))
@@ -758,7 +772,7 @@ impl StreamerDraft {
     }
 
     pub fn invalid(&self) -> bool {
-        self.intro_invalid() || self.split_invalid() || self.schedule_issue().is_some()
+        self.intro_invalid() || self.split_invalid() || self.interval_invalid() || self.schedule_issue().is_some()
     }
 
     /// True when saving would change `saved`; always-record is owned by the Priority tab and ignored.
@@ -1224,6 +1238,11 @@ impl App {
         self.settings.sites.iter().find(|s| s.id == st.site_id).and_then(Site::inherited_split_minutes)
     }
 
+    /// The check interval a streamer inherits from its site.
+    pub(crate) fn inherited_interval(&self, st: &Streamer) -> u64 {
+        self.settings.sites.iter().find(|s| s.id == st.site_id).map_or(DEFAULT_INTERVAL_SECS, Site::interval_or_default)
+    }
+
     /// Applies one edit to a streamer's draft.
     fn edit_streamer(&mut self, id: StreamerId, field: StreamerField) {
         let Some(st) = self.settings.streamers.iter().find(|s| s.id == id) else { return };
@@ -1254,7 +1273,8 @@ impl App {
                 }
                 d.intro_minutes = v;
             }
-            StreamerField::SplitMinutes(_) | StreamerField::IntroMinutes(_) => {}
+            StreamerField::Interval(v) if digits(&v) => d.interval = v,
+            StreamerField::SplitMinutes(_) | StreamerField::IntroMinutes(_) | StreamerField::Interval(_) => {}
             StreamerField::ScheduleEnabled(v) => d.schedule.enabled = v,
             StreamerField::ScheduleMode(v) => d.schedule.mode = v,
             StreamerField::ScheduleDay(i, v) => {
@@ -2069,5 +2089,17 @@ mod tests {
         assert_eq!(lines.len(), OUTPUT_MAX_LINES);
         assert_eq!(lines[0], "line 3");
         assert_eq!(lines[OUTPUT_MAX_LINES - 1], format!("line {}", OUTPUT_MAX_LINES + 2));
+    }
+
+    #[test]
+    fn streamer_interval_blank_inherits_and_under_five_is_invalid() {
+        let mut d = StreamerDraft::from_options(&StreamerOptions::default());
+        assert_eq!(d.to_options().interval_secs, None);
+        assert!(!d.invalid());
+        d.interval = "4".into();
+        assert!(d.interval_invalid() && d.invalid());
+        d.interval = "30".into();
+        assert_eq!(d.to_options().interval_secs, Some(30));
+        assert!(!d.invalid());
     }
 }
