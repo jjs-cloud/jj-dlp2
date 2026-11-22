@@ -288,7 +288,7 @@ impl App {
         .width(iw)
         .height(ih);
         let thumb = button(stack([preview, overlay.into()]))
-            .on_press(send(PostsMsg::Play(post.id.clone())))
+            .on_press_maybe((post.state != PostState::Downloading).then(|| send(PostsMsg::Play(post.id.clone()))))
             .padding(0)
             .style(|_, _| button::Style::default());
 

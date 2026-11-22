@@ -1025,7 +1025,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																																					
         - `No accounts yet. Pick a site and add a username below.` is shown when there is no account
     - Post card - The thumbnail, the state of the post, and buttons
-        - Thumbnail - A preview of the post. Clicking it does the same as **Play**. `No preview` is shown when no preview could be made. The length of the video is shown in one corner, and the state of the post in the other
+        - Thumbnail - A preview of the post. Clicking it does the same as **Play**, except while the post is `Downloading…`, when clicking it does nothing. `No preview` is shown when no preview could be made. The length of the video is shown in one corner, and the state of the post in the other
         - Under the thumbnail - The account and how long ago the post was made, then the caption. `(no caption)` is shown when the post has none
             - When a site's list of posts does not include the time a post was made or the length of its video, the time the post was found is used and no length is shown, until the post has been downloaded. Then the real time and length are shown
         - Viewed posts are shown dimmed
