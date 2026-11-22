@@ -379,7 +379,7 @@ pub fn subfolders(recs: &Recs, roots: &[Root]) -> HashSet<PathBuf> {
     out
 }
 
-/// Keeps the selection across a rebuild; a vanished file moves to its next (else previous) sibling in the same folder when grouped, else to the neighbouring row.
+/// Keeps the selection across a rebuild; a vanished file moves to its next (else previous) sibling in the same group when grouped, else to the neighbouring row.
 pub fn keep_selection(old_rows: &[Row], cur: Option<&Sel>, new_rows: &[Row], group: bool) -> Option<Sel> {
     let fresh: Vec<Sel> = new_rows.iter().filter_map(Row::sel).collect();
     if fresh.is_empty() {
@@ -390,7 +390,7 @@ pub fn keep_selection(old_rows: &[Row], cur: Option<&Sel>, new_rows: &[Row], gro
             return Some(c.clone());
         }
         if let (true, Sel::File(path)) = (group, c) {
-            if let Some(sib) = sibling_in_folder(old_rows, path, &fresh) {
+            if let Some(sib) = sibling_in_group(old_rows, path, &fresh) {
                 return Some(sib);
             }
         }
@@ -399,11 +399,15 @@ pub fn keep_selection(old_rows: &[Row], cur: Option<&Sel>, new_rows: &[Row], gro
     Some(fresh[old_pos.map_or(0, |p| p.min(fresh.len() - 1))].clone())
 }
 
-/// The nearest surviving file after `path` (else before it) in the same folder of `old_rows`.
-fn sibling_in_folder(old_rows: &[Row], path: &Path, fresh: &[Sel]) -> Option<Sel> {
+/// The nearest surviving file after `path` (else before it) in the same run of file rows of `old_rows`.
+fn sibling_in_group(old_rows: &[Row], path: &Path, fresh: &[Sel]) -> Option<Sel> {
     let i = old_rows.iter().position(|r| matches!(r, Row::File { path: p, .. } if p == path))?;
+    let depth = match &old_rows[i] {
+        Row::File { depth, .. } => *depth,
+        _ => return None,
+    };
     let same = |r: &Row| match r {
-        Row::File { path: p, .. } if p.parent() == path.parent() => Some(Sel::File(p.clone())),
+        Row::File { path: p, depth: d, .. } if *d == depth => Some(Sel::File(p.clone())),
         _ => None,
     };
     let after = old_rows[i + 1..].iter().map(same).take_while(Option::is_some).flatten();
@@ -544,6 +548,26 @@ mod tests {
         assert_eq!(pick("1"), Some(Sel::File(PathBuf::from("/r/d/2.mp4"))));
         assert_eq!(pick("3"), Some(Sel::File(PathBuf::from("/r/d/4.mp4"))));
         assert_eq!(pick("4"), Some(Sel::File(PathBuf::from("/r/d/3.mp4"))));
+    }
+
+    #[test]
+    fn streamer_delete_stays_in_group() {
+        let rs = roots(&["/r"]);
+        let mut recs = HashMap::new();
+        let mut who = HashMap::new();
+        for (name, streamer) in [("a/1", "A"), ("b/2", "A"), ("c/3", "A"), ("d/4", "B")] {
+            let p = PathBuf::from(format!("/r/{name}.mp4"));
+            recs.insert(p.clone(), rec("/r", 1, 0));
+            who.insert(p, Who { streamer: Some(streamer.to_string()), site: None });
+        }
+        let go = |recs: &Recs| build_rows(&rs, recs, Sort::default(), GroupBy::Streamer, &who, &HashSet::new(), Instant::now());
+        let old = go(&recs);
+        let gone = PathBuf::from("/r/c/3.mp4");
+        let mut left = recs.clone();
+        left.remove(&gone);
+        let new = go(&left);
+        let got = keep_selection(&old, Some(&Sel::File(gone)), &new, true);
+        assert_eq!(got, Some(Sel::File(PathBuf::from("/r/b/2.mp4"))));
     }
 
     #[test]

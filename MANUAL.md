@@ -1279,7 +1279,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - What is remembered is kept in `file_owners.json` in the settings folder, and a file that is gone from a folder that still exists is dropped from it when jj-dlp starts (see [Settings](#settings))
     - Refresh - The list is refreshed every second while the tab is open and something is recording, being written or being moved, and less often while nothing is
         - The selection stays on the same item. When the selected file is gone, the selection moves to the next one in the list
-        - With **Group by** set to **Folder**, the selection moves to the next file in the same folder, or to the previous file when it was the last one in the folder. It only leaves the folder when no file is left in it
+        - With **Group by** set to anything other than **None**, the selection moves to the next file in the same group (folder, streamer or site), or to the previous file when it was the last one in the group. It only leaves the group when no file is left in it
     - Moving - While a move is writing its new file, a `MOVING` row shows the new file's name, `WRITING`, its size and its rate. It cannot be selected
     - Footer - The number of files, their total size, and a reminder of the keys, including the keys that move the selection
 - Selecting - Click a row to select it, and double-click a file to open it

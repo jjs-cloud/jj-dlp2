@@ -192,7 +192,7 @@ impl FilesState {
             HashMap::new()
         };
         let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.who, &self.collapsed, Instant::now());
-        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group == GroupBy::Folder);
+        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group != GroupBy::None);
         self.rows = rows;
     }
 
