@@ -8,8 +8,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_INTERVAL_SECS: u64 = 300;
-/// Days before unstarred posts are deleted, in the TikTok and blank templates.
-pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 7;
+/// Days before unstarred posts are deleted, in every template but Twitch Vods.
+pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 30;
 /// Megabytes above which automatic downloads are skipped, in every template.
 pub const DEFAULT_AUTO_DOWNLOAD_LIMIT_MB: u64 = 15;
 /// Seconds after which automatic downloads are cancelled, in every template.
@@ -296,7 +296,7 @@ impl PostSite {
             if tmpl.is_empty() {
                 return None;
             }
-            let name = input.trim_start_matches('@').to_string();
+            let name = input.trim_start_matches('@').to_lowercase();
             (name.clone(), tmpl.replace("{username}", &name))
         };
         if name.is_empty() || name.chars().any(char::is_whitespace) {
@@ -580,7 +580,7 @@ mod tests {
     fn accounts_from_names_and_urls() {
         let mut site = tiktok();
         let a = site.account_from_input(" @Emiru ").unwrap();
-        assert_eq!((a.name.as_str(), a.url.as_str()), ("Emiru", "https://www.tiktok.com/@Emiru"));
+        assert_eq!((a.name.as_str(), a.url.as_str()), ("emiru", "https://www.tiktok.com/@emiru"));
         site.accounts.push(a);
         assert!(site.account_from_input("emiru").is_none());
         assert!(site.account_from_input("two words").is_none());
@@ -603,9 +603,11 @@ mod tests {
     }
 
     #[test]
-    fn templates_default_to_seven_day_cleanup() {
-        assert_eq!(tiktok().auto_delete_days, Some(7));
-        assert_eq!(PostSite::from_preset(Preset::Blank).auto_delete_days, Some(7));
+    fn templates_default_cleanup_days() {
+        assert_eq!(tiktok().auto_delete_days, Some(30));
+        assert_eq!(PostSite::from_preset(Preset::YoutubeShorts).auto_delete_days, Some(30));
+        assert_eq!(PostSite::from_preset(Preset::TwitterX).auto_delete_days, Some(30));
+        assert_eq!(PostSite::from_preset(Preset::Blank).auto_delete_days, Some(30));
         assert_eq!(tiktok().interval_or_default(), 300);
     }
 
@@ -627,7 +629,7 @@ mod tests {
         assert!(!site.auto_download && !site.backfill && site.open_m3u8 && site.auto_delete_days.is_none());
         assert!(!tiktok().open_m3u8 && !PostSite::from_preset(Preset::Blank).open_m3u8);
         let a = site.account_from_input("Emiru").unwrap();
-        assert_eq!(a.url, "https://www.twitch.tv/Emiru/videos?filter=archives");
+        assert_eq!(a.url, "https://www.twitch.tv/emiru/videos?filter=archives");
         let b = site.account_from_input("https://www.twitch.tv/ash/videos?filter=archives").unwrap();
         assert_eq!(b.name, "ash");
     }

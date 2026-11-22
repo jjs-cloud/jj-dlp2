@@ -455,9 +455,8 @@ impl App {
         ]
         .spacing(8);
 
-        let args = |label: &'static str, hint: &'static str, content: &'a text_editor::Content, f: fn(Action) -> SiteField, off: bool| -> Element<'a, Msg> {
-            let mut ed = editor(content).placeholder(if off { "" } else { hint }).font(s.font).size(13).padding(8).height(ARGS_BOX_H);
-            ed = if off { ed.style(skin::editor_off(s)) } else { ed.on_action(move |a| send(PostsMsg::Site(id, f(a)))).style(skin::editor(s)) };
+        let args = |label: &'static str, hint: &'static str, content: &'a text_editor::Content, f: fn(Action) -> SiteField| -> Element<'a, Msg> {
+            let ed = editor(content).placeholder(hint).font(s.font).size(13).padding(8).height(ARGS_BOX_H).on_action(move |a| send(PostsMsg::Site(id, f(a)))).style(skin::editor(s));
             column![muted(&s, label), ed].spacing(2).into()
         };
 
@@ -487,8 +486,8 @@ impl App {
                 cleanup,
                 toggles,
                 stream,
-                args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker, d.x_scraper),
-                args("Downloader arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download, false),
+                args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker),
+                args("Downloader arguments ({url} = post URL, {dir} = download folder)", posts::DEFAULT_DOWNLOAD_ARGS, &d.download, SiteField::Download),
                 actions,
             ]
             .spacing(10),

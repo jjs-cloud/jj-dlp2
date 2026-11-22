@@ -224,7 +224,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Site list - Chooses the site the streamer is added to. It lists every site template and every site you have set up on the Settings tab. A template that has no site yet gets its site, with the template's settings, when the first streamer is added to it (see [Settings tab](#settings-tab))
         - The chosen site stays chosen after a streamer is added
 																								
-    - Streamer username - The streamer's name on the chosen site. A leading `@` is ignored. After you add a streamer, the cursor stays in this box, so you can type the next username and press Enter again. The streamer is shown under its username until a display name is set in its settings (see [Streamer settings](#streamer-settings))
+    - Streamer username - The streamer's name on the chosen site. A leading `@` is ignored, and the username is added in lowercase letters. After you add a streamer, the cursor stays in this box, so you can type the next username and press Enter again. The streamer is shown under its username until a display name is set in its settings (see [Streamer settings](#streamer-settings))
     - Add streamer button - Adds the streamer, using the site's URL template to build their stream URL
     - Enter - Pressing Enter in **Streamer username** has the same effect as the **Add streamer** button. Nothing is added when the username is blank, and the cursor stays in **Streamer username**
     - Pulse - While no streamer has been added yet, the **Streamer username** box pulses so it is easier to find. It stops pulsing once a streamer has been added
@@ -1015,7 +1015,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Account errors - A warning line is shown above the posts for each account whose last check failed. It clears on the next check that succeeds. The Log tab gets one message when a problem appears or changes (see [Log tab](#log-tab))
     - Add bar - Shown at the bottom of the page
         - Site list - Chooses the site the account is added to. It lists every site template and every site you have set up on the Settings tab. A template that has no site yet gets its site, with the template's settings, when the first account is added to it
-        - Username - The account's username, or its profile URL. The profile URL is built from the site's **Profile URL template** (see [Posts site settings](#posts-site-settings))
+        - Username - The account's username, or its profile URL. A typed username is added in lowercase letters. The profile URL is built from the site's **Profile URL template** (see [Posts site settings](#posts-site-settings))
             - A profile URL that ends in `/videos` is named after the part before it
             - Video URL - For a site that supports it, the URL of any video the account posted can be entered instead. The account is named after the user in the URL, not after the video (see [Account ID lookup](#account-id-lookup))
         - **Add** button - Adds the account and starts checking it right away. Unavailable while the box is blank. Pressing Enter in the box does the same
@@ -1112,8 +1112,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - m3u8 arguments - The yt-dlp arguments or options to pass when getting the stream link of a post. Leave blank to use the fallback shown as hint text. `{url}` is replaced by the post's URL, and the first line that is printed as a web address is used as the stream link
         - Player for m3u8 - The program that plays the stream link, as a full path or a name on your `PATH`. Leave blank to open the link with your system's default app
         - Checker arguments - The yt-dlp arguments or options to pass when checking an account for new posts. Leave blank to use the fallback shown as hint text
-            - While the Twitter/X Scraper switch is on, the field is dimmed and cannot be edited, and its hint text is blank. What is in it is kept, and it is editable again when the switch is turned off
-            - The arguments are still used on the address of each post that the scraper finds (see [Profile pages](#profile-pages))
+            - With the Twitter/X Scraper switch on, the arguments are used on the address of each post that the scraper finds (see [Profile pages](#profile-pages))
         - Downloader arguments - The yt-dlp arguments or options to pass when downloading a post. Leave blank to use the fallback shown as hint text
             - jj-dlp adds its own `--print-to-file` options to the end of the command, so it can find the file that was saved and read the time and length of the post (see [Posts](#posts))
             - For an automatic download that has a size limit, jj-dlp also adds a `--max-filesize` option
@@ -1129,7 +1128,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 ### Auto-delete
 
 - Auto-delete - Deletes the files of unstarred posts a set number of days after they were found, so the files do not take up space for ever
-    - Set per site with **Delete files of unstarred posts after (days, blank = never)**. A blank field never deletes files
+    - Set per site with **Delete files of unstarred posts after (days, blank = never)**. A blank field never deletes files. Every template except Twitch Vods starts at 30 days, including New Site
     - Starred posts are never deleted, and only posts that have a downloaded file are affected, so a post that is `Not saved`, `Queued`, `Downloading…` or `Failed` is left as it is
     - The age is counted from when the post was found, not from when it was posted, so older posts that are found on an account's first check are not deleted at once
     - The file is sent to the recycle bin, in the same way as the **Delete** button of the post card. The post stays in the list as `Not saved`, with its thumbnail, and **Save** downloads it again. The folder it was in is removed when it is left empty

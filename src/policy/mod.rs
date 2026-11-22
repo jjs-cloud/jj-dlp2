@@ -1671,6 +1671,7 @@ impl Policy {
 
     /// Adds a streamer to a site and commits; false when nothing was added.
     fn add_streamer(&mut self, site_id: SiteId, name: String, username: String) -> bool {
+        let username = username.to_lowercase();
         let Some(site) = self.settings.sites.iter().find(|s| s.id == site_id) else {
             return false;
         };
