@@ -114,7 +114,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Status chips - Shows how many streamers are being monitored, how many are live and how many are recording, in the header (see [Livestreams tab](#livestreams-tab))
 - Top tabs - **Livestreams** and **Posts** are separate tabs in the tab bar, with **Posts** to the right of **Livestreams** (see [Livestreams tab](#livestreams-tab) and [Posts](#posts))
 - Compact view - Shows each streamer as a single row that shrinks as more streamers are added, turned on with the **Compact View** button (see [Compact view](#compact-view))
-- Full view columns - Splits the streamers of each site panel into two columns when the window is wide enough, with the window width set on the General page of the Settings tab (see [Livestreams tab](#livestreams-tab) and [Settings tab](#settings-tab))
+- Full view columns - Splits the streamers of each site panel into two columns when the window is wide enough, with the minimum column width set on the General page of the Settings tab (see [Livestreams tab](#livestreams-tab) and [Settings tab](#settings-tab))
 - Live first - Moves the streamers that are live to the top, in a **Live** panel in the normal view and at the start of the list in Compact view, turned on and off from the first entry of the sort list (see [Sorting](#sorting))
 - Sort order - Sorts the streamers by name, when they were added, when they were last live or their priority, in ascending or descending order, from a sort list that always shows the current sort order (see [Sorting](#sorting))
 - Group by site - Turns the grouping of the streamers by site on or off, in the normal view and in Compact view, from the second entry of the sort list (see [Sorting](#sorting))
@@ -132,6 +132,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Linux - jj-dlp adds a launcher entry and an icon file under `~/.local/share` at launch, so desktops that take the icon from a launcher entry show it (see [Settings](#settings))
 - Centered window - Opens in the center of the screen, and opens smaller when the window would not fit the screen, such as with a large display scale setting (see [Settings tab](#settings-tab))
 - Version number - Shown beside the jj-dlp title at the top of the window
+- UI scale - Scales the whole window so jj-dlp looks the same on small laptop screens and large monitors, chosen automatically from the monitor or set by hand on the General page of the Settings tab (see [Settings tab](#settings-tab))
 - Remember window size - Optionally reopens the window at the size it had when it was last closed (see [Settings tab](#settings-tab))
 - Single instance - Only one jj-dlp can run at a time (see [Single instance](#single-instance))
 - Settings folder option - `--config-dir=<path>` keeps the settings in another folder, so more than one jj-dlp can run at the same time (see [Command-line modes](#command-line-modes))
@@ -180,7 +181,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - A streamer that is live is not shown in its site panel while the panel is shown
 - Streamers - Grouped by site while **Group by site** is on, and not grouped by site while it is off (see [Sorting](#sorting))
     - Site panel - Only shown while **Group by site** is on and the site has at least one streamer. While **Live first** is on, only the streamers that are not live are counted, so a site whose streamers are all live has no panel until one of them goes offline
-    - Columns - When the window is at least the **Two column threshold** of the **FULL VIEW** section wide, the streamer rows of a site panel, and of the **Live** panel, are split into two columns, and into one column when it is narrower (see [Settings tab](#settings-tab))
+    - Columns - When the window is at least twice the **Column Width Min** of the **FULL VIEW** section wide, the streamer rows of a site panel, and of the **Live** panel, are split into two columns, and into one column when it is narrower (see [Settings tab](#settings-tab))
         - The site header stays across the full width of the panel, above the columns
         - The rows fill the left column first and then the right, so 5 streamers are shown as 3 and 2
         - A panel with one streamer stays in one column
@@ -266,13 +267,13 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - The text, chips, status dot, Record toggle and Remove button shrink along with the row
     - The row size follows the window height, so resizing the window changes it
     - The row size leaves room for the add streamer row
-- Columns - Three columns when the window is at least the **Three column threshold** wide, two columns when it is at least the **Two column threshold** wide, and one column when it is narrower
+- Columns - Three columns when the window is at least three times the **Column Width Min** wide, two columns when it is at least twice that wide, and one column when it is narrower
     - The number of streamers does not change the column count
     - With two columns, the streamers fill the left column first and then the right, so 5 streamers are shown as 3 and 2. With three columns they fill the columns in the same way, left to right
     - A single streamer fills the full width
     - Each column is outlined with a thin border. With more than one column, all borders are the same height, even when the last column has fewer streamers
     - Rows shrink toward the minimum size to fit in either layout, and the list scrolls when the rows do not fit
-- Row sizes, the column thresholds and the name length are set in the **COMPACT VIEW** section of the Compact view card on the Settings tab (see [Settings tab](#settings-tab))
+- Row sizes, the column width and the name length are set in the **COMPACT VIEW** section of the Compact view card on the Settings tab (see [Settings tab](#settings-tab))
 
 ## Sorting
 
@@ -1511,19 +1512,25 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - The drives you add are saved (see [Settings](#settings))
     - Compact view card - Has a **FULL VIEW** section and, under it, a **COMPACT VIEW** section. Changes apply immediately
         - **FULL VIEW** section - Sets when the normal view uses two columns (see [Livestreams tab](#livestreams-tab))
-            - Two column threshold - The window width from which the streamer rows of each site panel are split into two columns, from 700 to 2600 px in steps of 10. Narrower windows use one column. It is separate from the **Two column threshold** of the **COMPACT VIEW** section
-            - Reset button - Shown in the section header. Restores the threshold to its default
+            - Column Width Min - The narrowest a column may be, from 300 to 1300 px in steps of 10 (default 850). The streamer rows of each site panel are split into two columns when the window is at least twice this wide, and use one column when it is narrower. It is separate from the **Column Width Min** of the **COMPACT VIEW** section
+            - Reset button - Shown in the section header. Restores the width to its default
             - The value is saved when you release the slider
-        - **COMPACT VIEW** section - Sets how compact view sizes its rows, when it uses two or three columns and how long streamer names can be (see [Compact view](#compact-view))
+        - **COMPACT VIEW** section - Sets how compact view sizes its rows, how many columns it uses and how long streamer names can be (see [Compact view](#compact-view))
         - Maximum - The largest row height, from 15 to 48 px (default 31). Rows use this size while there is room
         - Minimum - The smallest row height, from 15 to 48 px (default 15). Rows never shrink below this size
-        - Two column threshold - The window width from which compact view uses two columns, from 700 to 2600 px in steps of 10. Narrower windows use one column
-        - Three column threshold - The window width from which compact view uses three columns, from 700 to 2600 px in steps of 10. Windows that are narrower, but at least the **Two column threshold** wide, use two columns
+        - Column Width Min - The narrowest a column may be, from 300 to 1300 px in steps of 10 (default 540). Compact view uses as many columns as fit at this width, up to three, and one column when the window is narrower than two columns
         - Name length - How many characters of a streamer name are shown before it is cut off with `…`, from 6 to 30. Hovering a shortened name shows the full name
 																		   
         - Maximum and Minimum stay in order: moving one past the other moves the other one with it
-        - Reset button - Shown in the header of the **COMPACT VIEW** section. Restores all five values to their defaults, and does not change the **FULL VIEW** section
+        - Reset button - Shown in the header of the **COMPACT VIEW** section. Restores all four values to their defaults, and does not change the **FULL VIEW** section
         - Values are saved when you release the slider
+    - Display card - Sets the scale of the whole window, so jj-dlp looks the same on small laptop screens and large monitors. Changes apply immediately
+        - Automatic UI scale - Picks the scale from the size of the monitor the window opens on, measured in the pixels the system gives to programs (default on). A 1920 × 1080 monitor is 100%, and the scale follows the monitor size from 80% to 150% in steps of 5%
+        - While it is on, the card shows the scale that is in use. The scale is checked each time jj-dlp starts, and the window is resized to the new scale the first time it changes
+        - Scale - Shown while **Automatic UI scale** is off. Sets the scale by hand, from 70% to 200% in steps of 5% (default 100%). It is applied when you release the slider
+        - The scale applies to the text, rows, buttons and the window size together, and the sizes in the **Compact view** card and the Window card are measured at the scale
+        - Reset button - Shown in the card header. Turns **Automatic UI scale** on and sets the manual scale to 100%
+        - The settings are saved right away
     - Updates card - Sets how jj-dlp checks for new releases (see [Updates](#updates)). Changes apply immediately
         - Check for updates automatically - Turn off to stop jj-dlp from contacting GitHub on its own (default on)
         - Include release candidates - Also offers pre-release versions such as `2.0.1-rc.1` (default off)
@@ -1541,7 +1548,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Buffer Length - How many messages the Log tab shows, from 100 to 5000 in steps of 100 (default 500)
         - Values are saved when you release the slider
         - Lowering it removes the oldest messages from the tab. The saved history in `ui.log.txt` is not changed
-    - The Compact view card is shown beside the Updates, Window and Log cards when the window is at least 1000 px wide. When it is narrower, the cards are stacked
+    - The Compact view card is shown beside the Display, Updates, Window and Log cards when the window is at least 1000 px wide. When it is narrower, the cards are stacked
 
 		   
 											   
@@ -1828,7 +1835,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - `sites.json` - Holds the sites, including each site's **Stream ended after (minutes)** setting, restart warning settings, command output setting, interrupt and error warning switches, flash warnings switch, interrupt and error patterns, site color, recording subfolder layout, recording file check times, split settings, upgrade quality setting, restart stalled recordings setting, quick check settings and notification settings. A field left blank is saved blank, and its default is applied when it is needed
     - `streamers.json` - Holds the streamers, including each streamer's log, subfolder, notification, split, auto-suffix, upgrade quality, quick check, intro delay, schedule and always record options, and the time each schedule last switched the streamer on and off. The order of the streamers in the file is the priority order (see [Priority](#priority))
     - `state.json` - Holds the number used for the next site or streamer you add
-    - `gui.json` - Holds the theme, the Compact view settings, the Full view two column threshold, the **Live first** setting, the **Group by site** setting, the sort option and the sort direction, the remembered window size, the Log tab buffer length, the **Wrap** setting of the Processes tab output, the **Wrap** setting of the Output sub-tab of the Log tab, the Files tab settings, the **Newest first** and card size settings of the Posts page, and the drives added to the Disk space card, their order and the Disk space display settings
+    - `gui.json` - Holds the theme, the Compact view settings, the Full view column width, the UI scale settings, the **Live first** setting, the **Group by site** setting, the sort option and the sort direction, the remembered window size, the Log tab buffer length, the **Wrap** setting of the Processes tab output, the **Wrap** setting of the Output sub-tab of the Log tab, the Files tab settings, the **Newest first** and card size settings of the Posts page, and the drives added to the Disk space card, their order and the Disk space display settings
     - `file_owners.json` - Holds the streamer and the site that each recorded file came from, used to group the files on the Files tab (see [Files tab](#files-tab))
     - `posts.json` - Holds the Posts sites, with their settings and accounts (see [Posts](#posts))
     - `posts_library.json` - Holds the posts that have been found, with whether each is viewed, starred or downloaded and where its file is (see [Posts](#posts))

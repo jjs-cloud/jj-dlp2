@@ -59,6 +59,7 @@ pub fn run(client: PolicyClient) -> iced::Result {
         .title("jj-dlp")
         .subscription(App::subscription)
         .theme(App::theme)
+        .scale_factor(App::scale_factor)
         .window(window_settings(win_w, win_h))
         .antialiasing(true)
         .run();
@@ -816,13 +817,15 @@ pub enum Msg {
     SetRowMin(f32),
     SetRowMax(f32),
     SaveRowRange,
-    SetTwoColWidth(f32),
-    SaveTwoColWidth,
-    SetThreeColWidth(f32),
-    SaveThreeColWidth,
-    SetFullTwoColWidth(f32),
-    SaveFullTwoColWidth,
+    SetCompactColWidth(f32),
+    SaveCompactColWidth,
+    SetFullColWidth(f32),
+    SaveFullColWidth,
     ResetFullView,
+    SetUiScaleAuto(bool),
+    SetUiScale(f32),
+    ApplyUiScale,
+    ResetUiScale,
     SetNameClip(f32),
     SaveNameClip,
     SetLogLines(f32),
@@ -833,6 +836,8 @@ pub enum Msg {
     Resized(Size),
     /// The monitor size and window position read at startup.
     FitWindow(window::Id, Size, Point),
+    /// Fits the window to the monitor (size, window centre) once a new UI scale is in effect.
+    ApplyFit(window::Id, Size, Point),
     UpdateClicked,
     UpdateCancel,
     UpdateConfirm,
@@ -997,9 +1002,12 @@ pub struct App {
     sort_asc: bool,
     row_min: f32,
     row_max: f32,
-    two_col_w: f32,
-    three_col_w: f32,
-    full_two_col_w: f32,
+    compact_col_w: f32,
+    full_col_w: f32,
+    ui_scale_auto: bool,
+    ui_scale: f32,
+    ui_scale_draft: f32,
+    auto_scale: f32,
     name_clip: f32,
     log_lines: f32,
     remember_size: bool,
@@ -1035,6 +1043,7 @@ impl App {
         client.send(PolicyCommand::RequestSnapshot);
         let (row_min, row_max) = prefs::load_row_range();
         let (win_w, win_h) = prefs::startup_window_size();
+        let (ui_scale_auto, ui_scale, auto_scale) = prefs::load_ui_scale();
         let mut app = App {
             client,
             settings: crate::settings::default_settings(),
@@ -1085,9 +1094,12 @@ impl App {
             sort_asc: prefs::load_sort().3,
             row_min,
             row_max,
-            two_col_w: prefs::load_two_col_width(),
-            three_col_w: prefs::load_three_col_width(),
-            full_two_col_w: prefs::load_full_two_col_width(),
+            compact_col_w: prefs::load_compact_col_width(),
+            full_col_w: prefs::load_full_col_width(),
+            ui_scale_auto,
+            ui_scale,
+            ui_scale_draft: ui_scale,
+            auto_scale,
             name_clip: prefs::load_name_clip(),
             log_lines: prefs::load_log_lines(),
             remember_size: prefs::load_remember_size(),
@@ -1127,6 +1139,36 @@ impl App {
 
     fn theme(&self) -> Theme {
         self.skin().theme()
+    }
+
+    /// The UI scale applied to the whole window.
+    fn scale_factor(&self) -> f32 {
+        prefs::effective_scale(self.ui_scale_auto, self.ui_scale, self.auto_scale)
+    }
+
+    /// Converts the window size to the new scale after a scale change, as the window itself keeps its size.
+    fn rescale(&mut self, old: f32) {
+        let new = self.scale_factor();
+        if new != old {
+            self.win_w *= old / new;
+            self.win_h *= old / new;
+            *LAST_SIZE.lock().unwrap() = Some((self.win_w, self.win_h));
+        }
+    }
+
+    /// Shrinks the window to fit a monitor of `mon` logical pixels, keeping its centre at `center`.
+    fn fit_window(&mut self, id: window::Id, mon: Size, center: Point, force: bool) -> Task<Msg> {
+        let scale = self.scale_factor();
+        let (w_px, h_px) = prefs::fit_to_monitor(self.win_w * scale, self.win_h * scale, mon.width, mon.height);
+        if !force && (w_px, h_px) == (self.win_w * scale, self.win_h * scale) {
+            return Task::none();
+        }
+        let (w, h) = (w_px / scale, h_px / scale);
+        self.win_w = w;
+        self.win_h = h;
+        *LAST_SIZE.lock().unwrap() = Some((w, h));
+        let top_left = Point::new(center.x - w_px / 2.0, center.y - h_px / 2.0);
+        Task::batch([window::resize(id, Size::new(w, h)), window::move_to(id, top_left)])
     }
 
     fn subscription(&self) -> Subscription<Msg> {
@@ -1664,21 +1706,41 @@ impl App {
                 self.row_min = self.row_min.min(self.row_max);
             }
             Msg::SaveRowRange => prefs::save_row_range(self.row_min, self.row_max),
-            Msg::SetTwoColWidth(v) => {
-                self.two_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
+            Msg::SetCompactColWidth(v) => {
+                self.compact_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::COL_W_MIN_LIMIT, prefs::COL_W_MAX_LIMIT);
             }
-            Msg::SaveTwoColWidth => prefs::save_two_col_width(self.two_col_w),
-            Msg::SetThreeColWidth(v) => {
-                self.three_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
+            Msg::SaveCompactColWidth => prefs::save_compact_col_width(self.compact_col_w),
+            Msg::SetFullColWidth(v) => {
+                self.full_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::COL_W_MIN_LIMIT, prefs::COL_W_MAX_LIMIT);
             }
-            Msg::SaveThreeColWidth => prefs::save_three_col_width(self.three_col_w),
-            Msg::SetFullTwoColWidth(v) => {
-                self.full_two_col_w = ((v / 10.0).round() * 10.0).clamp(prefs::TWO_COL_MIN_LIMIT, prefs::TWO_COL_MAX_LIMIT);
-            }
-            Msg::SaveFullTwoColWidth => prefs::save_full_two_col_width(self.full_two_col_w),
+            Msg::SaveFullColWidth => prefs::save_full_col_width(self.full_col_w),
             Msg::ResetFullView => {
-                self.full_two_col_w = prefs::FULL_TWO_COL_DEFAULT;
-                prefs::save_full_two_col_width(self.full_two_col_w);
+                self.full_col_w = prefs::FULL_COL_W_DEFAULT;
+                prefs::save_full_col_width(self.full_col_w);
+            }
+            Msg::SetUiScaleAuto(on) => {
+                let old = self.scale_factor();
+                self.ui_scale_auto = on;
+                prefs::save_ui_scale_auto(on);
+                self.rescale(old);
+            }
+            Msg::SetUiScale(v) => {
+                self.ui_scale_draft = ((v * 20.0).round() / 20.0).clamp(prefs::UI_SCALE_MIN, prefs::UI_SCALE_MAX);
+            }
+            Msg::ApplyUiScale => {
+                let old = self.scale_factor();
+                self.ui_scale = self.ui_scale_draft;
+                prefs::save_ui_scale(self.ui_scale);
+                self.rescale(old);
+            }
+            Msg::ResetUiScale => {
+                let old = self.scale_factor();
+                self.ui_scale_auto = true;
+                self.ui_scale = prefs::UI_SCALE_DEFAULT;
+                self.ui_scale_draft = prefs::UI_SCALE_DEFAULT;
+                prefs::save_ui_scale_auto(true);
+                prefs::save_ui_scale(self.ui_scale);
+                self.rescale(old);
             }
             Msg::SetNameClip(v) => {
                 self.name_clip = v.round().clamp(prefs::NAME_CLIP_MIN_LIMIT, prefs::NAME_CLIP_MAX_LIMIT);
@@ -1711,21 +1773,28 @@ impl App {
             Msg::ResetRowRange => {
                 self.row_min = prefs::ROW_MIN_DEFAULT;
                 self.row_max = prefs::ROW_MAX_DEFAULT;
-                self.two_col_w = prefs::TWO_COL_DEFAULT;
-                self.three_col_w = prefs::THREE_COL_DEFAULT;
+                self.compact_col_w = prefs::COMPACT_COL_W_DEFAULT;
                 self.name_clip = prefs::NAME_CLIP_DEFAULT;
                 prefs::save_row_range(self.row_min, self.row_max);
-                prefs::save_two_col_width(self.two_col_w);
-                prefs::save_three_col_width(self.three_col_w);
+                prefs::save_compact_col_width(self.compact_col_w);
                 prefs::save_name_clip(self.name_clip);
             }
             Msg::FitWindow(id, monitor, pos) => {
-                let (w, h) = prefs::fit_to_monitor(self.win_w, self.win_h, monitor.width, monitor.height);
-                if (w, h) != (self.win_w, self.win_h) {
-                    let moved = Point::new(pos.x + (self.win_w - w) / 2.0, pos.y + (self.win_h - h) / 2.0);
-                    return Task::batch([window::resize(id, Size::new(w, h)), window::move_to(id, moved)]);
+                let scale = self.scale_factor();
+                let mon = Size::new(monitor.width * scale, monitor.height * scale);
+                let center = Point::new(pos.x + self.win_w * scale / 2.0, pos.y + self.win_h * scale / 2.0);
+                let target = prefs::auto_scale(mon.width, mon.height);
+                if target != self.auto_scale {
+                    self.auto_scale = target;
+                    prefs::save_auto_scale(target);
+                    if self.ui_scale_auto {
+                        let wait = tokio::time::sleep(Duration::from_millis(150));
+                        return Task::perform(wait, move |_| Msg::ApplyFit(id, mon, center));
+                    }
                 }
+                return self.fit_window(id, mon, center, false);
             }
+            Msg::ApplyFit(id, mon, center) => return self.fit_window(id, mon, center, true),
             Msg::Resized(size) => {
                 self.minimized = size.width < 1.0 || size.height < 1.0;
                 if self.minimized {

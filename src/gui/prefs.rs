@@ -8,11 +8,17 @@ pub const ROW_MIN_LIMIT: f32 = 15.0;
 pub const ROW_MAX_LIMIT: f32 = 48.0;
 pub const ROW_MIN_DEFAULT: f32 = 15.0;
 pub const ROW_MAX_DEFAULT: f32 = 31.0;
-pub const TWO_COL_MIN_LIMIT: f32 = 700.0;
-pub const TWO_COL_MAX_LIMIT: f32 = 2600.0;
-pub const TWO_COL_DEFAULT: f32 = 1080.0;
-pub const THREE_COL_DEFAULT: f32 = 1700.0;
-pub const FULL_TWO_COL_DEFAULT: f32 = 1700.0;
+pub const COL_W_MIN_LIMIT: f32 = 300.0;
+pub const COL_W_MAX_LIMIT: f32 = 1300.0;
+pub const COMPACT_COL_W_DEFAULT: f32 = 540.0;
+pub const FULL_COL_W_DEFAULT: f32 = 850.0;
+pub const UI_SCALE_MIN: f32 = 0.7;
+pub const UI_SCALE_MAX: f32 = 2.0;
+pub const UI_SCALE_DEFAULT: f32 = 1.0;
+const AUTO_SCALE_MIN: f32 = 0.8;
+const AUTO_SCALE_MAX: f32 = 1.5;
+const AUTO_REF_W: f32 = 1920.0;
+const AUTO_REF_H: f32 = 1080.0;
 pub const NAME_CLIP_MIN_LIMIT: f32 = 6.0;
 pub const NAME_CLIP_MAX_LIMIT: f32 = 30.0;
 pub const NAME_CLIP_DEFAULT: f32 = 16.0;
@@ -110,9 +116,11 @@ struct Prefs {
     compact: bool,
     row_min: f32,
     row_max: f32,
-    two_col_w: f32,
-    three_col_w: f32,
-    full_two_col_w: f32,
+    compact_col_w: f32,
+    full_col_w: f32,
+    ui_scale_auto: bool,
+    ui_scale: f32,
+    auto_scale: f32,
     name_clip: f32,
     log_lines: f32,
     remember_size: bool,
@@ -161,9 +169,11 @@ impl Default for FilesPrefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { live_first: true, group_by_site: false, sort_key: SortKey::LastLive.id().to_string(), sort_asc: false, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, two_col_w: TWO_COL_DEFAULT,
-            three_col_w: THREE_COL_DEFAULT,
-            full_two_col_w: FULL_TWO_COL_DEFAULT,
+        Prefs { live_first: true, group_by_site: false, sort_key: SortKey::LastLive.id().to_string(), sort_asc: false, theme: String::new(), compact: false, row_min: ROW_MIN_DEFAULT, row_max: ROW_MAX_DEFAULT, compact_col_w: COMPACT_COL_W_DEFAULT,
+            full_col_w: FULL_COL_W_DEFAULT,
+            ui_scale_auto: true,
+            ui_scale: UI_SCALE_DEFAULT,
+            auto_scale: UI_SCALE_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,
             log_lines: LOG_LINES_DEFAULT,
             remember_size: false,
@@ -218,7 +228,6 @@ fn reset_prefs(prefs: &mut Prefs, resets: &[&Reset]) -> Vec<String> {
             Key::GuiCompact => ("compact", reset_field(&mut prefs.compact, d.compact, w)),
             Key::GuiRowMin => ("row_min", reset_field(&mut prefs.row_min, d.row_min, w)),
             Key::GuiRowMax => ("row_max", reset_field(&mut prefs.row_max, d.row_max, w)),
-            Key::GuiTwoColWidth => ("two_col_w", reset_field(&mut prefs.two_col_w, d.two_col_w, w)),
             Key::GuiNameClip => ("name_clip", reset_field(&mut prefs.name_clip, d.name_clip, w)),
             Key::GuiLogLines => ("log_lines", reset_field(&mut prefs.log_lines, d.log_lines, w)),
             Key::GuiRememberSize => ("remember_size", reset_field(&mut prefs.remember_size, d.remember_size, w)),
@@ -360,40 +369,67 @@ pub fn save_row_range(min: f32, max: f32) {
     write(&prefs);
 }
 
-/// Reads the saved window width from which compact view may use two columns.
-pub fn load_two_col_width() -> f32 {
-    read().two_col_w.clamp(TWO_COL_MIN_LIMIT, TWO_COL_MAX_LIMIT)
+/// Reads the saved minimum column width of compact view, clamped to the allowed limits.
+pub fn load_compact_col_width() -> f32 {
+    read().compact_col_w.clamp(COL_W_MIN_LIMIT, COL_W_MAX_LIMIT)
 }
 
-/// Saves the window width from which compact view may use two columns.
-pub fn save_two_col_width(width: f32) {
+/// Saves the minimum column width of compact view.
+pub fn save_compact_col_width(width: f32) {
     let mut prefs = read();
-    prefs.two_col_w = width;
+    prefs.compact_col_w = width;
     write(&prefs);
 }
 
-/// Reads the saved window width from which compact view may use three columns.
-pub fn load_three_col_width() -> f32 {
-    read().three_col_w.clamp(TWO_COL_MIN_LIMIT, TWO_COL_MAX_LIMIT)
+/// Reads the saved minimum column width of full view, clamped to the allowed limits.
+pub fn load_full_col_width() -> f32 {
+    read().full_col_w.clamp(COL_W_MIN_LIMIT, COL_W_MAX_LIMIT)
 }
 
-/// Saves the window width from which compact view may use three columns.
-pub fn save_three_col_width(width: f32) {
+/// Saves the minimum column width of full view.
+pub fn save_full_col_width(width: f32) {
     let mut prefs = read();
-    prefs.three_col_w = width;
+    prefs.full_col_w = width;
     write(&prefs);
 }
 
-/// Reads the saved window width from which full view uses two columns.
-pub fn load_full_two_col_width() -> f32 {
-    read().full_two_col_w.clamp(TWO_COL_MIN_LIMIT, TWO_COL_MAX_LIMIT)
+/// Reads the saved UI scale: automatic on or off, the manual scale and the last automatic scale.
+pub fn load_ui_scale() -> (bool, f32, f32) {
+    let p = read();
+    (p.ui_scale_auto, p.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX), p.auto_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX))
 }
 
-/// Saves the window width from which full view uses two columns.
-pub fn save_full_two_col_width(width: f32) {
+/// Saves whether the UI scale is chosen automatically.
+pub fn save_ui_scale_auto(on: bool) {
     let mut prefs = read();
-    prefs.full_two_col_w = width;
+    prefs.ui_scale_auto = on;
     write(&prefs);
+}
+
+/// Saves the manual UI scale.
+pub fn save_ui_scale(scale: f32) {
+    let mut prefs = read();
+    prefs.ui_scale = scale;
+    write(&prefs);
+}
+
+/// Saves the last automatic UI scale.
+pub fn save_auto_scale(scale: f32) {
+    let mut prefs = read();
+    prefs.auto_scale = scale;
+    write(&prefs);
+}
+
+/// The UI scale in use: the automatic one when `auto` is on, else the manual one.
+pub fn effective_scale(auto: bool, manual: f32, automatic: f32) -> f32 {
+    let scale = if auto { automatic } else { manual };
+    scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX)
+}
+
+/// The automatic UI scale for a monitor of `monitor_w` x `monitor_h` logical pixels, 1.0 at 1920 x 1080.
+pub fn auto_scale(monitor_w: f32, monitor_h: f32) -> f32 {
+    let raw = (monitor_w / AUTO_REF_W).min(monitor_h / AUTO_REF_H);
+    ((raw * 20.0).round() / 20.0).clamp(AUTO_SCALE_MIN, AUTO_SCALE_MAX)
 }
 
 /// Reads the saved compact-view name length limit.
@@ -491,6 +527,22 @@ mod tests {
         assert_eq!(fit_to_monitor(1180.0, 845.0, 1280.0, 720.0), (1180.0, 620.0));
         assert_eq!(fit_to_monitor(1180.0, 845.0, 1920.0, 1080.0), (1180.0, 845.0));
         assert_eq!(fit_to_monitor(1180.0, 845.0, 500.0, 300.0), (WIN_MIN_W, WIN_MIN_H));
+    }
+
+    #[test]
+    fn auto_scale_follows_the_monitor_and_stays_in_range() {
+        assert_eq!(auto_scale(1920.0, 1080.0), 1.0);
+        assert_eq!(auto_scale(2560.0, 1440.0), 1.35);
+        assert_eq!(auto_scale(2048.0, 1152.0), 1.05);
+        assert_eq!(auto_scale(1280.0, 720.0), 0.8);
+        assert_eq!(auto_scale(3840.0, 2160.0), 1.5);
+    }
+
+    #[test]
+    fn effective_scale_picks_automatic_or_manual_within_limits() {
+        assert_eq!(effective_scale(true, 1.2, 1.35), 1.35);
+        assert_eq!(effective_scale(false, 1.2, 1.35), 1.2);
+        assert_eq!(effective_scale(false, 5.0, 1.0), UI_SCALE_MAX);
     }
 
     #[test]

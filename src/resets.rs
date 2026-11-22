@@ -74,7 +74,6 @@ pub enum Key {
     GuiCompact,
     GuiRowMin,
     GuiRowMax,
-    GuiTwoColWidth,
     GuiNameClip,
     GuiLogLines,
     GuiRememberSize,

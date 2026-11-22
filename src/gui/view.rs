@@ -665,7 +665,7 @@ impl App {
 
     /// Adds the streamer rows to a panel, in two columns when the window is wide enough.
     fn push_streamers<'a>(&'a self, s: Skin, mut top: Column<'a, Msg>, streamers: Vec<&'a Streamer>) -> Column<'a, Msg> {
-        if self.win_w >= self.full_two_col_w && streamers.len() > 1 {
+        if self.win_w >= 2.0 * self.full_col_w && streamers.len() > 1 {
             let per_col = streamers.len().div_ceil(2);
             let mut grid = Row::new().spacing(12).align_y(Alignment::Start);
             for chunk in streamers.chunks(per_col) {
@@ -710,16 +710,10 @@ impl App {
         .into()
     }
 
-    /// Picks three or two columns when the window is at least that threshold wide, else one; sizes rows to fit.
+    /// Picks one to three columns that are each at least the minimum column width wide; sizes rows to fit.
     fn compact_layout(&self, rows: usize, extra_h: f32) -> (usize, f32) {
         let avail = (self.win_h - COMPACT_CHROME_H - COMPACT_SLACK_H - extra_h - 2.0 * COLUMN_FRAME).max(0.0);
-        let cols = if self.win_w >= self.three_col_w {
-            3
-        } else if self.win_w >= self.two_col_w {
-            2
-        } else {
-            1
-        };
+        let cols = ((self.win_w / self.compact_col_w) as usize).clamp(1, 3);
         let per_col = rows.div_ceil(cols).max(1);
         let fit = ((avail + ROW_GAP) / per_col as f32 - ROW_GAP).floor();
         (cols, fit.clamp(self.row_min, self.row_max))
@@ -2054,31 +2048,17 @@ impl App {
             .spacing(12)
             .align_y(Alignment::Center)
         };
-        let two_col = row![
-            t(&s, "Two column threshold").size(13).width(150),
+        let compact_col = row![
+            t(&s, "Column Width Min").size(13).width(150),
             slider(
-                prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
-                self.two_col_w,
-                Msg::SetTwoColWidth
+                prefs::COL_W_MIN_LIMIT..=prefs::COL_W_MAX_LIMIT,
+                self.compact_col_w,
+                Msg::SetCompactColWidth
             )
             .step(10.0_f32)
-            .on_release(Msg::SaveTwoColWidth)
+            .on_release(Msg::SaveCompactColWidth)
             .width(Length::Fill),
-            muted(&s, format!("{:.0} px", self.two_col_w)).width(90),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center);
-        let three_col = row![
-            t(&s, "Three column threshold").size(13).width(150),
-            slider(
-                prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
-                self.three_col_w,
-                Msg::SetThreeColWidth
-            )
-            .step(10.0_f32)
-            .on_release(Msg::SaveThreeColWidth)
-            .width(Length::Fill),
-            muted(&s, format!("{:.0} px", self.three_col_w)).width(90),
+            muted(&s, format!("{:.0} px", self.compact_col_w)).width(90),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
@@ -2106,17 +2086,17 @@ impl App {
         ]
         .spacing(12)
         .align_y(Alignment::Center);
-        let full_two_col = row![
-            t(&s, "Two column threshold").size(13).width(150),
+        let full_col = row![
+            t(&s, "Column Width Min").size(13).width(150),
             slider(
-                prefs::TWO_COL_MIN_LIMIT..=prefs::TWO_COL_MAX_LIMIT,
-                self.full_two_col_w,
-                Msg::SetFullTwoColWidth
+                prefs::COL_W_MIN_LIMIT..=prefs::COL_W_MAX_LIMIT,
+                self.full_col_w,
+                Msg::SetFullColWidth
             )
             .step(10.0_f32)
-            .on_release(Msg::SaveFullTwoColWidth)
+            .on_release(Msg::SaveFullColWidth)
             .width(Length::Fill),
-            muted(&s, format!("{:.0} px", self.full_two_col_w)).width(90),
+            muted(&s, format!("{:.0} px", self.full_col_w)).width(90),
         ]
         .spacing(12)
         .align_y(Alignment::Center);
@@ -2130,7 +2110,7 @@ impl App {
                     .style(skin::btn(s, BtnKind::Ghost)),
             ]
             .align_y(Alignment::Center),
-            full_two_col,
+            full_col,
             Space::new().height(8),
             row![
                 self.section_title(s, "COMPACT VIEW"),
@@ -2143,8 +2123,7 @@ impl App {
             .align_y(Alignment::Center),
             row_size("Row Size Max", self.row_max, Msg::SetRowMax),
             row_size("Row Size Min", self.row_min, Msg::SetRowMin),
-            two_col,
-            three_col,
+            compact_col,
             name_clip,
         ]
         .spacing(8);
@@ -2196,15 +2175,50 @@ impl App {
         ]
         .spacing(8);
 
+        let ui_scale_row: Element<'_, Msg> = if self.ui_scale_auto {
+            muted(&s, format!("Using {:.0}% for this monitor.", self.auto_scale * 100.0)).into()
+        } else {
+            row![
+                t(&s, "Scale").size(13).width(150),
+                slider(prefs::UI_SCALE_MIN..=prefs::UI_SCALE_MAX, self.ui_scale_draft, Msg::SetUiScale)
+                    .step(0.05_f32)
+                    .on_release(Msg::ApplyUiScale)
+                    .width(Length::Fill),
+                muted(&s, format!("{:.0}%", self.ui_scale_draft * 100.0)).width(90),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .into()
+        };
+        let display = column![
+            row![
+                self.section_title(s, "DISPLAY"),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Reset").size(12))
+                    .on_press(Msg::ResetUiScale)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
+            toggler(self.ui_scale_auto)
+                .label("Automatic UI scale")
+                .on_toggle(Msg::SetUiScaleAuto)
+                .text_size(12),
+            ui_scale_row,
+            muted(&s, "Scales the whole window. Automatic sizes it for the monitor the window opens on."),
+        ]
+        .spacing(8);
+
         let compact = card_box(s, compact);
+        let display = card_box(s, display);
         let updates = card_box(s, updates);
         let window = card_box(s, window);
         let log_card = card_box(s, log_card);
         if self.win_w >= 1000.0 {
-            let right = column![updates, window, log_card].spacing(12).width(Length::Fill);
+            let right = column![display, updates, window, log_card].spacing(12).width(Length::Fill);
             col = col.push(row![compact, right].spacing(12));
         } else {
-            col = col.push(compact).push(updates).push(window).push(log_card);
+            col = col.push(compact).push(display).push(updates).push(window).push(log_card);
         }
         scrollable(col).height(Length::Fill).into()
     }
