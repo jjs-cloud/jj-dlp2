@@ -369,12 +369,16 @@ impl App {
         iced::widget::operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y })
     }
 
-    /// Scrolls the selected row to the middle of the visible list.
+    /// Centres the selected row in the list when it would be outside the visible area.
     fn files_center(&mut self) -> Task<Msg> {
         let Some(sel) = &self.files.sel else { return Task::none() };
         let Some(i) = rows::row_index(&self.files.rows, sel) else { return Task::none() };
         let h = self.files_view_h();
         let max = (self.files.rows.len() as f32 * ROW_H - h).max(0.0);
+        let (top, off) = (i as f32 * ROW_H, self.files.scroll_y.min(max));
+        if top >= off && top + ROW_H <= off + h {
+            return Task::none();
+        }
         let y = ((i as f32 + 0.5) * ROW_H - h / 2.0).clamp(0.0, max);
         self.files.scroll_y = y;
         iced::widget::operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y })

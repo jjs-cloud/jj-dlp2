@@ -1284,7 +1284,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Refresh - The list is refreshed every second while the tab is open and something is recording, being written or being moved, and less often while nothing is
         - The selection stays on the same item. When the selected file is gone, the selection moves to the next one in the list
         - With **Group by** set to anything other than **None**, the selection moves to the next file in the same group (folder, streamer or site), or to the previous file when it was the last one in the group. It only leaves the group when no file is left in it
-        - After a file is deleted, or is gone because a move finished, the list scrolls so the new selection is in the middle of the visible part of the list. It stops at the top or bottom of the list when there are not enough rows to centre it
+        - After a file is deleted, or is gone because a move finished, the list scrolls only when the new selection would be outside the visible part of the list, and puts it in the middle. It stops at the top or bottom of the list when there are not enough rows to centre it. A selection that is already visible does not move the list
     - Moving - While a move is writing its new file, a `MOVING` row shows the new file's name, `WRITING`, its size and its rate. It cannot be selected
     - Footer - The number of files, their total size, and a reminder of the keys, including the keys that move the selection
 - Selecting - Click a row to select it, and double-click a file to open it
