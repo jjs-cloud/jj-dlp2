@@ -182,7 +182,8 @@ impl FilesState {
         });
     }
 
-    fn rebuild(&mut self) {
+    /// Rebuilds the rows; returns true when the selection moved to another item.
+    fn rebuild(&mut self) -> bool {
         self.stale = false;
         self.built_owners = owners::version();
         self.who = if self.group.is_virtual() {
@@ -192,8 +193,11 @@ impl FilesState {
             HashMap::new()
         };
         let rows = rows::build_rows(&self.roots, &self.records, self.sort, self.group, &self.who, &self.collapsed, Instant::now());
-        self.sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group != GroupBy::None);
+        let sel = rows::keep_selection(&self.rows, self.sel.as_ref(), &rows, self.group != GroupBy::None);
+        let moved = sel != self.sel;
+        self.sel = sel;
         self.rows = rows;
+        moved
     }
 
     fn say(&mut self, msg: impl Into<String>) {
@@ -365,6 +369,17 @@ impl App {
         iced::widget::operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y })
     }
 
+    /// Scrolls the selected row to the middle of the visible list.
+    fn files_center(&mut self) -> Task<Msg> {
+        let Some(sel) = &self.files.sel else { return Task::none() };
+        let Some(i) = rows::row_index(&self.files.rows, sel) else { return Task::none() };
+        let h = self.files_view_h();
+        let max = (self.files.rows.len() as f32 * ROW_H - h).max(0.0);
+        let y = ((i as f32 + 0.5) * ROW_H - h / 2.0).clamp(0.0, max);
+        self.files.scroll_y = y;
+        iced::widget::operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y })
+    }
+
     pub(super) fn files_view_h(&self) -> f32 {
         if self.files.view_h > 0.0 { self.files.view_h } else { (self.win_h - 330.0).max(ROW_H * 4.0) }
     }
@@ -427,10 +442,7 @@ impl App {
                 self.files_reveal_selected();
                 Task::none()
             }
-            Key::Named(Named::Delete) => {
-                self.files_delete(modifiers.shift());
-                Task::none()
-            }
+            Key::Named(Named::Delete) => self.files_delete(modifiers.shift()),
             _ => Task::none(),
         }
     }
@@ -469,17 +481,20 @@ impl App {
         }
     }
 
-    fn files_delete(&mut self, permanent: bool) {
-        let Some(Sel::File(path)) = self.files.sel.clone() else { return };
+    fn files_delete(&mut self, permanent: bool) -> Task<Msg> {
+        let Some(Sel::File(path)) = self.files.sel.clone() else { return Task::none() };
         if self.files.job_for(&path).is_some() {
             self.files.say("That file has a job running - cancel it first");
-            return;
+            return Task::none();
         }
         let mode = if permanent { DeleteMode::Permanent } else { DeleteMode::Trash };
         let root = self.files.records.get(&path).map(|r| r.root.clone());
         let name = file_name(&path).into_owned();
         match ops::delete(&path, mode) {
-            Err(e) => self.files.say(format!("Delete failed: {e}")),
+            Err(e) => {
+                self.files.say(format!("Delete failed: {e}"));
+                Task::none()
+            }
             Ok(()) => {
                 self.files.records.remove(&path);
                 let note = match (self.files.delete_empty, root, path.parent()) {
@@ -489,6 +504,7 @@ impl App {
                 self.files.rebuild();
                 let how = if permanent { "Deleted permanently" } else { "Moved to recycle bin" };
                 self.files.say(format!("{how}: {name}{note}"));
+                self.files_center()
             }
         }
     }
@@ -548,7 +564,10 @@ impl App {
                 let writing = f.records.values().filter(|r| r.writing(now)).count();
                 if changed || f.stale || writing != f.built_writing || owners::version() != f.built_owners {
                     f.built_writing = writing;
-                    f.rebuild();
+                    let had_sel = f.sel.is_some();
+                    if f.rebuild() && had_sel {
+                        task = self.files_center();
+                    }
                 }
             }
             FilesMsg::Key(ev) => task = self.files_key(ev),
@@ -598,7 +617,7 @@ impl App {
                 }
             }
             FilesMsg::RevealSelected => self.files_reveal_selected(),
-            FilesMsg::DeleteSelected => self.files_delete(false),
+            FilesMsg::DeleteSelected => task = self.files_delete(false),
             FilesMsg::OpenPanel(kind) => {
                 if self.files.panel.as_ref().map(Panel::kind) == Some(kind) {
                     self.files.panel = None;
