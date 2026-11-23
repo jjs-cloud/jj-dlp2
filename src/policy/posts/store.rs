@@ -52,6 +52,19 @@ pub fn load_config() -> PostsConfig {
     read_json(&path).unwrap_or_default()
 }
 
+/// Reads posts.json without pausing saving; `None` when it is missing or invalid.
+pub fn read_config_quiet() -> Option<PostsConfig> {
+    serde_json::from_str(&std::fs::read_to_string(path_in_config("posts.json")).ok()?).ok()
+}
+
+/// Writes posts.json immediately via a temp file.
+pub fn write_config_now(cfg: &PostsConfig) -> std::io::Result<()> {
+    let path = path_in_config("posts.json");
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?)?;
+    std::fs::rename(&tmp, path)
+}
+
 /// Queues the config for the background writer unless saving is paused.
 pub fn save_config(cfg: PostsConfig) {
     if GUARD.reason().is_none() {

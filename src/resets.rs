@@ -2,6 +2,7 @@
 
 use crate::api::{FolderLayout, Settings, Site, Streamer, StreamerOptions};
 use crate::gui::prefs;
+use crate::policy::posts::{self, PostSite, PostsConfig, Preset as PostsPreset};
 use crate::policy::update::{self, UpdateConfig};
 use crate::policy::{new_site, preset_for_name, Preset};
 use crate::settings;
@@ -11,12 +12,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Config revision of this build; bump it whenever entries are added to `RESETS`.
-pub const CONFIG_REV: u32 = 1;
+pub const CONFIG_REV: u32 = 2;
 
 /// Resets to apply; each entry's `rev` is the `CONFIG_REV` it was added at (always above 1).
 pub const RESETS: &[Reset] = &[
-    // Reset::always(2, Key::SiteIntervalSecs),
-    // Reset::if_equals(2, Key::SiteCheckerArgs, Val::Text("--old-args {urls}")),
+    // Reset::always(3, Key::SiteIntervalSecs),
+    // Reset::if_equals(3, Key::SiteCheckerArgs, Val::Text("--old-args {urls}")),
+    // Turns "Use TikTok Photos scraper" on for the TikTok posts site.
+    Reset::if_equals(2, Key::PostsUseTiktokPhotos, Val::Flag(false)),
 ];
 
 /// A previously stored value to match; `Unset` matches a blank (`None`) field.
@@ -39,7 +42,7 @@ pub enum When {
     IfEquals(Val),
 }
 
-/// A resettable setting; site and streamer keys apply to every site or streamer.
+/// A resettable setting; site, posts site and streamer keys apply to every one of them.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -62,6 +65,30 @@ pub enum Key {
     SiteWarningClearMinutes,
     SiteRestartThreshold,
     SiteColor,
+    // Posts site fields; the first group re-applies the name-matched posts template, the rest use the default.
+    PostsCheckerArgs,
+    PostsDownloadArgs,
+    PostsUrlTemplate,
+    PostsUseXScraper,
+    PostsUseTiktokPhotos,
+    PostsAutoDownload,
+    PostsAutoDownloadLimitMb,
+    PostsAutoDownloadSecs,
+    PostsBackfill,
+    PostsOpenM3u8,
+    PostsAutoDeleteDays,
+    PostsExePath,
+    PostsIntervalSecs,
+    PostsOutputDir,
+    PostsMarkOnOpen,
+    PostsNotify,
+    PostsNotifyDesktop,
+    PostsNotifyNtfy,
+    PostsNtfyTopic,
+    PostsM3u8Args,
+    PostsPlayerPath,
+    PostsLogDownloadStdout,
+    PostsLogDownloadStderr,
     // Streamer options.
     StreamerLogStdout,
     StreamerLogStderr,
@@ -253,6 +280,71 @@ fn reset_streamer(streamer: &mut Streamer, key: Key, when: &When) -> Option<Stri
     }
 }
 
+/// The posts template named like the site, if any.
+fn post_preset_for(site: &PostSite) -> Option<PostSite> {
+    let preset = PostsPreset::from_name(&site.name);
+    (preset != PostsPreset::Blank).then(|| PostSite::from_preset(preset))
+}
+
+fn reset_post_site(site: &mut PostSite, key: Key, when: &When) -> Option<String> {
+    let d = PostSite::default();
+    let p = post_preset_for(site);
+    match key {
+        Key::PostsCheckerArgs => reset_preset(&mut site.checker_args, p.map(|p| p.checker_args), "checker_args", when),
+        Key::PostsDownloadArgs => reset_preset(&mut site.download_args, p.map(|p| p.download_args), "download_args", when),
+        Key::PostsUrlTemplate => reset_preset(&mut site.url_template, p.map(|p| p.url_template), "url_template", when),
+        Key::PostsUseXScraper => reset_preset(&mut site.use_x_scraper, p.map(|p| p.use_x_scraper), "use_x_scraper", when),
+        Key::PostsUseTiktokPhotos => {
+            reset_preset(&mut site.use_tiktok_photos, p.map(|p| p.use_tiktok_photos), "use_tiktok_photos", when)
+        }
+        Key::PostsAutoDownload => reset_preset(&mut site.auto_download, p.map(|p| p.auto_download), "auto_download", when),
+        Key::PostsAutoDownloadLimitMb => reset_preset(
+            &mut site.auto_download_limit_mb,
+            p.map(|p| p.auto_download_limit_mb),
+            "auto_download_limit_mb",
+            when,
+        ),
+        Key::PostsAutoDownloadSecs => {
+            reset_preset(&mut site.auto_download_secs, p.map(|p| p.auto_download_secs), "auto_download_secs", when)
+        }
+        Key::PostsBackfill => reset_preset(&mut site.backfill, p.map(|p| p.backfill), "backfill", when),
+        Key::PostsOpenM3u8 => reset_preset(&mut site.open_m3u8, p.map(|p| p.open_m3u8), "open_m3u8", when),
+        Key::PostsAutoDeleteDays => {
+            reset_preset(&mut site.auto_delete_days, p.map(|p| p.auto_delete_days), "auto_delete_days", when)
+        }
+        Key::PostsExePath => describe("exe_path", reset_field(&mut site.exe_path, d.exe_path, when)),
+        Key::PostsIntervalSecs => describe("interval_secs", reset_field(&mut site.interval_secs, d.interval_secs, when)),
+        Key::PostsOutputDir => describe("output_dir", reset_field(&mut site.output_dir, d.output_dir, when)),
+        Key::PostsMarkOnOpen => describe("mark_on_open", reset_field(&mut site.mark_on_open, d.mark_on_open, when)),
+        Key::PostsNotify => describe("notify", reset_field(&mut site.notify, d.notify, when)),
+        Key::PostsNotifyDesktop => describe("notify_desktop", reset_field(&mut site.notify_desktop, d.notify_desktop, when)),
+        Key::PostsNotifyNtfy => describe("notify_ntfy", reset_field(&mut site.notify_ntfy, d.notify_ntfy, when)),
+        Key::PostsNtfyTopic => describe("ntfy_topic", reset_field(&mut site.ntfy_topic, d.ntfy_topic, when)),
+        Key::PostsM3u8Args => describe("m3u8_args", reset_field(&mut site.m3u8_args, d.m3u8_args, when)),
+        Key::PostsPlayerPath => describe("player_path", reset_field(&mut site.player_path, d.player_path, when)),
+        Key::PostsLogDownloadStdout => {
+            describe("log_download_stdout", reset_field(&mut site.log_download_stdout, d.log_download_stdout, when))
+        }
+        Key::PostsLogDownloadStderr => {
+            describe("log_download_stderr", reset_field(&mut site.log_download_stderr, d.log_download_stderr, when))
+        }
+        _ => None,
+    }
+}
+
+/// Applies the posts.json resets in memory; returns log lines.
+fn reset_posts(cfg: &mut PostsConfig, resets: &[&Reset]) -> Vec<String> {
+    let mut log = Vec::new();
+    for r in resets {
+        for site in &mut cfg.sites {
+            if let Some(m) = reset_post_site(site, r.key, &r.when) {
+                log.push(format!("posts site '{}' {m}", site.name));
+            }
+        }
+    }
+    log
+}
+
 /// Applies the settings, site and streamer resets in memory; returns log lines.
 fn reset_settings(s: &mut Settings, resets: &[&Reset]) -> Vec<String> {
     let mut log = Vec::new();
@@ -336,6 +428,15 @@ fn apply(pending: &[&Reset]) -> (Vec<String>, bool) {
         match saved {
             Ok(()) => log.extend(lines),
             Err(e) => failed(&mut log, &mut ok, "settings", e),
+        }
+    }
+    if let Some(mut cfg) = posts::read_config_quiet() {
+        let before = cfg.clone();
+        let lines = reset_posts(&mut cfg, pending);
+        let saved = if cfg != before { posts::write_config_now(&cfg) } else { Ok(()) };
+        match saved {
+            Ok(()) => log.extend(lines),
+            Err(e) => failed(&mut log, &mut ok, "posts.json", e),
         }
     }
     let mut cfg = update::load_config();
@@ -445,6 +546,42 @@ mod tests {
         reset_settings(&mut s, &[&r]);
         assert_eq!(s.sites[0].interval_secs, None);
         assert_eq!(s.sites[1].interval_secs, Some(20));
+    }
+
+    fn post_site(name: &str) -> PostSite {
+        PostSite { name: name.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn tiktok_photos_reset_enables_only_the_tiktok_site() {
+        let mut cfg = PostsConfig { sites: vec![post_site("TikTok"), post_site("Twitter/X"), post_site("Mine")] };
+        let r = Reset::if_equals(2, Key::PostsUseTiktokPhotos, Val::Flag(false));
+        let log = reset_posts(&mut cfg, &[&r]);
+        assert!(cfg.sites[0].use_tiktok_photos);
+        assert!(!cfg.sites[1].use_tiktok_photos && !cfg.sites[2].use_tiktok_photos);
+        assert!(log[0].contains("posts site 'TikTok' use_tiktok_photos reset"));
+        assert!(log.iter().any(|l| l.contains("'Mine'") && l.contains("no preset")));
+    }
+
+    #[test]
+    fn tiktok_photos_reset_is_skipped_when_already_on() {
+        let mut site = post_site("TikTok");
+        site.use_tiktok_photos = true;
+        let mut cfg = PostsConfig { sites: vec![site] };
+        let r = Reset::always(2, Key::PostsUseTiktokPhotos);
+        assert!(reset_posts(&mut cfg, &[&r]).is_empty());
+    }
+
+    #[test]
+    fn posts_default_fields_reset_for_every_site() {
+        let mut a = post_site("A");
+        a.notify = false;
+        a.interval_secs = Some(60);
+        let mut cfg = PostsConfig { sites: vec![a] };
+        let (r1, r2) = (Reset::always(2, Key::PostsNotify), Reset::if_equals(2, Key::PostsIntervalSecs, Val::Num(60)));
+        reset_posts(&mut cfg, &[&r1, &r2]);
+        assert!(cfg.sites[0].notify);
+        assert_eq!(cfg.sites[0].interval_secs, None);
     }
 
     #[test]

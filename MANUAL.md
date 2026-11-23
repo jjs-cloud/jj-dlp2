@@ -1119,7 +1119,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																																											
 																																																																																			
         - Pause checking - Stops the site from being checked
-        - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. Shown below **Use Twitter/X scraper**. The TikTok template has it on. A site that was set up before this switch existed has it off until it is turned on (see [TikTok photos scraper](#tiktok-photos-scraper))
+        - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. Shown below **Use Twitter/X scraper**. The TikTok template has it on. (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Download new posts automatically - Downloads new posts as soon as they are found
         - Download existing posts when an account is first checked - Also downloads the posts an account already has when it is first checked
         - Mark a post viewed when it is opened - Moves a post to the viewed posts after it is opened (see [Posts](#posts))
@@ -1737,19 +1737,21 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - What can be reset
     - The global output folder
     - Any field of the Site card. A reset applies to every site
+    - Any field of a Posts site except its name, its accounts and **Pause checking**. A reset applies to every Posts site, and the posts library is never changed
     - The streamer settings for logging and recording subfolders. A reset applies to every streamer
     - The update settings (see [Updates](#updates))
     - The theme, the Compact view settings, the Remember window size setting and window size, and the Log tab buffer length (see [Settings tab](#settings-tab))
-    - Site names, streamers and the list of sites are never changed by a reset
+    - Site names, streamers and the list of sites and Posts sites are never changed by a reset
 - How a setting is reset
     - A field that can be left blank is set back to blank, so it uses the default again (see [Site defaults](#site-defaults)). Any other setting is set back to its default value
     - Checker arguments, recorder arguments, URL template and site color are set to the settings of the site template with the same name as the site (see [Settings tab](#settings-tab)). A site that is not named after a site template is left as it is
+    - For a Posts site, the checker arguments, download arguments, URL template, **Use Twitter/X scraper**, **Use TikTok Photos scraper**, automatic download, size and time limits, backfill, **Open m3u8 instead of site** and automatic delete settings are set to the settings of the site template with the same name as the site (see [Posts site settings](#posts-site-settings)). A Posts site that is not named after a site template is left as it is. Every other Posts site field is set back to its default
     - A reset either replaces whatever value is saved, or only replaces a value that is still the specific old value the release names. In the second case, a value you changed to something else is left alone
     - A setting that already has the value it would be reset to is not changed
 - Log tab - One message is written for each setting that was changed, right after the `--- session started (vX) ---` message (see [Log tab](#log-tab))
-    - The message starts with where the setting is: `settings`, `site '<name>'`, `streamer '<name>'`, `update.json` or `gui.json`
+    - The message starts with where the setting is: `settings`, `site '<name>'`, `posts site '<name>'`, `streamer '<name>'`, `update.json` or `gui.json`
     - It then shows the field name as it is written in the settings files, the old value and the new value (example: `site '<name>' interval_secs reset: Some(45) -> None`)
-    - A site that has no site template for a template-based field gets a message instead, such as `checker_args not reset: no preset`
+    - A site or Posts site that has no site template for a template-based field gets a message instead, such as `checker_args not reset: no preset`
     - The old values are not kept anywhere else, so the message is the only record of them
 - If a file cannot be saved, a message `config reset: cannot save <file>` with the reason is written to the Log tab, and the resets are tried again at the next launch
 - `config_rev.json` - Holds the number of the last settings resets that were applied (see [Settings](#settings))

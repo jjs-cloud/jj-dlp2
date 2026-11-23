@@ -9,7 +9,7 @@ mod xprofile;
 
 pub use model::*;
 pub use monitor::PostsMonitor;
-pub use store::load_problem;
+pub use store::{load_problem, read_config_quiet, write_config_now};
 
 use runner::{CycleReport, DownloadOutcome};
 
