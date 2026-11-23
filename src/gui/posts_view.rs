@@ -431,7 +431,6 @@ impl App {
         .spacing(8);
 
         let toggles = column![
-            toggle("Pause checking", d.paused, SiteField::Paused),
             toggle("Use Twitter/X scraper", d.x_scraper, SiteField::XScraper),
             toggle("Use TikTok Photos scraper", d.tiktok_photos, SiteField::TiktokPhotos),
             toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
@@ -475,7 +474,7 @@ impl App {
         let action = |label: &'static str, msg: Option<PostsMsg>, kind: BtnKind| -> Element<'a, Msg> {
             button(btn_label(&s, label).size(13)).on_press_maybe(msg.map(send)).padding([5.0, 12.0]).style(skin::btn(s, kind)).into()
         };
-        let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)].spacing(10).align_y(Alignment::Center);
+        let mut actions: Row<'a, Msg> = row![toggle("Pause checking", d.paused, SiteField::Paused), Space::new().width(Length::Fill)].spacing(10).align_y(Alignment::Center);
         if saved.is_some() {
             if dirty {
                 actions = actions.push(chip(s, "unsaved changes", s.warn));

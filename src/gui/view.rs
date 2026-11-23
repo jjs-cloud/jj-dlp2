@@ -1790,8 +1790,6 @@ impl App {
         ]
         .spacing(8);
 
-        let pause_row = toggle("Pause checking", d.pause_checking, StreamerField::PauseChecking);
-
         let intro_delay = column![
             row![
                 toggle("Intro Delay", d.intro_enabled, StreamerField::IntroEnabled),
@@ -1826,9 +1824,12 @@ impl App {
 
         let dirty = d.differs_from(st);
         let valid = !d.invalid();
-        let mut actions: Row<'a, Msg> = row![Space::new().width(Length::Fill)]
-            .spacing(10)
-            .align_y(Alignment::Center);
+        let mut actions: Row<'a, Msg> = row![
+            toggle("Pause checking", d.pause_checking, StreamerField::PauseChecking),
+            Space::new().width(Length::Fill)
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
         if dirty {
             actions = actions.push(chip(s, "unsaved changes", s.warn));
         }
@@ -1863,7 +1864,6 @@ impl App {
             upgrade_row,
             quick_row,
             interval_row,
-            pause_row,
             actions,
         ]
         .spacing(6)

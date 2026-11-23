@@ -991,7 +991,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - A blank box (the default) uses the site's **Check every (seconds)**, and the hint in the box shows the site's current value. Only digits can be typed, up to 6
         - A streamer with its own value is left out of the site's single yt-dlp call and is checked at that interval instead. Streamers on the same site with the same value are checked together in one yt-dlp call, and a streamer with a unique value gets a call of its own. It keeps being checked while it is recording
         - The box has a red border while it holds a value below 5. **Save changes** is unavailable until the box is blank or holds a number of at least 5
-    - Pause checking - Stops this streamer from being checked. Off by default, and shown below **Check every (seconds)**
+    - Pause checking - Stops this streamer from being checked. Off by default
         - A paused streamer is left out of the site's single yt-dlp call and of any same-interval call. No quick check is made for it either
         - A recording that is already running carries on. A streamer that is not recording and was shown live is shown offline
         - It is separate from **Record**, which stops recording but keeps checking, and from the site's **Pause checking**, which stops the checks of every streamer on the site (see [Settings tab](#settings-tab))
@@ -1119,7 +1119,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																																												  
 																																											
 																																																																																			
-        - Pause checking - Stops the site from being checked
+        - Pause checking - Stops the site from being checked.
         - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. Shown below **Use Twitter/X scraper**. The TikTok template has it on. (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Download new posts automatically - Downloads new posts as soon as they are found
         - Download existing posts when an account is first checked - Also downloads the posts an account already has when it is first checked
