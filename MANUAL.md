@@ -106,6 +106,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Notifications - Desktop and ntfy notifications about new posts, set per site on the Notifications page (see [Posts](#posts))
 - Auto-download limits - Skips an automatic download that is larger than a set size or takes longer than a set time, per site (see [Auto-download limits](#auto-download-limits))
 - Twitter/X Scraper - Finds the newest posts of an account from its profile page, and keeps only the posts that have a video, turned on per site with a switch (see [Profile pages](#profile-pages))
+- TikTok Photos scraper - Saves the pictures of a TikTok photo post, with one card for each picture, turned on per site with a switch (see [TikTok photos scraper](#tiktok-photos-scraper))
 
 ### Interface
 
@@ -1036,7 +1037,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																																					
         - `No accounts yet. Pick a site and add a username below.` is shown when there is no account
     - Post card - The thumbnail, the state of the post, and buttons
-        - Thumbnail - A preview of the post. Clicking it does the same as **Play**, except while the post is `Downloading…`, when clicking it does nothing. `No preview` is shown when no preview could be made. The length of the video is shown in one corner, and the state of the post in the other
+        - Thumbnail - A preview of the post. Clicking it does the same as **Open**, except while the post is `Downloading…`, when clicking it does nothing. `No preview` is shown when no preview could be made. The state of the post is shown in the top left corner, and the length of the video in the bottom right corner
+            - A picture icon is shown in the bottom left corner of the card of a photo, and no length is shown (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Under the thumbnail - The account and how long ago the post was made, then the caption. `(no caption)` is shown when the post has none
             - When a site's list of posts does not include the time a post was made or the length of its video, the time the post was found is used and no length is shown, until the post has been downloaded. Then the real time and length are shown
         - Viewed posts are shown dimmed
@@ -1046,11 +1048,12 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - **Retry** - Downloads a `Failed` post again, also without the limits for auto-downloads
         - **Cancel** - Shown in place of **Save** and **Retry** while a post is `Queued` or `Downloading…`. Stops the download, deletes the unfinished files of the post and puts the post back to `Not saved`, without an error
         - Error - Any error text shown on a post goes away 10 seconds after it appears, whatever caused it. A post that failed stays `Failed`, and **Retry** is still available
-        - **Play** and **Open** - Opens the downloaded post in your default app. When the post has not been downloaded, it plays the post's stream link while **Open m3u8 instead of site** is on for the site, and otherwise opens the post's page (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
+        - **Open** - Opens the downloaded post in your default app. A photo is opened in your default image viewer. When the post has not been downloaded, it plays the post's stream link while **Open m3u8 instead of site** is on for the site, and otherwise opens the post's page (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
         - **Viewed** and **Unview**, the star, **Page**, **Folder** and **Delete** - Mark the post, keep it, open its page, show it in your file manager, or send its file to the recycle bin
             - Starring a post adds it to the **Starred** list and keeps it from [Auto-delete](#auto-delete)
             - **Delete** keeps the post in the list and puts it back to `Not saved`, with its thumbnail kept. **Save** downloads it again
             - **Delete** also removes the folder the file was in when it is left empty. The download folder itself is never removed
+            - **Delete** on a photo removes its card from the list instead, since a single photo of a post cannot be downloaded again. The other photos of the post are not affected
             - The status message names the file that was sent to the recycle bin. When the saved file cannot be found, the post's id is looked for in the download folder. When there is no file, the message says so, and the post is still put back to `Not saved`
     - Leaving the tab - Switching to another tab sets the list back to **Unviewed** and the account back to **All accounts**, so the tab is in that state the next time it is opened. The search and the sort are not changed
 - Opening a post - A post that is opened is moved to the viewed posts 2 seconds later, not at once, so it stays in view while the player starts
@@ -1066,6 +1069,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - The interval is counted from when the site's check has finished
         - A site's accounts are checked one after another, with one yt-dlp command for each account
 - Twitter/X Scraper - For a site with the Twitter/X Scraper switch turned on, an account's posts are found from its profile page instead of from yt-dlp (see [Profile pages](#profile-pages))
+- TikTok Photos scraper - For a site with the **Use TikTok Photos scraper** switch turned on, a TikTok post that is a photo post is downloaded from its page instead of by yt-dlp (see [TikTok photos scraper](#tiktok-photos-scraper))
 - Downloads - Posts are downloaded in the background, a couple at a time, while **Download new posts automatically** is on for the site
     - A download that fails is shown as `Failed`, and is tried again automatically after later checks, until it has failed a few times. **Retry** tries again at once and starts the count over
         - The unfinished files of the post, including a partly written video, are deleted from the download folder
@@ -1079,7 +1083,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Thumbnails - Saved when a post is found, from the preview image the post has, at a smaller size
     - When a post's list entry has no preview image or no caption, jj-dlp asks yt-dlp for the post's details with one extra call, and one message is written to the Log tab for each post (see [Log tab](#log-tab))
     - When a post has no usable preview image, a frame of the video is saved with ffmpeg once it has been downloaded (see [Requirements](#requirements))
-    - A thumbnail is removed when its account is removed. Deleting a post's file keeps it
+    - The thumbnail of a photo is made from the photo itself once it has been downloaded
+    - A thumbnail is removed when its account is removed. Deleting a post's file keeps it, except for a photo, whose card is removed
 - Notifications - One notification is sent for each account that has new posts after a check, with the number of new posts and the first caption (see [Settings tab](#settings-tab))
     - Needs the site's **Enable Notifications** switch, and at least one of **Desktop Notifications** and **Mobile Notifications (ntfy)**, set on the **Posts** sub-page of the Notifications page
     - None are sent while all notifications are disabled globally. A site with a blank ntfy topic uses the global topic (see [Notifications](#notifications))
@@ -1114,6 +1119,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																																											
 																																																																																			
         - Pause checking - Stops the site from being checked
+        - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. Shown below **Use Twitter/X scraper**. The TikTok template has it on. A site that was set up before this switch existed has it off until it is turned on (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Download new posts automatically - Downloads new posts as soon as they are found
         - Download existing posts when an account is first checked - Also downloads the posts an account already has when it is first checked
         - Mark a post viewed when it is opened - Moves a post to the viewed posts after it is opened (see [Posts](#posts))
@@ -1127,6 +1133,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
             - With the Twitter/X Scraper switch on, the arguments are used on the address of each post that the scraper finds (see [Profile pages](#profile-pages))
         - Downloader arguments - The yt-dlp arguments or options to pass when downloading a post. Leave blank to use the fallback shown as hint text
             - jj-dlp adds its own `--print-to-file` options to the end of the command, so it can find the file that was saved and read the time and length of the post (see [Posts](#posts))
+            - A TikTok photo post is not downloaded with these arguments while the **Use TikTok Photos scraper** switch is on (see [TikTok photos scraper](#tiktok-photos-scraper))
             - For an automatic download that has a size limit, jj-dlp also adds a `--max-filesize` option
         - The **SITE** heading is no longer shown, and the explanation lines on the page are gone
     - Buttons - Shown at the bottom of each card, in the same way as on the **Livestreams** page
@@ -1183,6 +1190,28 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Every post that was checked failed for a reason other than having no video
     - The Log tab gets one message when a problem appears or changes (see [Log tab](#log-tab))
 
+### TikTok photos scraper
+
+- TikTok photos scraper - Saves the pictures of a TikTok photo post, which yt-dlp does not download (yt-dlp only saves the post's sound)
+    - Turned on per site with **Use TikTok Photos scraper** on the site's card (see [Posts site settings](#posts-site-settings))
+    - Applies to posts whose address is on tiktok.com. Every other post is downloaded as usual
+    - Needs no login. The post's page is loaded as a visitor who is not logged in sees it, using the user agent from the site's arguments when one is set
+- Finding photo posts - When a TikTok post is downloaded, its page is read first
+    - A post that has pictures is saved by jj-dlp. A post that is a video is downloaded by yt-dlp as usual
+    - When the page cannot be read, for example because TikTok asks for a check, the post is downloaded by yt-dlp as usual, which saves its sound only. The reason is written to the site's downloader log while that log is on (see [Posts site settings](#posts-site-settings))
+- Cards - A photo post with several pictures gets one card for each picture
+    - The first picture keeps the post's card and the others are added when the download finishes. The caption of each card ends with its place, such as `(2/5)`
+    - Each card has the picture icon in its bottom left corner, shows the picture as its thumbnail, and has its own **Open**, **Viewed**, star, **Folder** and **Delete** buttons
+    - A post that is not downloaded yet looks like any other post, because its page is only read when it is downloaded
+- Files - The pictures are saved in the site's download folder next to the other posts, named `account_date_postid_N.ext`, where `N` is the picture's place in the post
+    - The pictures are saved as TikTok sent them, as JPEG, PNG or WebP files, without being changed
+    - **Open** opens the picture in your default image viewer
+- Limits - The limits for auto-downloads count the pictures of a post together (see [Auto-download limits](#auto-download-limits))
+    - A post over the size limit or the time limit stays `Not saved`, and **Save** downloads it without the limits
+    - A download that is not limited, such as **Save**, stops at 500 MB for all the pictures of a post
+- Failures - A post whose pictures cannot all be downloaded is `Failed`, and no pictures of it are kept. It is tried again in the same way as other failed downloads (see [Posts](#posts))
+- Not covered - The sound of a photo post is not saved, and posts that were downloaded before the switch was turned on are not downloaded again
+
 ### TikTok Account ID lookup
 
 - TikTok Account ID lookup - Adds an account from the URL of one of its videos, and keeps the account's ID
@@ -1204,9 +1233,9 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 
 - Open m3u8 instead of site - Plays a post that is not downloaded from its stream link, so a long video can be watched without downloading it first
     - Set per site with **Open m3u8 instead of site** (see [Posts site settings](#posts-site-settings))
-    - Only changes **Play** on a post that is not downloaded. A downloaded post still opens its file, and the **Page** button still opens the post's page
-- Getting the link - Pressing **Play** runs the site's yt-dlp with the **m3u8 arguments** on the post's URL, and the status line shows `Getting the stream link…` while it works
-    - The link is not saved, so it is found again each time **Play** is pressed
+    - Only changes **Open** on a post that is not downloaded. A downloaded post still opens its file, and the **Page** button still opens the post's page
+- Getting the link - Pressing **Open** runs the site's yt-dlp with the **m3u8 arguments** on the post's URL, and the status line shows `Getting the stream link…` while it works
+    - The link is not saved, so it is found again each time **Open** is pressed
 - Playing - The link opens in the program set in **Player for m3u8**
     - With that field blank, jj-dlp saves a small `.m3u8` file in your system's temporary folder and opens it with the system's default app for that file type. If that app is not a media player, set **Player for m3u8**
     - The post is moved to the viewed posts once the player has started, following **Mark a post viewed when it is opened**

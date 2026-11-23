@@ -136,6 +136,8 @@ pub struct PostSite {
     pub checker_args: String,
     /// Lists X/Twitter profiles from the profile page instead of the checker command.
     pub use_x_scraper: bool,
+    /// Saves the images of TikTok photo posts from the post page, one post per image.
+    pub use_tiktok_photos: bool,
     /// Blank uses `DEFAULT_DOWNLOAD_ARGS`.
     pub download_args: String,
     /// Profile URL pattern; `{username}` is replaced with the name typed when adding an account.
@@ -178,6 +180,7 @@ impl Default for PostSite {
             interval_secs: None,
             checker_args: String::new(),
             use_x_scraper: false,
+            use_tiktok_photos: false,
             download_args: String::new(),
             url_template: String::new(),
             output_dir: String::new(),
@@ -211,6 +214,7 @@ impl PostSite {
                 checker_args: TIKTOK_CHECKER_ARGS.into(),
                 download_args: TIKTOK_DOWNLOAD_ARGS.into(),
                 url_template: TIKTOK_URL_TEMPLATE.into(),
+                use_tiktok_photos: true,
                 ..Default::default()
             },
             Preset::YoutubeShorts => PostSite {
@@ -399,6 +403,8 @@ pub struct Post {
     pub viewed: bool,
     pub viewed_at: Option<u64>,
     pub starred: bool,
+    /// True for one photo of a TikTok photo post; its file is an image.
+    pub photo: bool,
 }
 
 impl Post {
@@ -415,6 +421,20 @@ impl Post {
 /// A post id made safe for use in a file name.
 pub fn safe_name(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
+}
+
+/// The id of photo `n` (counting from 1) of the post `id`; the first photo keeps the post's own id.
+pub fn photo_id(id: &str, n: usize) -> String {
+    if n <= 1 { id.to_string() } else { format!("{id}_{n}") }
+}
+
+/// The caption of photo `n` of `total`, with its position added when the post has several.
+pub fn photo_title(title: &str, n: usize, total: usize) -> String {
+    match (total > 1, title.is_empty()) {
+        (false, _) => title.to_string(),
+        (true, true) => format!("({n}/{total})"),
+        (true, false) => format!("{title} ({n}/{total})"),
+    }
 }
 
 /// The thumbnail file name for a post id.
@@ -683,6 +703,22 @@ mod tests {
         let site = PostSite::from_preset(Preset::TwitterX);
         assert!(site.download_args.contains("%(display_id)s"));
         assert!(!site.download_args.contains("--print"));
+    }
+
+    #[test]
+    fn tiktok_preset_enables_the_photos_scraper() {
+        assert!(PostSite::from_preset(Preset::Tiktok).use_tiktok_photos);
+        assert!(!PostSite::from_preset(Preset::TwitterX).use_tiktok_photos);
+        assert!(!PostSite::default().use_tiktok_photos);
+    }
+
+    #[test]
+    fn photo_ids_and_titles_number_the_photos() {
+        assert_eq!(photo_id("77", 1), "77");
+        assert_eq!(photo_id("77", 3), "77_3");
+        assert_eq!(photo_title("hi", 2, 4), "hi (2/4)");
+        assert_eq!(photo_title("", 2, 4), "(2/4)");
+        assert_eq!(photo_title("hi", 1, 1), "hi");
     }
 
     #[test]

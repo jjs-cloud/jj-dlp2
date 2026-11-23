@@ -41,6 +41,13 @@ fn badge<'a>(label: String, color: Color) -> Element<'a, Msg> {
         .into()
 }
 
+/// The picture icon shown on the cards of photo posts; its handle is made once so the image is not reloaded on every redraw.
+fn photo_badge<'a>() -> Element<'a, Msg> {
+    static HANDLE: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
+    let handle = HANDLE.get_or_init(|| iced::widget::image::Handle::from_bytes(include_bytes!("../../assets/photo_icon.png").as_slice()));
+    iced::widget::image::<iced::widget::image::Handle>(handle.clone()).width(28.0).height(20.0).into()
+}
+
 /// One entry of the sidebar lists.
 fn nav_item<'a>(s: Skin, label: String, count: usize, selected: bool, msg: PostsMsg) -> Element<'a, Msg> {
     let count_color = if count > 0 && !selected { s.accent2 } else { s.muted };
@@ -285,8 +292,9 @@ impl App {
             Some(d) => badge(fmt_clock(d), Color::WHITE),
             None => Space::new().into(),
         };
+        let bottom_left: Element<'a, Msg> = if post.photo { photo_badge() } else { Space::new().into() };
         let overlay = container(
-            column![top, Space::new().height(Length::Fill), row![Space::new().width(Length::Fill), bottom]],
+            column![top, Space::new().height(Length::Fill), row![bottom_left, Space::new().width(Length::Fill), bottom].align_y(Alignment::End)],
         )
         .padding(6)
         .width(iw)
@@ -306,10 +314,9 @@ impl App {
         let title = container(t(&s, caption).size(12)).height(32).clip(true);
 
         let id = &post.id;
-        let play = if post.state == PostState::Ready { "Play" } else { "Open" };
         let (seen_label, seen_kind) = if post.viewed { ("Unview", BtnKind::Ghost) } else { ("Viewed", BtnKind::Ghost) };
         let row1 = row![
-            card_btn(s, play, PostsMsg::Play(id.clone()), BtnKind::Primary),
+            card_btn(s, "Open", PostsMsg::Play(id.clone()), BtnKind::Primary),
             card_btn(s, seen_label, PostsMsg::ToggleViewed(id.clone()), seen_kind),
         ]
         .spacing(6);
@@ -426,6 +433,7 @@ impl App {
         let toggles = column![
             toggle("Pause checking", d.paused, SiteField::Paused),
             toggle("Use Twitter/X scraper", d.x_scraper, SiteField::XScraper),
+            toggle("Use TikTok Photos scraper", d.tiktok_photos, SiteField::TiktokPhotos),
             toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
             toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
             toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),

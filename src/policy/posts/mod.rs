@@ -4,6 +4,7 @@ mod model;
 mod monitor;
 mod runner;
 mod store;
+mod tiktokphoto;
 mod xprofile;
 
 pub use model::*;

@@ -2,6 +2,7 @@
 
 use super::model::*;
 use super::store::{sidecar_path, thumbs_dir};
+use super::tiktokphoto::{self, ImageError, PageKind};
 use super::xprofile;
 use crate::api::now_secs;
 use crate::engine::exepath;
@@ -25,6 +26,8 @@ const TIMEOUT_PREFIX: &str = "yt-dlp timed out";
 static NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 const THUMB_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const THUMB_BOX: (u32, u32) = (360, 640);
+/// Total image bytes accepted for one photo post when there is no size limit.
+const PHOTO_MAX_BYTES: u64 = 500 * 1024 * 1024;
 
 /// What one check found for one account.
 #[derive(Debug, Clone)]
@@ -47,6 +50,13 @@ pub struct CycleReport {
     pub accounts: Vec<AccountReport>,
 }
 
+/// One saved photo of a photo post.
+#[derive(Debug, Clone)]
+pub struct PhotoFile {
+    pub file: String,
+    pub has_thumb: bool,
+}
+
 /// The result of one download attempt.
 #[derive(Debug, Clone)]
 pub struct DownloadOutcome {
@@ -57,6 +67,8 @@ pub struct DownloadOutcome {
     /// Post time and duration yt-dlp reported while downloading.
     pub posted_at: Option<u64>,
     pub duration: Option<u64>,
+    /// Every saved photo of a photo post, first one first; empty for other posts.
+    pub photos: Vec<PhotoFile>,
 }
 
 /// Resolves an executable path and queues its note for the Log tab.
@@ -374,9 +386,99 @@ pub async fn discard_partials(folder: PathBuf, id: String) {
     .await;
 }
 
+/// The `YYYYMMDD` date of a Unix time, for file names.
+fn date_stamp(secs: u64) -> String {
+    let time = i64::try_from(secs).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0));
+    time.map_or_else(|| "00000000".to_string(), |t| t.format("%Y%m%d").to_string())
+}
+
+/// Downloads every image in order; fails with `TooLarge` when together they are over `cap` bytes.
+async fn fetch_images(urls: Vec<String>, user_agent: Option<String>, cap: u64) -> Result<Vec<Vec<u8>>, ImageError> {
+    let (mut images, mut total) = (Vec::new(), 0u64);
+    for url in urls {
+        let bytes = tiktokphoto::fetch_image(url, user_agent.clone(), cap - total).await?;
+        total += bytes.len() as u64;
+        images.push(bytes);
+    }
+    Ok(images)
+}
+
+/// Writes the images into `folder` as `account_date_id_N.ext` and makes a thumbnail for each; removes what it wrote on failure.
+fn save_photos(folder: &Path, post: &Post, images: &[Vec<u8>]) -> Result<Vec<PhotoFile>, String> {
+    std::fs::create_dir_all(folder).map_err(|e| format!("could not create the download folder: {e}"))?;
+    let stem = format!("{}_{}_{}", safe_name(&post.account), date_stamp(post.sort_time()), safe_name(&post.id));
+    let mut photos: Vec<PhotoFile> = Vec::new();
+    fn undo(photos: &[PhotoFile]) {
+        for p in photos {
+            let _ = std::fs::remove_file(&p.file);
+        }
+    }
+    for (i, bytes) in images.iter().enumerate() {
+        let Some(ext) = tiktokphoto::image_ext(bytes) else {
+            undo(&photos);
+            return Err("an image was not in a known format".into());
+        };
+        let path = folder.join(format!("{stem}_{}.{ext}", i + 1));
+        if let Err(e) = std::fs::write(&path, bytes) {
+            let _ = std::fs::remove_file(&path);
+            undo(&photos);
+            return Err(format!("could not save {}: {e}", path.display()));
+        }
+        photos.push(PhotoFile { file: path.to_string_lossy().into_owned(), has_thumb: save_thumbnail(bytes, &photo_id(&post.id, i + 1)) });
+    }
+    Ok(photos)
+}
+
+/// Saves the images of a TikTok photo post; `None` when the post is not a photo post or its page cannot be read, so yt-dlp downloads it.
+async fn download_photos(site: &PostSite, post: &Post, folder: &Path, max_mb: Option<u64>, max_secs: Option<u64>) -> Option<DownloadOutcome> {
+    let (log, user_agent) = (download_log(site), site.user_agent());
+    let note = |why: &str| log.failure("TikTok photos scraper", &[post.url.clone()], why);
+    let page = match tiktokphoto::fetch_page(post.url.clone(), user_agent.clone()).await {
+        Ok(page) => page,
+        Err(e) => {
+            note(&e);
+            return None;
+        }
+    };
+    let urls = match tiktokphoto::parse_page(&page, &post.id) {
+        Ok(PageKind::Photos(urls)) => urls,
+        Ok(PageKind::NotPhotos) => return None,
+        Err(e) => {
+            note(&e);
+            return None;
+        }
+    };
+    let fail = |msg: String, skipped: bool| DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped, posted_at: None, duration: None, photos: Vec::new() };
+    let limit = max_secs.map_or(DOWNLOAD_TIMEOUT, Duration::from_secs);
+    let cap = max_mb.map_or(PHOTO_MAX_BYTES, |mb| mb.saturating_mul(1024 * 1024));
+    let images = match tokio::time::timeout(limit, fetch_images(urls, user_agent, cap)).await {
+        Ok(Ok(images)) => images,
+        Ok(Err(ImageError::TooLarge)) if max_mb.is_some() => return Some(fail("Over the size limit for auto-downloads".into(), true)),
+        Ok(Err(ImageError::TooLarge)) => return Some(fail("The images are larger than 500 MB".into(), false)),
+        Ok(Err(ImageError::Failed(e))) => return Some(fail(e, false)),
+        Err(_) if max_secs.is_some() => return Some(fail("Over the time limit for auto-downloads".into(), true)),
+        Err(_) => return Some(fail(format!("{TIMEOUT_PREFIX} after {}s", limit.as_secs()), false)),
+    };
+    let (dir, owned) = (folder.to_path_buf(), post.clone());
+    let saved = tokio::task::spawn_blocking(move || save_photos(&dir, &owned, &images)).await;
+    let photos = match saved {
+        Ok(Ok(photos)) => photos,
+        Ok(Err(e)) => return Some(fail(e, false)),
+        Err(e) => return Some(fail(e.to_string(), false)),
+    };
+    let first = photos.first()?;
+    let (file, has_thumb) = (first.file.clone(), first.has_thumb || post.has_thumb);
+    Some(DownloadOutcome { file: Ok(file), has_thumb, skipped: false, posted_at: None, duration: None, photos })
+}
+
 /// Downloads one post, then makes sure it has a thumbnail.
 pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Option<u64>, max_secs: Option<u64>) -> DownloadOutcome {
     let folder = site.output_folder(&global_dir);
+    if site.use_tiktok_photos && tiktokphoto::is_tiktok_url(&post.url) {
+        if let Some(outcome) = download_photos(&site, &post, &folder, max_mb, max_secs).await {
+            return outcome;
+        }
+    }
     let sidecar = sidecar_path(&post.id);
     let (prep_folder, prep_sidecar) = (folder.clone(), sidecar.clone());
     let _ = tokio::task::spawn_blocking(move || {
@@ -395,12 +497,12 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
             let (dir, id) = (folder.clone(), post.id.clone());
             let _ = tokio::task::spawn_blocking(move || remove_partials(&dir, &id, 3)).await;
             let msg = "Over the time limit for auto-downloads".to_string();
-            return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true, posted_at: None, duration: None };
+            return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped: true, posted_at: None, duration: None, photos: Vec::new() };
         }
         Err(e) => {
             let (dir, id) = (folder.clone(), post.id.clone());
             let _ = tokio::task::spawn_blocking(move || remove_partials(&dir, &id, 3)).await;
-            return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None };
+            return DownloadOutcome { file: Err(e), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None, photos: Vec::new() };
         }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -419,7 +521,7 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
     })
     .await;
     let Ok((reported, path, stdout)) = found else {
-        return DownloadOutcome { file: Err("could not look for the downloaded file".into()), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None };
+        return DownloadOutcome { file: Err("could not look for the downloaded file".into()), has_thumb: post.has_thumb, skipped: false, posted_at: None, duration: None, photos: Vec::new() };
     };
     let (posted_at, duration) = reported.as_deref().map_or((None, None), parse_meta);
     let Some(path) = path else {
@@ -434,10 +536,10 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
         } else {
             error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {} and no file", out.status))
         };
-        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped, posted_at: None, duration: None };
+        return DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped, posted_at: None, duration: None, photos: Vec::new() };
     };
     let has_thumb = post.has_thumb || frame_thumbnail(&path, &post.id).await;
-    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, skipped: false, posted_at, duration }
+    DownloadOutcome { file: Ok(path.to_string_lossy().into_owned()), has_thumb, skipped: false, posted_at, duration, photos: Vec::new() }
 }
 
 /// The stream playlist URL yt-dlp reports for a post.

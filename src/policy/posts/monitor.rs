@@ -1,8 +1,8 @@
 //! The Posts monitor: schedules checks and downloads, keeps the library and tells front ends what changed.
 
-use super::runner::{self, CycleReport, DownloadOutcome};
+use super::runner::{self, CycleReport, DownloadOutcome, PhotoFile};
 use super::store;
-use super::{AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, Preset, SiteId};
+use super::{photo_id, photo_title, AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, Preset, SiteId};
 use crate::api::{now_secs, GlobalNotify, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
@@ -440,11 +440,49 @@ impl PostsMonitor {
                 }
             }
         }
+        let mut changed = vec![id.to_string()];
+        changed.extend(self.split_photos(id, &out.photos));
         self.save_lib();
-        self.emit_changed(&[id.to_string()]);
+        self.emit_changed(&changed);
         if let Some(l) = log {
             self.log(l);
         }
+    }
+
+    /// Makes one card per photo of a downloaded photo post; returns the ids of the new cards.
+    fn split_photos(&mut self, id: &str, photos: &[PhotoFile]) -> Vec<String> {
+        let Some(base) = self.post(id).filter(|p| p.state == PostState::Ready && !photos.is_empty()).cloned() else { return Vec::new() };
+        let total = photos.len();
+        if let Some(p) = self.post_mut(id) {
+            p.photo = true;
+            p.duration = None;
+            p.title = photo_title(&base.title, 1, total);
+        }
+        let mut added = Vec::new();
+        for (i, photo) in photos.iter().enumerate().skip(1) {
+            let card_id = photo_id(id, i + 1);
+            if self.posts.iter().any(|p| p.id == card_id) {
+                continue;
+            }
+            self.posts.push(Post {
+                id: card_id.clone(),
+                title: photo_title(&base.title, i + 1, total),
+                file: Some(photo.file.clone()),
+                has_thumb: photo.has_thumb,
+                duration: None,
+                photo: true,
+                error: String::new(),
+                error_at: None,
+                attempts: 0,
+                manual: false,
+                viewed: false,
+                viewed_at: None,
+                starred: false,
+                ..base.clone()
+            });
+            added.push(card_id);
+        }
+        added
     }
 
     /// Applies a command from a front end.
@@ -776,7 +814,11 @@ impl PostsMonitor {
         };
         if let Some(p) = self.post_mut(id) {
             p.file = None;
-            p.state = PostState::Remote;
+            p.state = if p.photo { PostState::Removed } else { PostState::Remote };
+            if p.photo {
+                let _ = std::fs::remove_file(p.thumb_path());
+                p.has_thumb = false;
+            }
             p.error.clear();
             p.error_at = None;
             p.attempts = 0;
@@ -844,6 +886,22 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, PostsEvent::Config(c) if c.name_taken("test"))));
         m.handle(PostsCommand::AddSite(paused_site("test")));
         assert!(drain(&mut rx).iter().any(|e| matches!(e, PostsEvent::Notice(n) if n.contains("already exists"))));
+    }
+
+    #[test]
+    fn a_photo_post_becomes_one_card_per_photo() {
+        let _sb = Sandbox::new("posts-photos");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let (mut m, _rx) = monitor();
+        let base = Post { id: "7".into(), account: "someone".into(), title: "hi".into(), duration: Some(9), state: PostState::Ready, ..Default::default() };
+        m.posts.push(base);
+        let photos: Vec<PhotoFile> = (1..=3).map(|n| PhotoFile { file: format!("p{n}.jpg"), has_thumb: true }).collect();
+        assert_eq!(m.split_photos("7", &photos), ["7_2", "7_3"]);
+        let titles: Vec<&str> = m.posts.iter().map(|p| p.title.as_str()).collect();
+        assert_eq!(titles, ["hi (1/3)", "hi (2/3)", "hi (3/3)"]);
+        assert!(m.posts.iter().all(|p| p.photo && p.duration.is_none() && p.state == PostState::Ready));
+        assert_eq!(m.posts[2].file.as_deref(), Some("p3.jpg"));
     }
 
     #[test]
