@@ -974,9 +974,10 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Schedule - Switches this streamer on and off automatically (see [Schedule](#schedule))
         - **Schedule** - Turns the schedule on or off for this streamer
         - Mode list - **One-off** or **Recurring**, shown beside the **Schedule** switch
-        - One-off - **Start** and **End** rows, each with a date button and a time button
-        - Recurring - A row of day buttons, and a row with **From** and **To** time buttons
-        - A button is shown with a red border while the schedule is turned on and its value is missing or not valid, and a message under the schedule says what is wrong. **Save changes** is unavailable until it is fixed
+        - One-off - **Start** and **End** rows, each with a date button and a time spin box
+        - Recurring - A row of day buttons, and a row with **From** and **To** time spin boxes
+        - Time spin box - Three parts: hour (1-12), minute (00-59) and AM/PM. Each part has a **-** and a **+** button. The hour and minute wrap around without changing AM/PM, and either AM/PM button switches between AM and PM. A time that is not set yet shows `--`, and the first press starts from 12:00 AM
+        - A date button is shown with a red border, and a time spin box with red text, while the schedule is turned on and its value is missing or not valid, and a message under the schedule says what is wrong. **Save changes** is unavailable until it is fixed
     - Name restarted recordings _partN - Whether a recording that starts again during the same stream gets a `_partN` suffix (see [Auto-suffix](#auto-suffix))
         - **Inherit** - Uses the site's switch. The entry shows the site's current setting (example: `Inherit (On)`)
         - **On** and **Off** - Apply to this streamer only

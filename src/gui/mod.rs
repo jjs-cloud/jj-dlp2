@@ -64,6 +64,7 @@ pub fn run(client: PolicyClient) -> iced::Result {
         .scale_factor(App::scale_factor)
         .window(window_settings(win_w, win_h))
         .antialiasing(true)
+        .font(iced_aw::ICED_AW_FONT_BYTES)
         .run();
     save_size_on_exit();
     result
@@ -618,15 +619,11 @@ pub enum StreamerField {
     RecurringEnd(NaiveTime),
 }
 
-/// A date or time picker in a streamer's schedule that can be open.
+/// A date picker in a streamer's schedule that can be open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerTarget {
     OneOffStartDate,
-    OneOffStartTime,
     OneOffEndDate,
-    OneOffEndTime,
-    RecurringStart,
-    RecurringEnd,
 }
 
 /// Why an enabled schedule cannot be saved.

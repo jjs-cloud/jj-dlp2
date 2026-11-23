@@ -16,15 +16,9 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Element, Length};
 use iced_aw::date_picker::Date;
-use iced_aw::time_picker::{Period, Time};
-use iced_aw::{DatePicker, TimePicker};
+use iced_aw::DatePicker;
 
 const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-/// `t` with its seconds dropped.
-fn to_minute(t: NaiveTime) -> NaiveTime {
-    NaiveTime::from_hms_opt(t.hour(), t.minute(), 0).unwrap_or(t)
-}
 
 pub(super) fn t<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.text)
@@ -1904,22 +1898,41 @@ impl App {
             )
             .into()
         };
-        let time_field = |target: PickerTarget,
-                          cur: Option<NaiveTime>,
-                          make: fn(NaiveTime) -> StreamerField,
-                          bad: bool|
-         -> Element<'a, Msg> {
-            let label = cur.map_or_else(|| "Pick time".to_string(), |c| c.format("%H:%M").to_string());
-            let shown = cur.unwrap_or_else(|| Local::now().time());
-            let initial = Time::Hm { hour: shown.hour(), minute: shown.minute(), period: Period::H24 };
-            TimePicker::new(
-                is_open(target),
-                initial,
-                field_btn(label, target, bad),
-                Msg::CloseSchedulePicker,
-                move |picked: Time| Msg::SchedulePicked(id, make(to_minute(NaiveTime::from(picked)))),
-            )
-            .use_24h()
+        let spin_btn = |label: &'static str, msg: Msg| {
+            button(btn_label(&s, label).size(13))
+                .on_press(msg)
+                .padding([2.0, 8.0])
+                .style(skin::btn(s, BtnKind::Ghost))
+        };
+        let spin = |value: String, bad: bool, dec: Msg, inc: Msg, width: f32| -> Element<'a, Msg> {
+            let color = if bad { s.danger } else { s.text };
+            row![
+                spin_btn("-", dec),
+                container(iced::widget::text(value).font(s.font).size(13).color(color)).center_x(Length::Fixed(width)),
+                spin_btn("+", inc),
+            ]
+            .spacing(3)
+            .align_y(Alignment::Center)
+            .into()
+        };
+        let time_field = |cur: Option<NaiveTime>, make: fn(NaiveTime) -> StreamerField, bad: bool| -> Element<'a, Msg> {
+            let (pm, h12) = cur.unwrap_or(NaiveTime::MIN).hour12();
+            let minute = cur.map_or(0, |c| c.minute());
+            let set = move |h12: u32, minute: u32, pm: bool| {
+                let time = NaiveTime::from_hms_opt(h12 % 12 + if pm { 12 } else { 0 }, minute, 0).unwrap_or(NaiveTime::MIN);
+                Msg::StreamerEdit(id, make(time))
+            };
+            let blank = cur.is_none();
+            let hour_text = if blank { "--".to_string() } else { h12.to_string() };
+            let minute_text = if blank { "--".to_string() } else { format!("{minute:02}") };
+            let period_text = if blank { "--" } else if pm { "PM" } else { "AM" };
+            row![
+                spin(hour_text, bad, set((h12 + 10) % 12 + 1, minute, pm), set(h12 % 12 + 1, minute, pm), 22.0),
+                spin(minute_text, bad, set(h12, (minute + 59) % 60, pm), set(h12, (minute + 1) % 60, pm), 22.0),
+                spin(period_text.to_string(), bad, set(h12, minute, !pm), set(h12, minute, !pm), 26.0),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
             .into()
         };
         let label = |text: &'static str| container(muted(&s, text)).width(44);
@@ -1946,24 +1959,14 @@ impl App {
                     row![
                         label("Start"),
                         date_field(PickerTarget::OneOffStartDate, sc.one_off_start, StreamerField::OneOffStartDate, start_bad),
-                        time_field(
-                            PickerTarget::OneOffStartTime,
-                            sc.one_off_start.map(|c| c.time()),
-                            StreamerField::OneOffStartTime,
-                            start_bad
-                        ),
+                        time_field(sc.one_off_start.map(|c| c.time()), StreamerField::OneOffStartTime, start_bad),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
                     row![
                         label("End"),
                         date_field(PickerTarget::OneOffEndDate, sc.one_off_end, StreamerField::OneOffEndDate, end_bad),
-                        time_field(
-                            PickerTarget::OneOffEndTime,
-                            sc.one_off_end.map(|c| c.time()),
-                            StreamerField::OneOffEndTime,
-                            end_bad
-                        ),
+                        time_field(sc.one_off_end.map(|c| c.time()), StreamerField::OneOffEndTime, end_bad),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
@@ -1989,9 +1992,9 @@ impl App {
                     days,
                     row![
                         label("From"),
-                        time_field(PickerTarget::RecurringStart, sc.start_time, StreamerField::RecurringStart, start_bad),
+                        time_field(sc.start_time, StreamerField::RecurringStart, start_bad),
                         label("To"),
-                        time_field(PickerTarget::RecurringEnd, sc.end_time, StreamerField::RecurringEnd, end_bad),
+                        time_field(sc.end_time, StreamerField::RecurringEnd, end_bad),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),

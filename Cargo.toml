@@ -10,7 +10,7 @@ chrono = { version = "0.4.44", default-features = false, features = ["clock", "s
 directories = "6.0.0"
 iced = { version = "0.14.0", features = ["tokio", "advanced", "image"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-iced_aw = { version = "0.14.1", default-features = false, features = ["date_picker", "time_picker"] }
+iced_aw = { version = "0.14.1", default-features = false, features = ["date_picker"] }
 open = "5.4.5"
 rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }
 semver = "1.0"
