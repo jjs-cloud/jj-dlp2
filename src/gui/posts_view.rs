@@ -252,7 +252,7 @@ impl App {
                 .width(iw)
                 .height(ih)
                 .content_fit(ContentFit::Cover)
-                .opacity(if post.viewed { 0.6_f32 } else { 1.0_f32 })
+                .opacity(if post.viewed || post.opened_at.is_some() { 0.6_f32 } else { 1.0_f32 })
                 .border_radius(6.0)
                 .into()
         } else {
@@ -425,6 +425,10 @@ impl App {
         let cleanup = row![
             cell(
                 input("Delete files of unstarred posts after (days, blank = never)", "Never", &d.auto_delete, SiteField::AutoDelete, bad_number(&d.auto_delete, 1)),
+                Length::FillPortion(1),
+            ),
+            cell(
+                input("Mark viewed after (seconds)", &posts::DEFAULT_MARK_AFTER_SECS.to_string(), &d.mark_after, SiteField::MarkAfter, bad_number(&d.mark_after, 0)),
                 Length::FillPortion(1),
             ),
         ]

@@ -2,7 +2,7 @@
 
 use super::{prefs, App, Msg};
 use crate::api::now_secs;
-use crate::policy::posts::{Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, Preset, SiteId, XHelper, MIN_INTERVAL_SECS};
+use crate::policy::posts::{Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, Preset, SiteId, XHelper, DEFAULT_MARK_AFTER_SECS, MIN_INTERVAL_SECS};
 use crate::policy::PolicyCommand;
 use iced::widget::text_editor::{Action, Content, Edit};
 use iced::Task;
@@ -85,6 +85,7 @@ pub struct SiteDraft {
     pub auto_delete: String,
     pub auto_limit: String,
     pub auto_secs: String,
+    pub mark_after: String,
     pub checker: Content,
     pub download: Content,
     pub x_helper: XHelper,
@@ -116,6 +117,7 @@ impl SiteDraft {
             auto_delete: site.auto_delete_days.map(|n| n.to_string()).unwrap_or_default(),
             auto_limit: site.auto_download_limit_mb.map(|n| n.to_string()).unwrap_or_default(),
             auto_secs: site.auto_download_secs.map(|n| n.to_string()).unwrap_or_default(),
+            mark_after: site.mark_after_secs.to_string(),
             checker: Content::with_text(&site.checker_args),
             download: Content::with_text(&site.download_args),
             x_helper: site.x_helper,
@@ -160,6 +162,7 @@ impl SiteDraft {
             auto_delete_days: number(&self.auto_delete, 1)?,
             auto_download_limit_mb: number(&self.auto_limit, 1)?,
             auto_download_secs: number(&self.auto_secs, 1)?,
+            mark_after_secs: number(&self.mark_after, 0)?.unwrap_or(DEFAULT_MARK_AFTER_SECS),
             checker_args: self.checker.text(),
             download_args: self.download.text(),
             x_helper: self.x_helper,
@@ -426,6 +429,7 @@ pub enum SiteField {
     AutoDelete(String),
     AutoLimit(String),
     AutoSecs(String),
+    MarkAfter(String),
     Checker(Action),
     Download(Action),
     XHelper(XHelper),
@@ -632,6 +636,7 @@ impl App {
             SiteField::AutoDelete(v) => d.auto_delete = v,
             SiteField::AutoLimit(v) => d.auto_limit = v,
             SiteField::AutoSecs(v) => d.auto_secs = v,
+            SiteField::MarkAfter(v) => d.mark_after = v,
             SiteField::XHelper(v) => d.x_helper = v,
             SiteField::XPhotos(v) => d.x_photos = v,
             SiteField::GalleryExe(v) => d.gallery_exe = v,

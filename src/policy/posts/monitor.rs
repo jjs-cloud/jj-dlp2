@@ -17,8 +17,6 @@ const FIRST_CHECK_DELAY: Duration = Duration::from_secs(3);
 /// Time between auto-delete sweeps.
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 const SECS_PER_DAY: u64 = 86_400;
-/// Time a post stays listed after it is opened.
-const VIEW_DELAY: Duration = Duration::from_secs(2);
 /// Downloads that run at the same time.
 const MAX_DOWNLOADS: usize = 2;
 /// Seconds a post's error text is kept before it is cleared.
@@ -45,7 +43,6 @@ pub struct PostsMonitor {
     /// Handles that stop the running downloads, by post id.
     cancels: HashMap<String, tokio::task::AbortHandle>,
     next_sweep: Instant,
-    pending_view: Vec<(String, Instant)>,
     cfg_dirty: AtomicBool,
     lib_dirty: AtomicBool,
     last_save: Instant,
@@ -70,7 +67,6 @@ impl PostsMonitor {
             downloads: 0,
             cancels: HashMap::new(),
             next_sweep: soon,
-            pending_view: Vec::new(),
             cfg_dirty: AtomicBool::new(false),
             lib_dirty: AtomicBool::new(false),
             last_save: Instant::now(),
@@ -197,7 +193,7 @@ impl PostsMonitor {
         self.flush_saves(false);
         runner::take_notes().into_iter().for_each(|n| self.log(n));
         let now = Instant::now();
-        self.mark_due_views(now);
+        self.mark_due_views();
         self.clear_stale_errors();
         if now >= self.next_sweep {
             self.next_sweep = now + SWEEP_EVERY;
@@ -478,6 +474,7 @@ impl PostsMonitor {
                 manual: false,
                 viewed: false,
                 viewed_at: None,
+                opened_at: None,
                 starred: false,
                 ..base.clone()
             });
@@ -549,6 +546,7 @@ impl PostsMonitor {
                 for p in self.posts.iter_mut().filter(|p| ids.contains(&p.id)) {
                     p.viewed = viewed;
                     p.viewed_at = viewed.then(now_secs);
+                    p.opened_at = None;
                 }
                 self.save_lib();
                 self.emit_changed(&ids);
@@ -763,31 +761,39 @@ impl PostsMonitor {
         self.after_open(id, site_id, result);
     }
 
-    /// Schedules the view mark after a successful open, or reports the failure.
+    /// Dims the post after a successful open, or reports the failure.
     fn after_open(&mut self, id: &str, site_id: SiteId, result: Result<(), String>) {
         match result {
             Ok(()) if self.cfg.site(site_id).is_none_or(|s| s.mark_on_open) => {
-                self.pending_view.push((id.to_string(), Instant::now() + VIEW_DELAY));
+                if let Some(p) = self.post_mut(id).filter(|p| !p.viewed) {
+                    p.opened_at = Some(now_secs());
+                    self.save_lib();
+                    self.emit_changed(&[id.to_string()]);
+                }
             }
             Ok(()) => {}
             Err(e) => self.notice(e),
         }
     }
 
-    /// Marks the opened posts whose delay has passed as viewed.
-    fn mark_due_views(&mut self, now: Instant) {
-        if !self.pending_view.iter().any(|(_, at)| now >= *at) {
-            return;
+    /// Marks opened posts viewed once their site's delay has passed.
+    fn mark_due_views(&mut self) {
+        let now = now_secs();
+        let delays: HashMap<SiteId, u64> = self.cfg.sites.iter().map(|s| (s.id, s.mark_after_secs)).collect();
+        let mut ids = Vec::new();
+        for p in self.posts.iter_mut().filter(|p| !p.viewed) {
+            let Some(at) = p.opened_at else { continue };
+            if now >= at + delays.get(&p.site_id).copied().unwrap_or(crate::policy::posts::DEFAULT_MARK_AFTER_SECS) {
+                p.viewed = true;
+                p.viewed_at = Some(now);
+                p.opened_at = None;
+                ids.push(p.id.clone());
+            }
         }
-        let (due, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_view).into_iter().partition(|(_, at)| now >= *at);
-        self.pending_view = wait;
-        let ids: Vec<String> = due.into_iter().map(|(id, _)| id).collect();
-        for p in self.posts.iter_mut().filter(|p| ids.contains(&p.id)) {
-            p.viewed = true;
-            p.viewed_at = Some(now_secs());
+        if !ids.is_empty() {
+            self.save_lib();
+            self.emit_changed(&ids);
         }
-        self.save_lib();
-        self.emit_changed(&ids);
     }
 
     /// Recycles the post's file and empty folder, then resets the post to not saved; returns a status message.

@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_INTERVAL_SECS: u64 = 300;
 /// Days before unstarred posts are deleted, in every template but Twitch Vods.
 pub const DEFAULT_AUTO_DELETE_DAYS: u64 = 30;
+/// Seconds an opened post stays unviewed by default.
+pub const DEFAULT_MARK_AFTER_SECS: u64 = 30;
 /// Megabytes above which automatic downloads are skipped.
 pub const DEFAULT_AUTO_DOWNLOAD_LIMIT_MB: u64 = 15;
 /// Seconds after which automatic downloads are cancelled.
@@ -198,6 +200,8 @@ pub struct PostSite {
     pub auto_download_secs: Option<u64>,
     pub backfill: bool,
     pub mark_on_open: bool,
+    /// Seconds an opened post stays in the unviewed list, dimmed, before it is marked viewed.
+    pub mark_after_secs: u64,
     pub notify: bool,
     pub notify_desktop: bool,
     pub notify_ntfy: bool,
@@ -239,6 +243,7 @@ impl Default for PostSite {
             auto_download_secs: Some(DEFAULT_AUTO_DOWNLOAD_SECS),
             backfill: true,
             mark_on_open: true,
+            mark_after_secs: DEFAULT_MARK_AFTER_SECS,
             notify: true,
             notify_desktop: true,
             notify_ntfy: false,
@@ -463,6 +468,8 @@ pub struct Post {
     pub manual: bool,
     pub viewed: bool,
     pub viewed_at: Option<u64>,
+    /// Unix time the post was opened while unviewed; it is marked viewed after the site's delay.
+    pub opened_at: Option<u64>,
     pub starred: bool,
     /// True for one photo of a photo post; its file is an image.
     pub photo: bool,

@@ -1050,7 +1050,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
             - A picture icon is shown in the bottom left corner of the card of a photo, and no length is shown (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Under the thumbnail - The account and how long ago the post was made, then the caption. `(no caption)` is shown when the post has none
             - When a site's list of posts does not include the time a post was made or the length of its video, the time the post was found is used and no length is shown, until the post has been downloaded. Then the real time and length are shown
-        - Viewed posts are shown dimmed
+        - Viewed posts, and posts that were opened and are waiting to be marked viewed, are shown dimmed
         - `Queued`, `Downloading…`, `Failed` and `Not saved` - The state of a post that has not been downloaded. The reason is shown under a `Failed` post
         - X button - Shown in the top right corner of the thumbnail of a post that is `Not saved` or `Failed`. Turns red when the mouse is over it. Removes the post from the library, and it is not found again by later checks. Downloaded posts do not have it
         - **Save** - Downloads a post that is `Not saved`. The limits for auto-downloads do not apply to it (see [Auto-download limits](#auto-download-limits))
@@ -1065,9 +1065,10 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
             - **Delete** on a photo removes its card from the list instead, since a single photo of a post cannot be downloaded again. The other photos of the post are not affected
             - The status message names the file that was sent to the recycle bin. When the saved file cannot be found, the post's id is looked for in the download folder. When there is no file, the message says so, and the post is still put back to `Not saved`
     - Leaving the tab - Switching to another tab sets the list back to **Unviewed** and the account back to **All accounts**, so the tab is in that state the next time it is opened. The search and the sort are not changed
-- Opening a post - A post that is opened is moved to the viewed posts 2 seconds later, not at once, so it stays in view while the player starts
+- Opening a post - A post that is opened is dimmed at once and stays in the **Unviewed** list, then is moved to the viewed posts after the site's **Mark viewed after (seconds)**
     - Only applies while **Mark a post viewed when it is opened** is on for the site
-    - A post that is played from its stream link is moved once the player has started
+    - A post that is played from its stream link is dimmed once the player has started
+    - The wait is kept when jj-dlp is closed, so a dimmed post is moved after the wait has passed. **Viewed** and **Unview** cancel the wait
 - First check of an account - The posts found on an account's first check are shown as unviewed, whether or not they are downloaded
     - While **Download existing posts when an account is first checked** is off, they are listed as `Not saved` and are not downloaded. They can be downloaded with **Save**
     - No notification is sent for the first check of an account
@@ -1136,7 +1137,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. The TikTok template has it on. (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Download new posts automatically - Downloads new posts as soon as they are found
         - Download existing posts when an account is first checked - Also downloads the posts an account already has when it is first checked
-        - Mark a post viewed when it is opened - Moves a post to the viewed posts after it is opened (see [Posts](#posts))
+        - Mark a post viewed when it is opened - Dims a post when it is opened and moves it to the viewed posts later (see [Posts](#posts))
+        - Mark viewed after (seconds) - How long an opened post stays in the unviewed posts before it is moved. Shown to the right of **Delete files of unstarred posts after**. Default 30. Save changes is unavailable until it is blank or a whole number of at least 0; blank uses 30, and 0 moves the post at once
         - Open m3u8 instead of site - Plays a post that is not downloaded from its stream link, instead of opening its page (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
         - Size limit for auto-downloads (MB, blank = none) - Skips an automatic download that is larger than this many megabytes. Shown to the left of **Time limit for auto-downloads**. Save changes is unavailable until it is blank or a whole number of at least 1 (see [Auto-download limits](#auto-download-limits))
         - Time limit for auto-downloads (seconds, blank = none) - Cancels an automatic download that takes longer than this many seconds. Shown to the right of **Size limit for auto-downloads**. Save changes is unavailable until it is blank or a whole number of at least 1
@@ -1268,7 +1270,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - The link is not saved, so it is found again each time **Open** is pressed
 - Playing - The link opens in the program set in **Player for m3u8**
     - With that field blank, jj-dlp saves a small `.m3u8` file in your system's temporary folder and opens it with the system's default app for that file type. If that app is not a media player, set **Player for m3u8**
-    - The post is moved to the viewed posts once the player has started, following **Mark a post viewed when it is opened**
+    - The post is dimmed once the player has started, then moved to the viewed posts after **Mark viewed after (seconds)**, following **Mark a post viewed when it is opened**
 - Problems - A message is shown in the status line, and written to the Log tab, when the link cannot be found or the player cannot be started (see [Log tab](#log-tab))
 
 ## Processes tab
