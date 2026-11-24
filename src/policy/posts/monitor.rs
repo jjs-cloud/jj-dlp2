@@ -471,6 +471,7 @@ impl PostsMonitor {
                 has_thumb: photo.has_thumb,
                 duration: None,
                 photo: true,
+                image_urls: Vec::new(),
                 error: String::new(),
                 error_at: None,
                 attempts: 0,

@@ -2,7 +2,7 @@
 
 use super::{prefs, App, Msg};
 use crate::api::now_secs;
-use crate::policy::posts::{Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, Preset, SiteId, MIN_INTERVAL_SECS};
+use crate::policy::posts::{Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, Preset, SiteId, XHelper, MIN_INTERVAL_SECS};
 use crate::policy::PolicyCommand;
 use iced::widget::text_editor::{Action, Content, Edit};
 use iced::Task;
@@ -87,7 +87,10 @@ pub struct SiteDraft {
     pub auto_secs: String,
     pub checker: Content,
     pub download: Content,
-    pub x_scraper: bool,
+    pub x_helper: XHelper,
+    pub x_photos: bool,
+    pub gallery_exe: String,
+    pub gallery_args: String,
     pub tiktok_photos: bool,
     pub paused: bool,
     pub auto_download: bool,
@@ -115,7 +118,10 @@ impl SiteDraft {
             auto_secs: site.auto_download_secs.map(|n| n.to_string()).unwrap_or_default(),
             checker: Content::with_text(&site.checker_args),
             download: Content::with_text(&site.download_args),
-            x_scraper: site.use_x_scraper,
+            x_helper: site.x_helper,
+            x_photos: site.use_x_photos,
+            gallery_exe: site.gallery_dl_path.clone(),
+            gallery_args: site.gallery_dl_args.clone(),
             tiktok_photos: site.use_tiktok_photos,
             paused: site.paused,
             auto_download: site.auto_download,
@@ -156,7 +162,10 @@ impl SiteDraft {
             auto_download_secs: number(&self.auto_secs, 1)?,
             checker_args: self.checker.text(),
             download_args: self.download.text(),
-            use_x_scraper: self.x_scraper,
+            x_helper: self.x_helper,
+            use_x_photos: self.x_photos,
+            gallery_dl_path: self.gallery_exe.clone(),
+            gallery_dl_args: self.gallery_args.clone(),
             use_tiktok_photos: self.tiktok_photos,
             paused: self.paused,
             auto_download: self.auto_download,
@@ -419,7 +428,10 @@ pub enum SiteField {
     AutoSecs(String),
     Checker(Action),
     Download(Action),
-    XScraper(bool),
+    XHelper(XHelper),
+    XPhotos(bool),
+    GalleryExe(String),
+    GalleryArgs(String),
     TiktokPhotos(bool),
     Paused(bool),
     AutoDownload(bool),
@@ -620,7 +632,10 @@ impl App {
             SiteField::AutoDelete(v) => d.auto_delete = v,
             SiteField::AutoLimit(v) => d.auto_limit = v,
             SiteField::AutoSecs(v) => d.auto_secs = v,
-            SiteField::XScraper(v) => d.x_scraper = v,
+            SiteField::XHelper(v) => d.x_helper = v,
+            SiteField::XPhotos(v) => d.x_photos = v,
+            SiteField::GalleryExe(v) => d.gallery_exe = v,
+            SiteField::GalleryArgs(v) => d.gallery_args = v,
             SiteField::TiktokPhotos(v) => d.tiktok_photos = v,
             SiteField::Paused(v) => d.paused = v,
             SiteField::AutoDownload(v) => d.auto_download = v,

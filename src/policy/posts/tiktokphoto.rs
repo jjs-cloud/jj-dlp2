@@ -58,15 +58,14 @@ pub async fn fetch_page(url: String, user_agent: Option<String>) -> Result<Strin
     .unwrap_or_else(|e| Err(e.to_string()))
 }
 
-/// Downloads one image, failing with `TooLarge` when it is over `max_bytes`.
-pub async fn fetch_image(url: String, user_agent: Option<String>, max_bytes: u64) -> Result<Vec<u8>, ImageError> {
+/// Downloads one image, sending `referer` when given, and fails with `TooLarge` when it is over `max_bytes`.
+pub async fn fetch_image(url: String, user_agent: Option<String>, referer: Option<&'static str>, max_bytes: u64) -> Result<Vec<u8>, ImageError> {
     tokio::task::spawn_blocking(move || {
-        let resp = agent()
-            .get(&url)
-            .set("User-Agent", agent_name(&user_agent))
-            .set("Referer", "https://www.tiktok.com/")
-            .call()
-            .map_err(|e| ImageError::Failed(format!("could not download an image: {e}")))?;
+        let mut req = agent().get(&url).set("User-Agent", agent_name(&user_agent));
+        if let Some(referer) = referer {
+            req = req.set("Referer", referer);
+        }
+        let resp = req.call().map_err(|e| ImageError::Failed(format!("could not download an image: {e}")))?;
         let mut buf = Vec::new();
         resp.into_reader().take(max_bytes.saturating_add(1)).read_to_end(&mut buf).map_err(|e| ImageError::Failed(format!("could not read an image: {e}")))?;
         if buf.len() as u64 > max_bytes {

@@ -105,7 +105,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Open m3u8 instead of site - Plays a post that is not downloaded from its stream link, instead of opening its page, per site (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
 - Notifications - Desktop and ntfy notifications about new posts, set per site on the Notifications page (see [Posts](#posts))
 - Auto-download limits - Skips an automatic download that is larger than a set size or takes longer than a set time, per site (see [Auto-download limits](#auto-download-limits))
-- Twitter/X Scraper - Finds the newest posts of an account from its profile page, and keeps only the posts that have a video, turned on per site with a switch (see [Profile pages](#profile-pages))
+- Twitter/X Helper - Finds the newest posts of an X account with the basic HTML scraper or with gallery-dl, chosen per site with a dropdown, and downloads the pictures of photo posts with gallery-dl (see [Twitter/X helper](#twitterx-helper))
 - TikTok Photos scraper - Saves the pictures of a TikTok photo post, with one card for each picture, turned on per site with a switch (see [TikTok photos scraper](#tiktok-photos-scraper))
 
 ### Interface
@@ -159,7 +159,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - ffprobe - Comes with ffmpeg, and is used to read the resolution and frame rate of a recording (see [Resolution](#resolution))
     - If ffprobe is not on your `PATH`, no resolution is shown and a message is written to the Log tab
     - Upgrade quality needs ffprobe to read the recording (see [Upgrade quality](#upgrade-quality))
-- [firefox](https://www.firefox.com/) - Firefox is needed so yt-dlp can use your cookie for each site
+- gallery-dl - Needed for the **gallery-dl** Twitter/X helper. A copy is bundled for Windows and Linux (see [gallery-dl path](#gallery-dl-path))
+- [firefox](https://www.firefox.com/) - Firefox is needed so yt-dlp and gallery-dl can use your cookie for each site
     - Open Firefox at least once so it creates its profile, and log in to each site if you want it's cookies
 
 
@@ -991,7 +992,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - A blank box (the default) uses the site's **Check every (seconds)**, and the hint in the box shows the site's current value. Only digits can be typed, up to 6
         - A streamer with its own value is left out of the site's single yt-dlp call and is checked at that interval instead. Streamers on the same site with the same value are checked together in one yt-dlp call, and a streamer with a unique value gets a call of its own. It keeps being checked while it is recording
         - The box has a red border while it holds a value below 5. **Save changes** is unavailable until the box is blank or holds a number of at least 5
-    - Pause checking - Stops this streamer from being checked. Off by default
+    - Pause checking - Stops this streamer from being checked. Off by default, and shown at the bottom left of the panel, on the same row as the **Save changes** button
         - A paused streamer is left out of the site's single yt-dlp call and of any same-interval call. No quick check is made for it either
         - A recording that is already running carries on. A streamer that is not recording and was shown live is shown offline
         - It is separate from **Record**, which stops recording but keeps checking, and from the site's **Pause checking**, which stops the checks of every streamer on the site (see [Settings tab](#settings-tab))
@@ -1069,7 +1070,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Each site is checked on its own interval, independently of the other sites, so a check that takes a long time on one site does not delay the others. **Check all now** checks every site right away
         - The interval is counted from when the site's check has finished
         - A site's accounts are checked one after another, with one yt-dlp command for each account
-- Twitter/X Scraper - For a site with the Twitter/X Scraper switch turned on, an account's posts are found from its profile page instead of from yt-dlp (see [Profile pages](#profile-pages))
+- Twitter/X Helper - For a site whose **Twitter/X Helper** is not **None**, an X account's posts are found by the helper instead of by the checker command (see [Twitter/X helper](#twitterx-helper))
 - TikTok Photos scraper - For a site with the **Use TikTok Photos scraper** switch turned on, a TikTok post that is a photo post is downloaded from its page instead of by yt-dlp (see [TikTok photos scraper](#tiktok-photos-scraper))
 - Downloads - Posts are downloaded in the background, a couple at a time, while **Download new posts automatically** is on for the site
     - A download that fails is shown as `Failed`, and is tried again automatically after later checks, until it has failed a few times. **Retry** tries again at once and starts the count over
@@ -1105,22 +1106,27 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - A template for a site's recorded streams (VODs) is offered with the others. It fills in a profile URL template that points to the account's recorded streams, and uses their stream link instead of the post's page (see [Open m3u8 instead of site](#open-m3u8-instead-of-site))
 																																											  
         - A template for a site that needs your login adds `--cookies-from-browser firefox` to its **Checker arguments** and **Downloader arguments**, so Firefox must have a profile (see [Requirements](#requirements))
+        - The **Twitter/X** template uses the **gallery-dl** helper, checks every 900 seconds, and has `--cookies-from-browser firefox` in its checker and downloader arguments (see [Twitter/X helper](#twitterx-helper))
         - The **Youtube Videos** template, shown below **Youtube Shorts**, uses the profile URL template `https://www.youtube.com/@{username}`, checks only the newest post (`--playlist-end 1`), and starts with a size limit of 1000 MB and a time limit of 120 seconds for auto-downloads
         - A template does not need to be chosen before accounts can be added. Its site is created when the first account is added to it from the Posts tab, in the same way as on the **Livestreams** page (see [Posts](#posts))
         - Posts settings are no longer shown in a General section. Every one of them is set per site
     - Site card
         - Site name (example) - The display name for the site. Required. The field has a red border while it is blank
-        - Check every (seconds) - How often the site's accounts are checked, from 15 up, counted from when the site's check has finished. A blank field uses the fallback shown as hint text. Save changes is unavailable until it is blank or a valid number
+        - Check every (seconds) - How often the site's accounts are checked, from 15 up, counted from when the site's check has finished. A blank field uses the fallback shown as hint text. Save changes is unavailable until it is blank or a valid number. The Twitter/X template starts at 900
         - Path to yt-dlp executable - The full path to yt-dlp. Leave blank to use the fallback shown as hint text
         - Profile URL template - The profile address for the site, with `{username}` where the account's name goes. Required, and it has no hint text. The field has a red border while it is blank, and Save changes and Add site are unavailable until it has a value
         - Download folder (blank = global/posts) - Where the site's posts are saved. **Browse** chooses a folder and **Open** opens it
         - Delete files of unstarred posts after (days, blank = never) - Turns on [Auto-delete](#auto-delete). Save changes is unavailable until it is blank or a whole number of at least 1
+        - Twitter/X Helper: - A dropdown with **None**, **Basic HTML scraper** and **gallery-dl**. It chooses what finds the posts of X accounts on the site, and the default is **None**, which uses the checker command like any other site (see [Twitter/X helper](#twitterx-helper))
+        - Path to gallery-dl executable - The full path to gallery-dl. Shown to the right of **Twitter/X Helper:** only while **gallery-dl** is chosen. Leave blank to use the fallback shown as hint text (see [gallery-dl path](#gallery-dl-path))
+        - gallery-dl arguments - The gallery-dl arguments or options to pass when listing an account. Shown only while **gallery-dl** is chosen. Leave blank to use the fallback shown as hint text. `{url}` is replaced by the account's profile URL
+        - Download X photos - Saves the pictures of X photo posts, with one card for each picture. Shown only while **gallery-dl** is chosen, at the top of the switches. It is on by default (see [Twitter/X helper](#twitterx-helper))
         - Notifications - The notification settings of the site are not on the card. They are set on the **Posts** sub-page of the Notifications page (see [Settings tab](#settings-tab))
 																																												  
 																																											
 																																																																																			
-        - Pause checking - Stops the site from being checked.
-        - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. Shown below **Use Twitter/X scraper**. The TikTok template has it on. (see [TikTok photos scraper](#tiktok-photos-scraper))
+        - Pause checking - Stops the site from being checked. Shown at the bottom left of the card, on the same row as the **Save changes** button
+        - Use TikTok Photos scraper - Saves the pictures of TikTok photo posts from the post's page, with one card for each picture. The TikTok template has it on. (see [TikTok photos scraper](#tiktok-photos-scraper))
         - Download new posts automatically - Downloads new posts as soon as they are found
         - Download existing posts when an account is first checked - Also downloads the posts an account already has when it is first checked
         - Mark a post viewed when it is opened - Moves a post to the viewed posts after it is opened (see [Posts](#posts))
@@ -1131,7 +1137,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - m3u8 arguments - The yt-dlp arguments or options to pass when getting the stream link of a post. Leave blank to use the fallback shown as hint text. `{url}` is replaced by the post's URL, and the first line that is printed as a web address is used as the stream link
         - Player for m3u8 - The program that plays the stream link, as a full path or a name on your `PATH`. Leave blank to open the link with your system's default app
         - Checker arguments - The yt-dlp arguments or options to pass when checking an account for new posts. Leave blank to use the fallback shown as hint text
-            - With the Twitter/X Scraper switch on, the arguments are used on the address of each post that the scraper finds (see [Profile pages](#profile-pages))
+            - With a Twitter/X Helper chosen, the arguments are used on the address of each X post that the helper finds (see [Twitter/X helper](#twitterx-helper))
         - Downloader arguments - The yt-dlp arguments or options to pass when downloading a post. Leave blank to use the fallback shown as hint text
             - jj-dlp adds its own `--print-to-file` options to the end of the command, so it can find the file that was saved and read the time and length of the post (see [Posts](#posts))
             - A TikTok photo post is not downloaded with these arguments while the **Use TikTok Photos scraper** switch is on (see [TikTok photos scraper](#tiktok-photos-scraper))
@@ -1172,22 +1178,37 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - **Save** downloads it, without the limits
 - Log tab - One message is written for each post that is skipped, with the reason (see [Log tab](#log-tab))
 
-### Twitter/X scraper
+### Twitter/X helper
 
-- Profile pages - Finds an account's newest posts from its profile page
-    - Turned on per site with the switch on the site's card (see [Posts site settings](#posts-site-settings))
-    - Needs no login. The page is loaded as a visitor who is not logged in sees it, using the user agent from the site's arguments when one is set
-    - Only the posts of the account are found. Posts of other accounts that are linked on the page, such as reposts, are left out
-    - The newest posts linked on the page are looked at, newest first. A pinned post is looked at like any other post, so an older pinned post can be found on the first check
-- Videos only - Each post that is not known yet is checked with yt-dlp, using the site's **Checker arguments** on the post's own address
-    - A post that has a video is added to the list. A post that only has pictures or text is skipped
-    - A skipped post is not checked again until jj-dlp restarts
+- Twitter/X Helper - Chooses what finds the newest posts of an X account, per site, with the **Twitter/X Helper:** dropdown on the site's card (see [Posts site settings](#posts-site-settings))
+    - **None** - The site's **Checker arguments** list the profile with yt-dlp, like any other site. This is the default
+    - **Basic HTML scraper** - Reads the profile page as a visitor who is not logged in sees it, using the user agent from the site's arguments when one is set
+    - **gallery-dl** - Runs gallery-dl on the profile with your Firefox cookies, so it can see accounts and posts that need a login
+    - jj-dlp never switches from one helper to another by itself, so a gallery-dl problem is shown as an account error and the basic scraper is not tried
+- Finding posts - The newest posts are looked at, newest first, and only the posts of the account are kept
+    - Posts of other accounts, such as reposts, are left out
+    - With **Basic HTML scraper**, the posts are the ones linked on the profile page. A pinned post is looked at like any other post, so an older pinned post can be found on the first check
+    - With **gallery-dl**, the posts are the first files of the profile's media, which are listed with `--range 1-30` in the default arguments. A post that is only text is never listed
+    - A post that is not known yet is checked once, and a post that was skipped is not checked again until jj-dlp restarts
+- Videos - Each post with a video that is not known yet is checked with yt-dlp, using the site's **Checker arguments** on the post's own address
+    - A post that has a video is added to the list. A post that only has pictures is skipped, unless the **gallery-dl** helper is on and **Download X photos** is on
     - A post that fails for another reason, such as a network problem, is checked again at the next check
     - A post with more than one video is one post, and uses the first video
     - The post's page is the post's link
+- Photos - With **gallery-dl** and **Download X photos** on, a post that has pictures is added to the list from gallery-dl's listing, without a yt-dlp check
+    - The caption is the post's text, or `Photo post` when it has none, and the time is the time of the post
+    - The thumbnail is a small version of the first picture, and the links to the full-size pictures are kept with the post, so downloading it does not run gallery-dl again
+    - Cards, files, limits and failures work as for TikTok photo posts, and the pictures are named `account_date_postid_N.ext` (see [TikTok photos scraper](#tiktok-photos-scraper))
+    - Needs no login to download. The pictures are loaded from X's image servers as a visitor sees them
+    - A photo post that was skipped before the switch was turned on is looked at again after jj-dlp restarts
+- gallery-dl run - One gallery-dl command is run for each account at each check, using **gallery-dl arguments**, and it is given the profile address
+    - The default arguments are `--cookies-from-browser firefox -j --range 1-30 {url}`. jj-dlp reads the JSON that `-j` prints, so keep `-j` in the arguments
+    - The command is stopped after 180 seconds. A rate limit from X can make gallery-dl wait, so it can run into that limit
+    - The stdout and stderr logs of the account's checker also hold gallery-dl's output (see [Posts](#posts))
 - Problems - Shown as an account error, in the same way as other check problems (see [Posts](#posts))
-    - The profile page cannot be loaded
-    - The page has no posts, which can mean the profile is private or needs a login
+    - The profile page cannot be loaded (**Basic HTML scraper**)
+    - gallery-dl cannot be started, takes too long, or prints an error such as a missing login. The last `[error]` line of its output is shown
+    - No posts are found, which can mean the account is private, has no pictures or videos, or Firefox is not logged in to X
     - Every post that was checked failed for a reason other than having no video
     - The Log tab gets one message when a problem appears or changes (see [Log tab](#log-tab))
 
@@ -1654,6 +1675,14 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Absolute paths and plain names such as `yt-dlp` are used as written
 - Linux - If the bundled yt-dlp is not executable, jj-dlp sets the executable bit and writes a message to the Log tab. The Posts tab does the same for its yt-dlp, and writes a message to the Log tab too
 
+## gallery-dl path
+
+- A site with a blank **Path to gallery-dl executable** uses the bundled gallery-dl for your platform
+    - Windows - `bin\gallery-dl\windows\gallery-dl.exe`
+    - Linux - `bin/gallery-dl/linux/gallery-dl.bin`
+    - Other systems - `gallery-dl`, found through your `PATH`
+- A relative path is searched, and Linux files are made executable, in the same way as for yt-dlp (see [yt-dlp path](#yt-dlp-path))
+
 ## Process panel
 
 - Recorder card
@@ -1746,7 +1775,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - How a setting is reset
     - A field that can be left blank is set back to blank, so it uses the default again (see [Site defaults](#site-defaults)). Any other setting is set back to its default value
     - Checker arguments, recorder arguments, URL template and site color are set to the settings of the site template with the same name as the site (see [Settings tab](#settings-tab)). A site that is not named after a site template is left as it is
-    - For a Posts site, the checker arguments, download arguments, URL template, **Use Twitter/X scraper**, **Use TikTok Photos scraper**, automatic download, size and time limits, backfill, **Open m3u8 instead of site** and automatic delete settings are set to the settings of the site template with the same name as the site (see [Posts site settings](#posts-site-settings)). A Posts site that is not named after a site template is left as it is. Every other Posts site field is set back to its default
+    - For a Posts site, the checker arguments, download arguments, URL template, **Twitter/X Helper**, **Use TikTok Photos scraper**, automatic download, size and time limits, backfill, **Open m3u8 instead of site** and automatic delete settings are set to the settings of the site template with the same name as the site (see [Posts site settings](#posts-site-settings)). A Posts site that is not named after a site template is left as it is. Every other Posts site field is set back to its default
     - A reset either replaces whatever value is saved, or only replaces a value that is still the specific old value the release names. In the second case, a value you changed to something else is left alone
     - A setting that already has the value it would be reset to is not changed
 - Log tab - One message is written for each setting that was changed, right after the `--- session started (vX) ---` message (see [Log tab](#log-tab))

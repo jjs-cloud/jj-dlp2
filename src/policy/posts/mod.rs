@@ -1,5 +1,6 @@
 //! Posts monitor: checks accounts for new posts, downloads them and keeps the post library.
 
+mod gallerydl;
 mod model;
 mod monitor;
 mod runner;

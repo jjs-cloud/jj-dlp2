@@ -1,6 +1,7 @@
 //! Background work of the Posts monitor: yt-dlp calls, thumbnails and notifications.
 
 use super::model::*;
+use super::gallerydl;
 use super::store::{sidecar_path, thumbs_dir};
 use super::tiktokphoto::{self, ImageError, PageKind};
 use super::xprofile;
@@ -26,6 +27,8 @@ const TIMEOUT_PREFIX: &str = "yt-dlp timed out";
 static NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 const THUMB_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const THUMB_BOX: (u32, u32) = (360, 640);
+/// Referer sent when downloading the images of TikTok photo posts.
+const TIKTOK_REFERER: &str = "https://www.tiktok.com/";
 /// Total image bytes accepted for one photo post when there is no size limit.
 const PHOTO_MAX_BYTES: u64 = 500 * 1024 * 1024;
 
@@ -35,7 +38,7 @@ pub struct AccountReport {
     pub site_id: SiteId,
     pub name: String,
     pub new_posts: Vec<Post>,
-    /// Ids of X posts that have no video.
+    /// Ids of X posts that are skipped because they have no video to download.
     pub no_video: Vec<String>,
     pub error: Option<String>,
     /// A TikTok channel ID that is new or changed, to be stored on the account.
@@ -154,8 +157,12 @@ pub async fn check_cycle(sites: Vec<PostSite>, mut known: HashSet<String>, no_vi
 }
 
 async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
-    if let Some(user) = site.use_x_scraper.then(|| xprofile::profile_user(&acct.url)).flatten() {
-        return check_x_account(site, acct, &user, known, no_video).await;
+    if let Some(user) = xprofile::profile_user(&acct.url) {
+        match site.x_helper {
+            XHelper::BasicHtml => return check_x_account(site, acct, &user, known, no_video).await,
+            XHelper::GalleryDl => return check_x_gallery(site, acct, &user, known, no_video).await,
+            XHelper::Off => {}
+        }
     }
     let fail = |e: String| AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: Some(e), channel_id: None, lookups: Vec::new() };
     let log = checker_log(site, acct);
@@ -188,7 +195,7 @@ async fn check_account(site: &PostSite, acct: &Account, known: &HashSet<String>,
     AccountReport { site_id: site.id, name: acct.name.clone(), new_posts, no_video: Vec::new(), error: None, channel_id, lookups }
 }
 
-/// Checks an X account: lists its recent posts from the profile page and keeps those yt-dlp finds a video in.
+/// Checks an X account with the basic HTML scraper: lists its recent posts from the profile page and keeps those yt-dlp finds a video in.
 async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
     let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None, channel_id: None, lookups: Vec::new() };
     let html = match xprofile::fetch_profile(acct.url.clone(), site.user_agent()).await {
@@ -199,9 +206,64 @@ async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &Ha
     if ids.is_empty() {
         return AccountReport { error: Some("X returned no posts; the profile may be private or need a login".into()), ..report };
     }
+    let ids: Vec<String> = ids.into_iter().filter(|id| !known.contains(id) && !no_video.contains(id)).collect();
+    let last_error = check_x_videos(site, acct, user, ids, &mut report).await;
+    if report.new_posts.is_empty() && report.no_video.is_empty() {
+        report.error = last_error;
+    }
+    report
+}
+
+/// Checks an X account with gallery-dl: videos are checked by yt-dlp, photo posts are made from gallery-dl's listing.
+async fn check_x_gallery(site: &PostSite, acct: &Account, user: &str, known: &HashSet<String>, no_video: &HashSet<String>) -> AccountReport {
+    let mut report = AccountReport { site_id: site.id, name: acct.name.clone(), new_posts: Vec::new(), no_video: Vec::new(), error: None, channel_id: None, lookups: Vec::new() };
+    let fail = |report: AccountReport, e: String| AccountReport { error: Some(e), ..report };
+    let out = match run(site.gallery_dl_exe_or_default(), &gallery_cmd(site, &acct.url), LIST_TIMEOUT, &checker_log(site, acct)).await {
+        Ok(o) => o,
+        Err(e) => return fail(report, e.replacen(TIMEOUT_PREFIX, "gallery-dl timed out", 1)),
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let tweets = match gallerydl::parse_listing(&String::from_utf8_lossy(&out.stdout), user) {
+        Ok(t) => t,
+        Err(e) => return fail(report, gallerydl::error_line(&stderr).unwrap_or(e)),
+    };
+    if tweets.is_empty() {
+        let why = gallerydl::error_line(&stderr).unwrap_or_else(|| "gallery-dl found no posts; the account may be private or Firefox is not logged in to X".into());
+        return fail(report, why);
+    }
+    let mut video_ids = Vec::new();
+    for tweet in gallerydl::newest(tweets).into_iter().filter(|t| !known.contains(&t.id) && !no_video.contains(&t.id)) {
+        if tweet.has_video {
+            video_ids.push(tweet.id);
+        } else if site.use_x_photos && !tweet.photos.is_empty() {
+            let entry = Entry {
+                url: format!("https://x.com/{user}/status/{}", tweet.id),
+                title: gallerydl::photo_title(&tweet.text),
+                thumb_url: tweet.photos.first().map(|p| gallerydl::thumb_url(p)),
+                posted_at: tweet.posted_at,
+                duration: None,
+                image_urls: tweet.photos,
+                id: tweet.id,
+            };
+            let (post, lookup) = make_post(site, acct, entry).await;
+            report.new_posts.push(post);
+            report.lookups.extend(lookup);
+        } else {
+            report.no_video.push(tweet.id);
+        }
+    }
+    let last_error = check_x_videos(site, acct, user, video_ids, &mut report).await;
+    if report.new_posts.is_empty() && report.no_video.is_empty() {
+        report.error = last_error;
+    }
+    report
+}
+
+/// Runs the checker on each X post: posts with a video are added to `report`, the others are noted as having none; returns the last error.
+async fn check_x_videos(site: &PostSite, acct: &Account, user: &str, ids: Vec<String>, report: &mut AccountReport) -> Option<String> {
     let mut last_error = None;
     let log = checker_log(site, acct);
-    for id in ids.into_iter().filter(|id| !known.contains(id) && !no_video.contains(id)) {
+    for id in ids {
         let url = format!("https://x.com/{user}/status/{id}");
         let out = match run(site.exe_or_default(), &checker_cmd(site, &url), INFO_TIMEOUT, &log).await {
             Ok(o) => o,
@@ -222,10 +284,7 @@ async fn check_x_account(site: &PostSite, acct: &Account, user: &str, known: &Ha
             None => last_error = Some(error_line(&stderr).unwrap_or_else(|| format!("yt-dlp exited with {}", out.status))),
         }
     }
-    if report.new_posts.is_empty() && report.no_video.is_empty() {
-        report.error = last_error;
-    }
-    report
+    last_error
 }
 
 /// Builds a post from a listed entry, filling missing details and fetching its thumbnail; also returns a log line when it needed an extra yt-dlp call.
@@ -261,6 +320,7 @@ async fn make_post(site: &PostSite, acct: &Account, mut entry: Entry) -> (Post, 
         duration: entry.duration,
         found_at: now_secs(),
         has_thumb,
+        image_urls: entry.image_urls,
         ..Default::default()
     };
     (post, lookup)
@@ -393,10 +453,10 @@ fn date_stamp(secs: u64) -> String {
 }
 
 /// Downloads every image in order; fails with `TooLarge` when together they are over `cap` bytes.
-async fn fetch_images(urls: Vec<String>, user_agent: Option<String>, cap: u64) -> Result<Vec<Vec<u8>>, ImageError> {
+async fn fetch_images(urls: Vec<String>, user_agent: Option<String>, referer: Option<&'static str>, cap: u64) -> Result<Vec<Vec<u8>>, ImageError> {
     let (mut images, mut total) = (Vec::new(), 0u64);
     for url in urls {
-        let bytes = tiktokphoto::fetch_image(url, user_agent.clone(), cap - total).await?;
+        let bytes = tiktokphoto::fetch_image(url, user_agent.clone(), referer, cap - total).await?;
         total += bytes.len() as u64;
         images.push(bytes);
     }
@@ -433,7 +493,7 @@ fn save_photos(folder: &Path, post: &Post, images: &[Vec<u8>]) -> Result<Vec<Pho
 async fn download_photos(site: &PostSite, post: &Post, folder: &Path, max_mb: Option<u64>, max_secs: Option<u64>) -> Option<DownloadOutcome> {
     let (log, user_agent) = (download_log(site), site.user_agent());
     let note = |why: &str| log.failure("TikTok photos scraper", &[post.url.clone()], why);
-    let page = match tiktokphoto::fetch_page(post.url.clone(), user_agent.clone()).await {
+    let page = match tiktokphoto::fetch_page(post.url.clone(), user_agent).await {
         Ok(page) => page,
         Err(e) => {
             note(&e);
@@ -448,10 +508,19 @@ async fn download_photos(site: &PostSite, post: &Post, folder: &Path, max_mb: Op
             return None;
         }
     };
+    save_photo_post(site, post, folder, urls, Some(TIKTOK_REFERER), max_mb, max_secs).await
+}
+
+/// Downloads the images of a photo post and saves them into `folder`; `None` when it has no images.
+async fn save_photo_post(site: &PostSite, post: &Post, folder: &Path, urls: Vec<String>, referer: Option<&'static str>, max_mb: Option<u64>, max_secs: Option<u64>) -> Option<DownloadOutcome> {
+    if urls.is_empty() {
+        return None;
+    }
+    let user_agent = site.user_agent();
     let fail = |msg: String, skipped: bool| DownloadOutcome { file: Err(msg), has_thumb: post.has_thumb, skipped, posted_at: None, duration: None, photos: Vec::new() };
     let limit = max_secs.map_or(DOWNLOAD_TIMEOUT, Duration::from_secs);
     let cap = max_mb.map_or(PHOTO_MAX_BYTES, |mb| mb.saturating_mul(1024 * 1024));
-    let images = match tokio::time::timeout(limit, fetch_images(urls, user_agent, cap)).await {
+    let images = match tokio::time::timeout(limit, fetch_images(urls, user_agent, referer, cap)).await {
         Ok(Ok(images)) => images,
         Ok(Err(ImageError::TooLarge)) if max_mb.is_some() => return Some(fail("Over the size limit for auto-downloads".into(), true)),
         Ok(Err(ImageError::TooLarge)) => return Some(fail("The images are larger than 500 MB".into(), false)),
@@ -476,6 +545,10 @@ pub async fn download(site: PostSite, post: Post, global_dir: String, max_mb: Op
     let folder = site.output_folder(&global_dir);
     if site.use_tiktok_photos && tiktokphoto::is_tiktok_url(&post.url) {
         if let Some(outcome) = download_photos(&site, &post, &folder, max_mb, max_secs).await {
+            return outcome;
+        }
+    } else if !post.image_urls.is_empty() {
+        if let Some(outcome) = save_photo_post(&site, &post, &folder, post.image_urls.clone(), None, max_mb, max_secs).await {
             return outcome;
         }
     }

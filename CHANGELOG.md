@@ -5,5 +5,6 @@
 - Added the ability to remove failed posts via the x button in the top right corner of the thumbnail.
 - The x button in the top right corner of the thumbnail on unsaved posts now changes color on hover.
 - Removed the time picker (in streamer settings) in favor of a simpler time selector.
-- Photos are now downloaded for TikTok posts.
 - Updated yt-dlp. The tiktok extractor now uses a different endpoint, which should improve the maximum qualtity offered for tiktok livestreams.
+- Added "gallery-dl". This tool is used to scrape twitter/x profiles, using your cookies from firefox to access private/restricted accounts.
+- Photos are now downloaded for TikTok and Twitter/X posts by jj-dlp directly, since yt-dlp does not download photo posts.

@@ -5,7 +5,7 @@ use super::prefs;
 use super::skin::{self, BtnKind, Skin};
 use super::view::{btn_label, card_box, chip, clip, fmt_ago, muted, t, warn_text};
 use super::{App, Msg};
-use crate::policy::posts::{self, Post, PostSite, PostState, Preset};
+use crate::policy::posts::{self, Post, PostSite, PostState, Preset, XHelper};
 use iced::widget::text::Wrapping;
 use iced::widget::text_editor::{self, Action};
 use iced::widget::{Column, Row, Space, button, column, container, pick_list, row, scrollable, slider, stack, text_editor as editor, text_input, toggler};
@@ -430,15 +430,34 @@ impl App {
         ]
         .spacing(8);
 
-        let toggles = column![
-            toggle("Use Twitter/X scraper", d.x_scraper, SiteField::XScraper),
-            toggle("Use TikTok Photos scraper", d.tiktok_photos, SiteField::TiktokPhotos),
-            toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload),
-            toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill),
-            toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen),
-            toggle("Open m3u8 instead of site", d.open_m3u8, SiteField::OpenM3u8),
+        let gallery = d.x_helper == XHelper::GalleryDl;
+        let helper_picker = column![
+            muted(&s, "Twitter/X Helper:"),
+            pick_list(XHelper::ALL, Some(d.x_helper), move |h: XHelper| send(PostsMsg::Site(id, SiteField::XHelper(h)))).padding(5).text_size(13).width(Length::Fill),
         ]
-        .spacing(6);
+        .spacing(2);
+        let mut helper = row![cell(helper_picker.into(), Length::FillPortion(1))].spacing(8);
+        if gallery {
+            helper = helper.push(cell(
+                input("Path to gallery-dl executable", posts::DEFAULT_GALLERY_DL_EXE, &d.gallery_exe, SiteField::GalleryExe, false),
+                Length::FillPortion(2),
+            ));
+        }
+        let mut helper_col = Column::new().spacing(10).push(helper);
+        if gallery {
+            helper_col = helper_col.push(input("gallery-dl arguments ({url} = profile URL)", posts::DEFAULT_GALLERY_DL_ARGS, &d.gallery_args, SiteField::GalleryArgs, false));
+        }
+
+        let mut toggles = Column::new().spacing(6);
+        if gallery {
+            toggles = toggles.push(toggle("Download X photos", d.x_photos, SiteField::XPhotos));
+        }
+        toggles = toggles
+            .push(toggle("Use TikTok Photos scraper", d.tiktok_photos, SiteField::TiktokPhotos))
+            .push(toggle("Download new posts automatically", d.auto_download, SiteField::AutoDownload))
+            .push(toggle("Download existing posts when an account is first checked", d.backfill, SiteField::Backfill))
+            .push(toggle("Mark a post viewed when it is opened", d.mark_on_open, SiteField::MarkOnOpen))
+            .push(toggle("Open m3u8 instead of site", d.open_m3u8, SiteField::OpenM3u8));
 
         let stream = row![
             cell(
@@ -495,6 +514,7 @@ impl App {
                 identity,
                 folder,
                 cleanup,
+                helper_col,
                 toggles,
                 stream,
                 args("Checker arguments ({url} = profile URL)", posts::DEFAULT_CHECKER_ARGS, &d.checker, SiteField::Checker),

@@ -5,6 +5,7 @@ use crate::engine::template::tokenize;
 use crate::policy::notify;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_INTERVAL_SECS: u64 = 300;
@@ -19,6 +20,16 @@ pub const MIN_INTERVAL_SECS: u64 = 15;
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
 /// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
 pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
+/// gallery-dl arguments used when a site's own are blank; `{url}` is the profile URL.
+pub const DEFAULT_GALLERY_DL_ARGS: &str = "--cookies-from-browser firefox -j --range 1-30 {url}";
+/// gallery-dl path used when a site's own is blank: the bundled binary on Windows/Linux, else PATH.
+pub const DEFAULT_GALLERY_DL_EXE: &str = if cfg!(windows) {
+    r"bin\gallery-dl\windows\gallery-dl.exe"
+} else if cfg!(target_os = "linux") {
+    "bin/gallery-dl/linux/gallery-dl.bin"
+} else {
+    "gallery-dl"
+};
 /// Arguments used when a site's own are blank; `{url}` is the post URL and the printed line is the stream playlist.
 pub const DEFAULT_M3U8_ARGS: &str = "--no-warnings --no-playlist --get-url {url}";
 const TWITCH_VODS_URL_TEMPLATE: &str = "https://www.twitch.tv/{username}/videos?filter=archives";
@@ -28,7 +39,9 @@ const YOUTUBE_VIDEOS_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-
 const YOUTUBE_VIDEOS_AUTO_DOWNLOAD_LIMIT_MB: u64 = 1000;
 const YOUTUBE_VIDEOS_AUTO_DOWNLOAD_SECS: u64 = 120;
 const YOUTUBE_SHORTS_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
-const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
+const TWITTER_X_INTERVAL_SECS: u64 = 900;
+const TWITTER_X_CHECKER_ARGS: &str = "--cookies-from-browser firefox --no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
+const TWITTER_X_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(display_id)s.%(ext)s" {url}"#;
 const TWITTER_X_URL_TEMPLATE: &str = "https://x.com/{username}";
 const TIKTOK_URL_TEMPLATE: &str = "https://www.tiktok.com/@{username}";
 const TIKTOK_CHECKER_ARGS: &str = r#"--cookies-from-browser firefox --no-warnings --ignore-errors --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0" --flat-playlist --dump-json --playlist-end 5 {url}"#;
@@ -37,6 +50,33 @@ const TIKTOK_DOWNLOAD_ARGS: &str = r#"--cookies-from-browser firefox --no-warnin
 pub const MAX_ATTEMPTS: u8 = 3;
 
 pub type SiteId = u64;
+
+/// What lists the posts of an X/Twitter profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XHelper {
+    /// The checker command lists the profile like any other site.
+    #[default]
+    Off,
+    /// The logged-out profile page is read directly.
+    BasicHtml,
+    /// gallery-dl lists the profile with the browser's cookies.
+    GalleryDl,
+}
+
+impl XHelper {
+    /// Every choice, in dropdown order.
+    pub const ALL: [XHelper; 3] = [XHelper::Off, XHelper::BasicHtml, XHelper::GalleryDl];
+}
+
+impl fmt::Display for XHelper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            XHelper::Off => "None",
+            XHelper::BasicHtml => "Basic HTML scraper",
+            XHelper::GalleryDl => "gallery-dl",
+        })
+    }
+}
 
 /// Starting points offered by the site buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,8 +174,14 @@ pub struct PostSite {
     pub interval_secs: Option<u64>,
     /// Blank uses `DEFAULT_CHECKER_ARGS`.
     pub checker_args: String,
-    /// Lists X/Twitter profiles from the profile page instead of the checker command.
-    pub use_x_scraper: bool,
+    /// What lists X/Twitter profiles instead of the checker command.
+    pub x_helper: XHelper,
+    /// Saves the images of X photo posts listed by gallery-dl, one post per image.
+    pub use_x_photos: bool,
+    /// Blank uses `DEFAULT_GALLERY_DL_EXE`.
+    pub gallery_dl_path: String,
+    /// Blank uses `DEFAULT_GALLERY_DL_ARGS`.
+    pub gallery_dl_args: String,
     /// Saves the images of TikTok photo posts from the post page, one post per image.
     pub use_tiktok_photos: bool,
     /// Blank uses `DEFAULT_DOWNLOAD_ARGS`.
@@ -179,7 +225,10 @@ impl Default for PostSite {
             exe_path: String::new(),
             interval_secs: None,
             checker_args: String::new(),
-            use_x_scraper: false,
+            x_helper: XHelper::Off,
+            use_x_photos: true,
+            gallery_dl_path: String::new(),
+            gallery_dl_args: String::new(),
             use_tiktok_photos: false,
             download_args: String::new(),
             url_template: String::new(),
@@ -243,9 +292,11 @@ impl PostSite {
             },
             Preset::TwitterX => PostSite {
                 name: Preset::TwitterX.label().into(),
+                interval_secs: Some(TWITTER_X_INTERVAL_SECS),
+                checker_args: TWITTER_X_CHECKER_ARGS.into(),
                 download_args: TWITTER_X_DOWNLOAD_ARGS.into(),
                 url_template: TWITTER_X_URL_TEMPLATE.into(),
-                use_x_scraper: true,
+                x_helper: XHelper::GalleryDl,
                 ..Default::default()
             },
             Preset::Blank => PostSite::default(),
@@ -265,6 +316,16 @@ impl PostSite {
     pub fn download_or_default(&self) -> &str {
         let t = self.download_args.trim();
         if t.is_empty() { DEFAULT_DOWNLOAD_ARGS } else { t }
+    }
+
+    pub fn gallery_dl_exe_or_default(&self) -> &str {
+        let t = self.gallery_dl_path.trim();
+        if t.is_empty() { DEFAULT_GALLERY_DL_EXE } else { t }
+    }
+
+    pub fn gallery_dl_args_or_default(&self) -> &str {
+        let t = self.gallery_dl_args.trim();
+        if t.is_empty() { DEFAULT_GALLERY_DL_ARGS } else { t }
     }
 
     pub fn m3u8_or_default(&self) -> &str {
@@ -403,8 +464,11 @@ pub struct Post {
     pub viewed: bool,
     pub viewed_at: Option<u64>,
     pub starred: bool,
-    /// True for one photo of a TikTok photo post; its file is an image.
+    /// True for one photo of a photo post; its file is an image.
     pub photo: bool,
+    /// Full-size image links of an X photo post, saved when it is listed; empty for other posts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub image_urls: Vec<String>,
 }
 
 impl Post {
@@ -451,6 +515,8 @@ pub struct Entry {
     pub thumb_url: Option<String>,
     pub posted_at: Option<u64>,
     pub duration: Option<u64>,
+    /// Full-size image links of an X photo post; empty for other posts.
+    pub image_urls: Vec<String>,
 }
 
 /// Parses one line of yt-dlp `--dump-json` output; `None` when it has no id or URL.
@@ -472,7 +538,7 @@ pub fn parse_entry(line: &str) -> Option<Entry> {
         v.get("thumbnails")?.as_array()?.iter().rev().find_map(|t| t.get("url")?.as_str().map(str::to_string))
     });
     let (posted_at, duration) = time_fields(&v);
-    Some(Entry { id, url, title, thumb_url, posted_at, duration })
+    Some(Entry { id, url, title, thumb_url, posted_at, duration, image_urls: Vec::new() })
 }
 
 /// Post time and duration in seconds from a yt-dlp JSON object.
@@ -518,6 +584,11 @@ fn expand(template: &str, url: &str, dir: &str) -> Vec<String> {
 /// Checker arguments for a profile or single post URL.
 pub fn checker_cmd(site: &PostSite, url: &str) -> Vec<String> {
     expand(site.checker_or_default(), url, "")
+}
+
+/// gallery-dl arguments that list a profile URL.
+pub fn gallery_cmd(site: &PostSite, url: &str) -> Vec<String> {
+    expand(site.gallery_dl_args_or_default(), url, "")
 }
 
 /// The `--user-agent` value in the site's checker arguments, if it has one.
@@ -722,8 +793,40 @@ mod tests {
     }
 
     #[test]
-    fn twitter_x_preset_enables_the_scraper() {
-        assert!(PostSite::from_preset(Preset::TwitterX).use_x_scraper);
+    fn twitter_x_preset_uses_gallery_dl_and_checks_every_900_seconds() {
+        let site = PostSite::from_preset(Preset::TwitterX);
+        assert_eq!(site.x_helper, XHelper::GalleryDl);
+        assert!(site.use_x_photos);
+        assert_eq!(site.interval_or_default(), 900);
+        assert!(site.checker_args.contains("--cookies-from-browser firefox"));
+        assert!(site.download_args.contains("--cookies-from-browser firefox"));
+        assert_eq!(PostSite::default().x_helper, XHelper::Off);
+    }
+
+    #[test]
+    fn x_helper_choices_are_labelled() {
+        let labels: Vec<String> = XHelper::ALL.iter().map(XHelper::to_string).collect();
+        assert_eq!(labels, ["None", "Basic HTML scraper", "gallery-dl"]);
+    }
+
+    #[test]
+    fn gallery_dl_defaults_and_command() {
+        let mut site = PostSite::default();
+        assert_eq!(site.gallery_dl_exe_or_default(), DEFAULT_GALLERY_DL_EXE);
+        assert_eq!(site.gallery_dl_args_or_default(), DEFAULT_GALLERY_DL_ARGS);
+        let args = gallery_cmd(&site, "https://x.com/a");
+        assert_eq!(args.last().map(String::as_str), Some("https://x.com/a"));
+        assert!(args.contains(&"-j".to_string()));
+        site.gallery_dl_args = "-j {url} --range 1-5".into();
+        assert_eq!(gallery_cmd(&site, "u"), ["-j", "u", "--range", "1-5"]);
+    }
+
+    #[test]
+    fn old_posts_json_without_the_new_fields_still_loads() {
+        let site: PostSite = serde_json::from_str(r#"{"id":3,"name":"Twitter/X","use_x_scraper":true}"#).unwrap();
+        assert_eq!((site.x_helper, site.use_x_photos), (XHelper::Off, true));
+        let post: Post = serde_json::from_str(r#"{"id":"1"}"#).unwrap();
+        assert!(post.image_urls.is_empty());
     }
 
     #[test]

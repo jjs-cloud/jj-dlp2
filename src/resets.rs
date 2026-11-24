@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Config revision of this build; bump it whenever entries are added to `RESETS`.
-pub const CONFIG_REV: u32 = 2;
+pub const CONFIG_REV: u32 = 3;
 
 /// Resets to apply; each entry's `rev` is the `CONFIG_REV` it was added at (always above 1).
 pub const RESETS: &[Reset] = &[
@@ -20,6 +20,10 @@ pub const RESETS: &[Reset] = &[
     // Reset::if_equals(3, Key::SiteCheckerArgs, Val::Text("--old-args {urls}")),
     // Turns "Use TikTok Photos scraper" on for the TikTok posts site.
     Reset::if_equals(2, Key::PostsUseTiktokPhotos, Val::Flag(false)),
+    // Switches the Twitter/X posts site to the gallery-dl helper.
+    Reset::always(3, Key::PostsXHelper),
+    // Sets the Twitter/X posts site to check every 900 seconds.
+    Reset::always(3, Key::PostsXIntervalSecs),
 ];
 
 /// A previously stored value to match; `Unset` matches a blank (`None`) field.
@@ -65,11 +69,12 @@ pub enum Key {
     SiteWarningClearMinutes,
     SiteRestartThreshold,
     SiteColor,
-    // Posts site fields; the first group re-applies the name-matched posts template, the rest use the default.
+    // Posts site fields; the first group re-applies the name-matched posts template (the two X keys only touch the Twitter/X site), the rest use the default.
     PostsCheckerArgs,
     PostsDownloadArgs,
     PostsUrlTemplate,
-    PostsUseXScraper,
+    PostsXHelper,
+    PostsXIntervalSecs,
     PostsUseTiktokPhotos,
     PostsAutoDownload,
     PostsAutoDownloadLimitMb,
@@ -156,6 +161,12 @@ impl Resettable for bool {
 impl Resettable for f32 {
     fn eq_val(&self, v: &Val) -> bool {
         matches!(v, Val::Float(f) if (*self - *f).abs() < 1e-3)
+    }
+}
+
+impl Resettable for posts::XHelper {
+    fn eq_val(&self, _: &Val) -> bool {
+        false
     }
 }
 
@@ -289,11 +300,15 @@ fn post_preset_for(site: &PostSite) -> Option<PostSite> {
 fn reset_post_site(site: &mut PostSite, key: Key, when: &When) -> Option<String> {
     let d = PostSite::default();
     let p = post_preset_for(site);
+    let is_x = PostsPreset::from_name(&site.name) == PostsPreset::TwitterX;
     match key {
         Key::PostsCheckerArgs => reset_preset(&mut site.checker_args, p.map(|p| p.checker_args), "checker_args", when),
         Key::PostsDownloadArgs => reset_preset(&mut site.download_args, p.map(|p| p.download_args), "download_args", when),
         Key::PostsUrlTemplate => reset_preset(&mut site.url_template, p.map(|p| p.url_template), "url_template", when),
-        Key::PostsUseXScraper => reset_preset(&mut site.use_x_scraper, p.map(|p| p.use_x_scraper), "use_x_scraper", when),
+        Key::PostsXHelper => is_x.then(|| reset_preset(&mut site.x_helper, p.map(|p| p.x_helper), "x_helper", when)).flatten(),
+        Key::PostsXIntervalSecs => {
+            is_x.then(|| reset_preset(&mut site.interval_secs, p.map(|p| p.interval_secs), "interval_secs", when)).flatten()
+        }
         Key::PostsUseTiktokPhotos => {
             reset_preset(&mut site.use_tiktok_photos, p.map(|p| p.use_tiktok_photos), "use_tiktok_photos", when)
         }
@@ -570,6 +585,32 @@ mod tests {
         let mut cfg = PostsConfig { sites: vec![site] };
         let r = Reset::always(2, Key::PostsUseTiktokPhotos);
         assert!(reset_posts(&mut cfg, &[&r]).is_empty());
+    }
+
+    #[test]
+    fn x_helper_and_interval_resets_only_touch_the_twitter_x_site() {
+        let mut x = post_site("Twitter/X");
+        x.interval_secs = Some(60);
+        let mut tiktok = post_site("TikTok");
+        tiktok.interval_secs = Some(60);
+        let mut mine = post_site("Mine");
+        mine.interval_secs = Some(60);
+        let mut cfg = PostsConfig { sites: vec![x, tiktok, mine] };
+        let (r1, r2) = (Reset::always(3, Key::PostsXHelper), Reset::always(3, Key::PostsXIntervalSecs));
+        let log = reset_posts(&mut cfg, &[&r1, &r2]);
+        assert_eq!((cfg.sites[0].x_helper, cfg.sites[0].interval_secs), (posts::XHelper::GalleryDl, Some(900)));
+        assert_eq!((cfg.sites[1].x_helper, cfg.sites[1].interval_secs), (posts::XHelper::Off, Some(60)));
+        assert_eq!((cfg.sites[2].x_helper, cfg.sites[2].interval_secs), (posts::XHelper::Off, Some(60)));
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn x_resets_are_skipped_when_already_applied() {
+        let mut x = PostSite::from_preset(PostsPreset::TwitterX);
+        x.interval_secs = Some(900);
+        let mut cfg = PostsConfig { sites: vec![x] };
+        let (r1, r2) = (Reset::always(3, Key::PostsXHelper), Reset::always(3, Key::PostsXIntervalSecs));
+        assert!(reset_posts(&mut cfg, &[&r1, &r2]).is_empty());
     }
 
     #[test]
