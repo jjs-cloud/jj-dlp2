@@ -44,6 +44,16 @@ pub(crate) enum Internal {
     Preflight { notices: Vec<Notice>, manual: bool },
 }
 
+/// True when `new` differs from `cur` only by added URLs that are all in `fresh`.
+fn only_fresh_added(cur: &SiteSnapshot, new: &SiteSnapshot, fresh: &HashSet<String>) -> bool {
+    let added: Vec<&String> = new.urls.iter().filter(|u| !cur.urls.contains(u)).collect();
+    cur.site == new.site
+        && cur.group == new.group
+        && !added.is_empty()
+        && added.iter().all(|u| fresh.contains(*u))
+        && cur.urls.iter().all(|u| new.urls.contains(u))
+}
+
 /// Prevents a console window from flashing up on Windows.
 pub(crate) fn hide_window(cmd: &mut tokio::process::Command) {
     #[cfg(windows)]
@@ -282,11 +292,16 @@ impl Engine {
             self.health.remove(&id);
             self.session_notes.retain(|(sid, _)| *sid != id);
         }
+        let known: HashSet<StreamerId> = self.settings.streamers.iter().map(|s| s.id).collect();
+        let added: Vec<Streamer> = new.streamers.iter().filter(|s| kept.contains(&s.id) && !known.contains(&s.id)).cloned().collect();
+        let fresh: HashSet<String> = added.iter().map(|s| s.url.clone()).collect();
+        // A streamer whose worker does not exist yet is checked by that worker's first run instead.
+        let first_run: HashSet<StreamerId> = added.iter().filter(|s| !self.has_worker(s)).map(|s| s.id).collect();
         self.settings = new;
         self.checker_overrides.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
         self.recorder_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
         self.site_problems.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
-        self.sync_workers();
+        self.sync_workers_quiet(&fresh);
         self.clear_paused_states();
         self.start_preflight(false);
         let streamers = self.settings.streamers.clone();
@@ -294,6 +309,17 @@ impl Engine {
             self.apply_log_options(s);
             self.follow_enabled(s.id);
             self.emit_status(s.id);
+        }
+        for s in added.iter().filter(|s| !first_run.contains(&s.id)) {
+            self.queue_quick_check(s.id);
+        }
+    }
+
+    /// True when the worker that checks this streamer already exists.
+    fn has_worker(&self, s: &Streamer) -> bool {
+        match s.options.interval_secs {
+            Some(secs) => self.group_workers.contains_key(&(s.site_id, secs)),
+            None => self.workers.contains_key(&s.site_id),
         }
     }
 
@@ -358,6 +384,11 @@ impl Engine {
 
     /// Creates, updates and removes the per-site and per-streamer workers to match the settings.
     fn sync_workers(&mut self) {
+        self.sync_workers_quiet(&HashSet::new());
+    }
+
+    /// Like `sync_workers`, but a worker is not woken when the only change is URLs listed in `fresh`.
+    fn sync_workers_quiet(&mut self, fresh: &HashSet<String>) {
         let gone: Vec<SiteId> = self
             .workers
             .keys()
@@ -371,7 +402,7 @@ impl Engine {
         }
         for site in self.settings.sites.clone() {
             let snap = self.snapshot_for(&site);
-            Self::sync_worker(&mut self.workers, site.id, snap, &self.internal_tx);
+            Self::sync_worker(&mut self.workers, site.id, snap, fresh, &self.internal_tx);
         }
         let groups: Vec<((SiteId, u64), SiteSnapshot)> = self.group_keys().into_iter().filter_map(|(site_id, secs)| {
             let site = self.settings.sites.iter().find(|x| x.id == site_id)?;
@@ -385,7 +416,7 @@ impl Engine {
             }
         }
         for (key, snap) in groups {
-            Self::sync_worker(&mut self.group_workers, key, snap, &self.internal_tx);
+            Self::sync_worker(&mut self.group_workers, key, snap, fresh, &self.internal_tx);
         }
     }
 
@@ -399,17 +430,18 @@ impl Engine {
         workers: &mut HashMap<K, SiteWorker>,
         key: K,
         snap: SiteSnapshot,
+        fresh: &HashSet<String>,
         internal: &UnboundedSender<Internal>,
     ) {
         match workers.get(&key) {
             Some(w) => {
                 w.tx.send_if_modified(|cur| {
                     if *cur == snap {
-                        false
-                    } else {
-                        *cur = snap;
-                        true
+                        return false;
                     }
+                    let quiet = only_fresh_added(cur, &snap, fresh);
+                    *cur = snap;
+                    !quiet
                 });
             }
             None => {
@@ -980,6 +1012,21 @@ mod e2e {
             let thread = p.thread;
             tokio::task::spawn_blocking(move || thread.join()).await.unwrap().unwrap();
         });
+    }
+
+    #[test]
+    fn only_new_urls_are_added_quietly() {
+        use crate::policy::{new_site, Preset};
+        let site = new_site(Preset::Tiktok).into_site(1);
+        let snap = |urls: &[&str]| SiteSnapshot { site: site.clone(), urls: urls.iter().map(|u| u.to_string()).collect(), group: None };
+        let fresh: HashSet<String> = ["c".to_string()].into();
+        assert!(only_fresh_added(&snap(&["a", "b"]), &snap(&["a", "b", "c"]), &fresh));
+        assert!(!only_fresh_added(&snap(&["a", "b"]), &snap(&["a", "b", "d"]), &fresh));
+        assert!(!only_fresh_added(&snap(&["a", "b"]), &snap(&["a"]), &fresh));
+        assert!(!only_fresh_added(&snap(&["a"]), &snap(&["a"]), &fresh));
+        let mut paused = snap(&["a", "c"]);
+        paused.site.paused = true;
+        assert!(!only_fresh_added(&snap(&["a"]), &paused, &fresh));
     }
 
     #[test]

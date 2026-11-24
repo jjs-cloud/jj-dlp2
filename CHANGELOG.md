@@ -8,3 +8,4 @@
 - Updated yt-dlp. The tiktok extractor now uses a different endpoint, which should improve the maximum qualtity offered for tiktok livestreams.
 - Added "gallery-dl". This tool is used to scrape twitter/x profiles, using your cookies from firefox to access private/restricted accounts.
 - Photos are now downloaded for TikTok and Twitter/X posts by jj-dlp directly, since yt-dlp does not download photo posts.
+- Adding a new streamer no longer triggers the full site checker to run. Now, only a single check runs for the new streamer.

@@ -231,6 +231,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 																								
     - Streamer username - The streamer's name on the chosen site. A leading `@` is ignored, and the username is added in lowercase letters. After you add a streamer, the cursor stays in this box, so you can type the next username and press Enter again. The streamer is shown under its username until a display name is set in its settings (see [Streamer settings](#streamer-settings))
     - Add streamer button - Adds the streamer, using the site's URL template to build their stream URL
+    - First check - A new streamer is checked once on its own. The site's other streamers are not checked again because of it (see [Quick check](#quick-check))
     - Enter - Pressing Enter in **Streamer username** has the same effect as the **Add streamer** button. Nothing is added when the username is blank, and the cursor stays in **Streamer username**
     - Pulse - While no streamer has been added yet, the **Streamer username** box pulses so it is easier to find. It stops pulsing once a streamer has been added
 - Empty page - `No streamers yet. Pick a site and add a username below.` is shown while no streamer has been added, in the normal view and in Compact view
@@ -813,6 +814,12 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - A streamer that is not seen live, or a check that fails, changes nothing more. It is not tried again, and the site's regular checks carry on as normal
     - It does not change the check time or the problem warning shown in the site header (see [Livestreams tab](#livestreams-tab))
     - A check that started earlier never replaces the result of a check that started later, so a slow regular check that started before a quick check does not mark the streamer offline again
+- New streamers - A streamer that is added is checked once with the same one-streamer check, and the site's regular check does not run at once because of it
+    - The streamer joins the site's regular checks from their next scheduled run
+    - Made whether or not quick check is on for the streamer, and it does not count towards the limit below
+    - Also made for a streamer added by editing the config file by hand
+    - Not made when the site's checking or the streamer's checking is paused. A site that is created by adding its first streamer checks that streamer in its own first check
+    - A message that the check failed is written to the Log tab as `<streamer>: quick check failed: <reason>`
 - Limit - At most 20 quick checks are made for a streamer during one live time (see [Live time](#live-time))
     - A check counts when it is made, whether or not the streamer is seen live
     - Once the limit is reached, no more are made until the live time starts over, and the Log tab gets one message
