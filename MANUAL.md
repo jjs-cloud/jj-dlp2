@@ -1746,7 +1746,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - What is installed
     - Windows and Linux - The jj-dlp executable is replaced, and the `bin` folder in the release is copied over the `bin` folder next to jj-dlp. Files with the same name are overwritten, and other files are left alone
     - macOS - Only the jj-dlp executable is replaced. yt-dlp is found through your `PATH`
-- Leftover files - Windows - Files named `.jj-dlp.<random>.__selfdelete__.exe` or `.jj-dlp.<random>.__relocated__.exe` can stay in the jj-dlp folder after an update if they fail to be deleted. They are deleted automatically the next time jj-dlp starts
+- Leftover files - Windows - Files named `.jj-dlp.<random>.__selfdelete__.exe` or `.jj-dlp.<random>.__relocated__.exe` can stay in the jj-dlp folder after an update if they fail to be deleted. jj-dlp tries to delete them at every start, retrying for about a minute while they are still in use by the previous version
 - Updates only install into a copy of jj-dlp extracted from a release archive
     - A copy running from a Cargo `target` folder is a development build and is never updated
     - Windows and Linux - A `bin` folder must be next to the jj-dlp executable

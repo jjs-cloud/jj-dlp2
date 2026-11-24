@@ -292,33 +292,50 @@ pub fn finish_pending() {
         .spawn();
 }
 
-/// Deletes leftover self-update helper and old-exe files from the app folder (Windows only).
+/// Passes `cleanup_stale` makes before giving up on files that stay locked.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CLEANUP_TRIES: u32 = 30;
+/// Pause between `cleanup_stale` passes.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CLEANUP_WAIT: Duration = Duration::from_secs(2);
+
+/// Deletes leftover self-update helper and old-exe files from the app folder in the background, retrying while they are locked (Windows only).
 pub fn cleanup_stale() {
     #[cfg(windows)]
     if let Ok(exe) = std::env::current_exe() {
-        if let (Some(dir), Some(stem)) = (exe.parent(), exe.file_stem().and_then(|s| s.to_str())) {
-            remove_stale(dir, stem, &exe);
-        }
+        let _ = std::thread::Builder::new().name("stale-cleanup".into()).spawn(move || {
+            let (Some(dir), Some(stem)) = (exe.parent(), exe.file_stem().and_then(|s| s.to_str())) else {
+                return;
+            };
+            for _ in 0..CLEANUP_TRIES {
+                if remove_stale(dir, stem, &exe) == 0 {
+                    return;
+                }
+                std::thread::sleep(CLEANUP_WAIT);
+            }
+        });
     }
 }
 
-/// Removes `.<stem>.*.__selfdelete__.exe` and `.<stem>.*.__relocated__.exe` files in `dir`, except `keep`.
+/// Removes `.<stem>.*.__selfdelete__.exe` and `.<stem>.*.__relocated__.exe` files in `dir`, except `keep`; returns how many could not be removed.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn remove_stale(dir: &Path, stem: &str, keep: &Path) {
+fn remove_stale(dir: &Path, stem: &str, keep: &Path) -> usize {
     let prefix = format!(".{stem}.");
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return 0;
     };
+    let mut left = 0;
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
         let stale = name.starts_with(&prefix) && (name.ends_with(".__selfdelete__.exe") || name.ends_with(".__relocated__.exe"));
-        if stale && path != keep {
-            let _ = std::fs::remove_file(&path);
+        if stale && path != keep && std::fs::remove_file(&path).is_err() {
+            left += 1;
         }
     }
+    left
 }
 
 /// Returns and clears the error left by a failed install on the previous run.
@@ -443,7 +460,7 @@ mod tests {
         for n in stale.iter().chain(kept.iter()) {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
-        remove_stale(&dir, "jj-dlp", &dir.join("jj-dlp.exe"));
+        assert_eq!(remove_stale(&dir, "jj-dlp", &dir.join("jj-dlp.exe")), 0);
         assert!(stale.iter().all(|n| !dir.join(n).exists()));
         assert!(kept.iter().all(|n| dir.join(n).exists()));
         let _ = std::fs::remove_dir_all(&dir);
