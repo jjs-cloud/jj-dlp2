@@ -1,7 +1,7 @@
 //! GUI-only preferences stored in gui.json.
 
 use super::skin::ThemeKind;
-use crate::resets::{reset_field, Key, Reset};
+use crate::resets::{reset_field, GuiField, Key, Reset};
 use serde::{Deserialize, Serialize};
 
 pub const ROW_MIN_LIMIT: f32 = 15.0;
@@ -223,17 +223,17 @@ fn reset_prefs(prefs: &mut Prefs, resets: &[&Reset]) -> Vec<String> {
     let mut log = Vec::new();
     for r in resets {
         let w = &r.when;
-        let (field, change) = match r.key {
-            Key::GuiTheme => ("theme", reset_field(&mut prefs.theme, d.theme.clone(), w)),
-            Key::GuiCompact => ("compact", reset_field(&mut prefs.compact, d.compact, w)),
-            Key::GuiRowMin => ("row_min", reset_field(&mut prefs.row_min, d.row_min, w)),
-            Key::GuiRowMax => ("row_max", reset_field(&mut prefs.row_max, d.row_max, w)),
-            Key::GuiNameClip => ("name_clip", reset_field(&mut prefs.name_clip, d.name_clip, w)),
-            Key::GuiLogLines => ("log_lines", reset_field(&mut prefs.log_lines, d.log_lines, w)),
-            Key::GuiRememberSize => ("remember_size", reset_field(&mut prefs.remember_size, d.remember_size, w)),
-            Key::GuiWindowWidth => ("win_w", reset_field(&mut prefs.win_w, d.win_w, w)),
-            Key::GuiWindowHeight => ("win_h", reset_field(&mut prefs.win_h, d.win_h, w)),
-            _ => continue,
+        let Key::Gui(f) = r.key else { continue };
+        let (field, change) = match f {
+            GuiField::Theme => ("theme", reset_field(&mut prefs.theme, d.theme.clone(), w)),
+            GuiField::Compact => ("compact", reset_field(&mut prefs.compact, d.compact, w)),
+            GuiField::RowMin => ("row_min", reset_field(&mut prefs.row_min, d.row_min, w)),
+            GuiField::RowMax => ("row_max", reset_field(&mut prefs.row_max, d.row_max, w)),
+            GuiField::NameClip => ("name_clip", reset_field(&mut prefs.name_clip, d.name_clip, w)),
+            GuiField::LogLines => ("log_lines", reset_field(&mut prefs.log_lines, d.log_lines, w)),
+            GuiField::RememberSize => ("remember_size", reset_field(&mut prefs.remember_size, d.remember_size, w)),
+            GuiField::WinW => ("win_w", reset_field(&mut prefs.win_w, d.win_w, w)),
+            GuiField::WinH => ("win_h", reset_field(&mut prefs.win_h, d.win_h, w)),
         };
         if let Some(c) = change {
             log.push(format!("gui.json {field} reset: {c}"));
@@ -560,8 +560,8 @@ mod tests {
     #[test]
     fn prefs_reset_to_defaults() {
         let mut p = Prefs { row_max: 40.0, compact: true, ..Prefs::default() };
-        let a = Reset::always(2, Key::GuiRowMax);
-        let b = Reset::if_equals(2, Key::GuiCompact, Val::Flag(false));
+        let a = Reset::always(2, Key::Gui(GuiField::RowMax));
+        let b = Reset::if_equals(2, Key::Gui(GuiField::Compact), Val::Flag(false));
         let log = reset_prefs(&mut p, &[&a, &b]);
         assert_eq!(p.row_max, ROW_MAX_DEFAULT);
         assert!(p.compact);

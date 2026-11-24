@@ -8,6 +8,54 @@ pub type SiteId = u64;
 pub type StreamerId = u64;
 pub type RecorderId = u64;
 
+/// Identifies a built-in site; a site stores its slug so resets can target it even after a rename.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteKey {
+    Twitch,
+    Tiktok,
+    Chaturbate,
+    Kick,
+    Youtube,
+    YoutubeShorts,
+    YoutubeVideos,
+    TwitchVods,
+    TwitterX,
+}
+
+impl SiteKey {
+    const ALL: [SiteKey; 9] = [
+        SiteKey::Twitch,
+        SiteKey::Tiktok,
+        SiteKey::Chaturbate,
+        SiteKey::Kick,
+        SiteKey::Youtube,
+        SiteKey::YoutubeShorts,
+        SiteKey::YoutubeVideos,
+        SiteKey::TwitchVods,
+        SiteKey::TwitterX,
+    ];
+
+    /// The stored form of the key.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            SiteKey::Twitch => "twitch",
+            SiteKey::Tiktok => "tiktok",
+            SiteKey::Chaturbate => "chaturbate",
+            SiteKey::Kick => "kick",
+            SiteKey::Youtube => "youtube",
+            SiteKey::YoutubeShorts => "youtube_shorts",
+            SiteKey::YoutubeVideos => "youtube_videos",
+            SiteKey::TwitchVods => "twitch_vods",
+            SiteKey::TwitterX => "twitter_x",
+        }
+    }
+
+    /// The key stored as `slug`, if it is a known one.
+    pub fn from_slug(slug: &str) -> Option<SiteKey> {
+        SiteKey::ALL.into_iter().find(|k| k.slug() == slug)
+    }
+}
+
 /// How a site's checker output is parsed, chosen from its checker arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckOutput {
@@ -93,6 +141,9 @@ impl std::fmt::Display for FolderLayout {
 pub struct Site {
     pub id: SiteId,
     pub name: String,
+    /// Slug of the built-in site this is (see `SiteKey`); empty for custom sites.
+    #[serde(default)]
+    pub site_key: String,
     /// Blank uses `DEFAULT_EXE`.
     pub exe_path: String,
     /// Blank (`None`) uses the default for this and the other timing fields below.
@@ -221,6 +272,11 @@ fn or_default<'a>(text: &'a str, fallback: &'a str) -> &'a str {
 }
 
 impl Site {
+    /// The built-in site this is, if any.
+    pub fn key(&self) -> Option<SiteKey> {
+        SiteKey::from_slug(&self.site_key)
+    }
+
     pub fn exe_or_default(&self) -> &str {
         or_default(&self.exe_path, DEFAULT_EXE)
     }
@@ -605,10 +661,28 @@ pub fn now_secs() -> u64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn site_key_slugs_are_unique_and_round_trip() {
+        for k in SiteKey::ALL {
+            assert_eq!(SiteKey::from_slug(k.slug()), Some(k));
+        }
+        assert_eq!(SiteKey::from_slug(""), None);
+        assert_eq!(SiteKey::from_slug("nope"), None);
+    }
+
+    #[test]
+    fn old_sites_json_without_site_key_still_loads() {
+        let mut v = serde_json::to_value(site_with(false, None)).unwrap();
+        v.as_object_mut().unwrap().remove("site_key");
+        let site: Site = serde_json::from_value(v).unwrap();
+        assert!(site.site_key.is_empty() && site.key().is_none());
+    }
+
     fn site_with(split_enabled: bool, split_minutes: Option<u64>) -> Site {
         Site {
             id: 1,
             name: "s".into(),
+            site_key: String::new(),
             exe_path: String::new(),
             interval_secs: None,
             checker_args: String::new(),

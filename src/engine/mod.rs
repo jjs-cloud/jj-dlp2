@@ -849,6 +849,7 @@ mod e2e {
             sites: vec![Site {
                 id: 1,
                 name: "Fake".into(),
+                site_key: String::new(),
                 exe_path: script.to_string_lossy().into(),
                 interval_secs: Some(5),
                 checker_args: "--dump-json {urls}".into(),
@@ -1049,6 +1050,7 @@ mod e2e {
             sites: vec![Site {
                 id: 1,
                 name: "Fake".into(),
+                site_key: String::new(),
                 exe_path: sb.script.to_string_lossy().into(),
                 interval_secs: Some(5),
                 checker_args: "--dump-json {urls}".into(),

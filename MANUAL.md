@@ -1776,23 +1776,29 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - A new install has nothing to reset
 - What can be reset
     - The global output folder
-    - Any field of the Site card. A reset applies to every site
-    - Any field of a Posts site except its name, its accounts and **Pause checking**. A reset applies to every Posts site, and the posts library is never changed
+    - Any field of the Site card. A reset applies to every site, or only to one built-in site (see the Built-in sites item below)
+    - Any field of a Posts site except its name, its accounts and **Pause checking**. A reset applies to every Posts site, or only to one built-in Posts site, and the posts library is never changed
     - The streamer settings for logging and recording subfolders. A reset applies to every streamer
     - The update settings (see [Updates](#updates))
     - The theme, the Compact view settings, the Remember window size setting and window size, and the Log tab buffer length (see [Settings tab](#settings-tab))
     - Site names, streamers and the list of sites and Posts sites are never changed by a reset
 - How a setting is reset
     - A field that can be left blank is set back to blank, so it uses the default again (see [Site defaults](#site-defaults)). Any other setting is set back to its default value
-    - Checker arguments, recorder arguments, URL template and site color are set to the settings of the site template with the same name as the site (see [Settings tab](#settings-tab)). A site that is not named after a site template is left as it is
-    - For a Posts site, the checker arguments, download arguments, URL template, **Twitter/X Helper**, **Use TikTok Photos scraper**, automatic download, size and time limits, backfill, **Open m3u8 instead of site** and automatic delete settings are set to the settings of the site template with the same name as the site (see [Posts site settings](#posts-site-settings)). A Posts site that is not named after a site template is left as it is. Every other Posts site field is set back to its default
+    - Checker arguments, recorder arguments, URL template and site color are set to the settings of the site template the site was made from (see [Settings tab](#settings-tab) and the Built-in sites item below). A site that is not a built-in site is left as it is
+    - For a Posts site, the checker arguments, download arguments, URL template, **Twitter/X Helper**, **Use TikTok Photos scraper**, automatic download, size and time limits, backfill, **Open m3u8 instead of site** and automatic delete settings are set to the settings of the site template the Posts site was made from (see [Posts site settings](#posts-site-settings) and the Built-in sites item below). A Posts site that is not a built-in site is left as it is. **Check every** is set to the template's value for a built-in site, and to the default for any other site. Every other Posts site field is set back to its default
     - A reset either replaces whatever value is saved, or only replaces a value that is still the specific old value the release names. In the second case, a value you changed to something else is left alone
     - A setting that already has the value it would be reset to is not changed
 - Log tab - One message is written for each setting that was changed, right after the `--- session started (vX) ---` message (see [Log tab](#log-tab))
     - The message starts with where the setting is: `settings`, `site '<name>'`, `posts site '<name>'`, `streamer '<name>'`, `update.json` or `gui.json`
     - It then shows the field name as it is written in the settings files, the old value and the new value (example: `site '<name>' interval_secs reset: Some(45) -> None`)
-    - A site or Posts site that has no site template for a template-based field gets a message instead, such as `checker_args not reset: no preset`
+    - A site that is not a built-in site is skipped for a template-based field, with no message
     - The old values are not kept anywhere else, so the message is the only record of them
+- Built-in sites - A site made from a site template, or named like one, is marked with a hidden key so a reset can find it even after it is renamed
+    - At every launch, before the resets, a site with no key whose name matches a site template (ignoring case and spaces around the name) gets that template's key. A site named **TikTok** is therefore always a built-in site
+    - The key is kept when the site is renamed or edited. A site renamed to a template's name gets the key when it is saved, or at the next launch
+    - A message `site '<name>' site_key set: <key>` is written to the Log tab for each site that gets a key
+    - A site that is not named like a template has no key and is never changed by a reset that is limited to one built-in site
+    - The key is saved as `site_key` in `sites.json` and `posts.json`. A file saved by an earlier version has none, and gets it at the next launch
 - If a file cannot be saved, a message `config reset: cannot save <file>` with the reason is written to the Log tab, and the resets are tried again at the next launch
 - `config_rev.json` - Holds the number of the last settings resets that were applied (see [Settings](#settings))
 
@@ -1929,12 +1935,12 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Open settings folder button - On the General page of the Settings tab, in the Folders card, opens the config folder
 - Files in the config folder
     - `settings.json` - Holds the global output folder, the recording limit and the global notification settings
-    - `sites.json` - Holds the sites, including each site's **Stream ended after (minutes)** setting, restart warning settings, command output setting, interrupt and error warning switches, flash switches, interrupt and error patterns, site color, recording subfolder layout, recording file check times, split settings, upgrade quality setting, restart stalled recordings setting, quick check settings and notification settings. A field left blank is saved blank, and its default is applied when it is needed
+    - `sites.json` - Holds the sites, including each site's **Stream ended after (minutes)** setting, restart warning settings, command output setting, interrupt and error warning switches, flash switches, interrupt and error patterns, site color, recording subfolder layout, recording file check times, split settings, upgrade quality setting, restart stalled recordings setting, quick check settings and notification settings. A field left blank is saved blank, and its default is applied when it is needed. Each site also has a `site_key` (see [Settings resets](#settings-resets))
     - `streamers.json` - Holds the streamers, including each streamer's log, subfolder, notification, split, auto-suffix, upgrade quality, quick check, intro delay, schedule and always record options, and the time each schedule last switched the streamer on and off. The order of the streamers in the file is the priority order (see [Priority](#priority))
     - `state.json` - Holds the number used for the next site or streamer you add
     - `gui.json` - Holds the theme, the Compact view settings, the Full view column width, the UI scale settings, the **Live first** setting, the **Group by site** setting, the sort option and the sort direction, the remembered window size, the Log tab buffer length, the **Wrap** setting of the Processes tab output, the **Wrap** setting of the Output sub-tab of the Log tab, the Files tab settings, the **Newest first** and card size settings of the Posts page, and the drives added to the Disk space card, their order and the Disk space display settings
     - `file_owners.json` - Holds the streamer and the site that each recorded file came from, used to group the files on the Files tab (see [Files tab](#files-tab))
-    - `posts.json` - Holds the Posts sites, with their settings and accounts (see [Posts](#posts))
+    - `posts.json` - Holds the Posts sites, with their settings, their `site_key` and their accounts (see [Posts](#posts))
     - `posts_library.json` - Holds the posts that have been found, with whether each is viewed, starred or downloaded and where its file is (see [Posts](#posts))
     - `post_thumbs` folder - Holds the thumbnail of each post (see [Posts](#posts))
     - `live.json` - Holds when each live streamer was first seen live, when each streamer was last seen live, when jj-dlp last looked up last live times on Twitch, which recording part each live streamer is on, and which live streamers have had their quality upgraded (see [Live time](#live-time), [Last live](#last-live), [Split recordings](#split-recordings) and [Upgrade quality](#upgrade-quality))

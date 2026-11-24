@@ -2,7 +2,7 @@
 
 use super::runner::{self, CycleReport, DownloadOutcome, PhotoFile};
 use super::store;
-use super::{photo_id, photo_title, AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, Preset, SiteId};
+use super::{key_for_name, photo_id, photo_title, AccountError, LogTarget, Post, PostSite, PostState, PostsCommand, PostsConfig, PostsEvent, PostsMsg, PostsStatus, Preset, SiteId};
 use crate::api::{now_secs, GlobalNotify, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
@@ -599,7 +599,8 @@ impl PostsMonitor {
         let Some(slot) = self.cfg.site_mut(site.id) else { return };
         let accounts = std::mem::take(&mut slot.accounts);
         let (log_download_stdout, log_download_stderr) = (slot.log_download_stdout, slot.log_download_stderr);
-        *slot = PostSite { accounts, log_download_stdout, log_download_stderr, ..site };
+        let site_key = if slot.site_key.is_empty() { key_for_name(&site.name) } else { slot.site_key.clone() };
+        *slot = PostSite { accounts, log_download_stdout, log_download_stderr, site_key, ..site };
         self.next_sweep = Instant::now();
         self.save_cfg();
         self.emit_config();
@@ -689,7 +690,7 @@ impl PostsMonitor {
     /// Adds an account to the preset's site, creating the site first when it is missing.
     fn add_account_to_preset(&mut self, preset: Preset, input: &str) {
         let template = PostSite::from_preset(preset);
-        let existing = self.cfg.sites.iter().find(|s| s.name.trim().eq_ignore_ascii_case(template.name.trim())).map(|s| s.id);
+        let existing = self.cfg.sites.iter().find(|s| !template.site_key.is_empty() && s.site_key == template.site_key).map(|s| s.id);
         let id = match existing {
             Some(id) => id,
             None => {
@@ -945,6 +946,19 @@ mod tests {
         m.handle(PostsCommand::UpdateSite(edited));
         let site = m.cfg.site(site_id).unwrap();
         assert_eq!((site.name.as_str(), site.accounts.len()), ("Renamed", 1));
+    }
+
+    #[test]
+    fn site_key_is_set_from_the_name_and_survives_a_rename() {
+        let _sb = Sandbox::new("posts-key");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let (mut m, _rx) = monitor();
+        m.handle(PostsCommand::AddSite(paused_site("TikTok")));
+        let site_id = m.cfg.sites.last().unwrap().id;
+        assert_eq!(m.cfg.site(site_id).unwrap().site_key, "tiktok");
+        m.handle(PostsCommand::UpdateSite(PostSite { id: site_id, name: "Renamed".into(), paused: true, ..Default::default() }));
+        assert_eq!(m.cfg.site(site_id).unwrap().site_key, "tiktok");
     }
 
     #[test]

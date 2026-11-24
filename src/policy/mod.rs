@@ -36,7 +36,7 @@ pub mod update;
 mod warnings;
 use decision::Decision;
 use files::{FileTracker, Thresholds};
-pub use defaults::{new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
+pub use defaults::{key_for_name, new_site, preset_for_name, Preset, DEFAULT_SITE_COLOR};
 pub use files::RecordingFile;
 use live::{LiveTracker, PartRecord};
 use notify::{Gate, Kind, LiveStatus, Message, Targets};
@@ -115,6 +115,7 @@ impl NewSite {
         Site {
             id,
             name: self.name,
+            site_key: String::new(),
             exe_path: self.exe_path,
             interval_secs: self.interval_secs,
             checker_args: self.checker_args,
@@ -1726,12 +1727,15 @@ impl Policy {
             }
             PolicyCommand::AddSite(n) => {
                 let id = self.alloc_id();
-                self.settings.sites.push(n.into_site(id));
+                let mut site = n.into_site(id);
+                site.site_key = key_for_name(&site.name);
+                self.settings.sites.push(site);
                 self.commit();
             }
             PolicyCommand::UpdateSite(site) => {
                 if let Some(slot) = self.settings.sites.iter_mut().find(|s| s.id == site.id) {
-                    *slot = site;
+                    let site_key = if slot.site_key.is_empty() { key_for_name(&site.name) } else { slot.site_key.clone() };
+                    *slot = Site { site_key, ..site };
                     self.commit();
                 }
             }
@@ -1750,12 +1754,13 @@ impl Policy {
                     return;
                 }
                 let template = new_site(preset);
-                let existing = self.settings.sites.iter().find(|s| s.name.eq_ignore_ascii_case(&template.name)).map(|s| s.id);
+                let key = preset.site_key().map(|k| k.slug()).unwrap_or_default();
+                let existing = self.settings.sites.iter().find(|s| !key.is_empty() && s.site_key == key).map(|s| s.id);
                 let (site_id, created) = match existing {
                     Some(id) => (id, false),
                     None => {
                         let id = self.alloc_id();
-                        self.settings.sites.push(template.into_site(id));
+                        self.settings.sites.push(Site { site_key: key.to_string(), ..template.into_site(id) });
                         (id, true)
                     }
                 };
@@ -1917,6 +1922,7 @@ mod tests {
         Site {
             id,
             name: "s".into(),
+            site_key: String::new(),
             exe_path: "yt-dlp".into(),
             interval_secs: Some(60),
             checker_args: String::new(),

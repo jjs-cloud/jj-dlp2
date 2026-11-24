@@ -1,6 +1,6 @@
 //! Data model of the Posts monitor: sites, accounts and posts, and the yt-dlp command lines built from them.
 
-use crate::api::DEFAULT_EXE;
+use crate::api::{SiteKey, DEFAULT_EXE};
 use crate::engine::template::tokenize;
 use crate::policy::notify;
 use serde::{Deserialize, Serialize};
@@ -111,6 +111,23 @@ impl Preset {
     pub fn from_name(name: &str) -> Preset {
         Preset::NAMED.into_iter().find(|p| p.label().eq_ignore_ascii_case(name.trim())).unwrap_or(Preset::Blank)
     }
+
+    /// The key stored on sites made from this preset; `None` for blank.
+    pub fn site_key(self) -> Option<SiteKey> {
+        match self {
+            Preset::Tiktok => Some(SiteKey::Tiktok),
+            Preset::YoutubeShorts => Some(SiteKey::YoutubeShorts),
+            Preset::YoutubeVideos => Some(SiteKey::YoutubeVideos),
+            Preset::TwitchVods => Some(SiteKey::TwitchVods),
+            Preset::TwitterX => Some(SiteKey::TwitterX),
+            Preset::Blank => None,
+        }
+    }
+
+    /// The preset a stored key belongs to, else blank.
+    pub fn from_key(key: SiteKey) -> Preset {
+        Preset::NAMED.into_iter().find(|p| p.site_key() == Some(key)).unwrap_or(Preset::Blank)
+    }
 }
 
 /// One profile that is checked for new posts.
@@ -170,6 +187,8 @@ impl Account {
 pub struct PostSite {
     pub id: SiteId,
     pub name: String,
+    /// Slug of the built-in site this is (see `SiteKey`); empty for custom sites.
+    pub site_key: String,
     /// Blank uses `DEFAULT_EXE`.
     pub exe_path: String,
     /// Blank uses `DEFAULT_INTERVAL_SECS`.
@@ -226,6 +245,7 @@ impl Default for PostSite {
         PostSite {
             id: 0,
             name: String::new(),
+            site_key: String::new(),
             exe_path: String::new(),
             interval_secs: None,
             checker_args: String::new(),
@@ -259,10 +279,15 @@ impl Default for PostSite {
     }
 }
 
+/// The key slug of the built-in site named `name`, or empty when it is not one.
+pub fn key_for_name(name: &str) -> String {
+    Preset::from_name(name).site_key().map(|k| k.slug().to_string()).unwrap_or_default()
+}
+
 impl PostSite {
     /// An unsaved site holding a preset's values; the id is assigned when it is added.
     pub fn from_preset(preset: Preset) -> PostSite {
-        match preset {
+        let site = match preset {
             Preset::Tiktok => PostSite {
                 name: Preset::Tiktok.label().into(),
                 checker_args: TIKTOK_CHECKER_ARGS.into(),
@@ -305,7 +330,13 @@ impl PostSite {
                 ..Default::default()
             },
             Preset::Blank => PostSite::default(),
-        }
+        };
+        PostSite { site_key: preset.site_key().map(|k| k.slug().to_string()).unwrap_or_default(), ..site }
+    }
+
+    /// The built-in site this is, if any.
+    pub fn key(&self) -> Option<SiteKey> {
+        SiteKey::from_slug(&self.site_key)
     }
 
     pub fn exe_or_default(&self) -> &str {
@@ -423,6 +454,9 @@ impl PostsConfig {
     pub fn add_site(&mut self, mut site: PostSite) -> Option<SiteId> {
         if self.name_taken(&site.name) {
             return None;
+        }
+        if site.site_key.is_empty() {
+            site.site_key = key_for_name(&site.name);
         }
         site.id = self.sites.iter().map(|s| s.id).max().unwrap_or(0) + 1;
         let id = site.id;
@@ -837,6 +871,7 @@ mod tests {
     fn old_posts_json_without_the_new_fields_still_loads() {
         let site: PostSite = serde_json::from_str(r#"{"id":3,"name":"Twitter/X","use_x_scraper":true}"#).unwrap();
         assert_eq!((site.x_helper, site.use_x_photos), (XHelper::Off, true));
+        assert!(site.site_key.is_empty());
         let post: Post = serde_json::from_str(r#"{"id":"1"}"#).unwrap();
         assert!(post.image_urls.is_empty());
     }

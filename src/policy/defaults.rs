@@ -1,7 +1,7 @@
 //! Presets for new sites; only site-specific fields are pre-filled, the rest fall back at run time.
 
 use super::NewSite;
-use crate::api::FolderLayout;
+use crate::api::{FolderLayout, SiteKey};
 
 /// Colour given to new blank sites.
 pub const DEFAULT_SITE_COLOR: &str = "#7AA2F7";
@@ -27,6 +27,23 @@ pub enum Preset {
 impl Preset {
     /// Every named preset, in dropdown order.
     pub const NAMED: [Preset; 5] = [Preset::Twitch, Preset::Tiktok, Preset::Chaturbate, Preset::Kick, Preset::Youtube];
+
+    /// The key stored on sites made from this preset; `None` for blank.
+    pub fn site_key(self) -> Option<SiteKey> {
+        match self {
+            Preset::Twitch => Some(SiteKey::Twitch),
+            Preset::Tiktok => Some(SiteKey::Tiktok),
+            Preset::Chaturbate => Some(SiteKey::Chaturbate),
+            Preset::Kick => Some(SiteKey::Kick),
+            Preset::Youtube => Some(SiteKey::Youtube),
+            Preset::Blank => None,
+        }
+    }
+
+    /// The preset a stored key belongs to, else blank.
+    pub fn from_key(key: SiteKey) -> Preset {
+        Preset::NAMED.into_iter().find(|p| p.site_key() == Some(key)).unwrap_or(Preset::Blank)
+    }
 }
 
 /// The named preset whose site name matches `name` (ignoring case), else `Blank`.
@@ -35,6 +52,11 @@ pub fn preset_for_name(name: &str) -> Preset {
         .into_iter()
         .find(|p| new_site(*p).name.eq_ignore_ascii_case(name.trim()))
         .unwrap_or(Preset::Blank)
+}
+
+/// The key slug of the built-in site named `name`, or empty when it is not one.
+pub fn key_for_name(name: &str) -> String {
+    preset_for_name(name).site_key().map(|k| k.slug().to_string()).unwrap_or_default()
 }
 
 /// A new site for `preset`: name, URL template, checker/recorder arguments and colour; everything else is blank.
