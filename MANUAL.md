@@ -1119,7 +1119,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Delete files of unstarred posts after (days, blank = never) - Turns on [Auto-delete](#auto-delete). Save changes is unavailable until it is blank or a whole number of at least 1
         - Twitter/X Helper: - A dropdown with **None**, **Basic HTML scraper** and **gallery-dl**. It chooses what finds the posts of X accounts on the site, and the default is **None**, which uses the checker command like any other site (see [Twitter/X helper](#twitterx-helper))
         - Path to gallery-dl executable - The full path to gallery-dl. Shown to the right of **Twitter/X Helper:** only while **gallery-dl** is chosen. Leave blank to use the fallback shown as hint text (see [gallery-dl path](#gallery-dl-path))
-        - gallery-dl arguments - The gallery-dl arguments or options to pass when listing an account. Shown only while **gallery-dl** is chosen. Leave blank to use the fallback shown as hint text. `{url}` is replaced by the account's profile URL
+        - gallery-dl arguments - The gallery-dl arguments or options to pass when listing an account. Shown only while **gallery-dl** is chosen. Leave blank to use the fallback shown as hint text. `{url}` is replaced by the account's profile URL followed by `/tweets`
         - Download X photos - Saves the pictures of X photo posts, with one card for each picture. Shown only while **gallery-dl** is chosen, at the top of the switches. It is on by default (see [Twitter/X helper](#twitterx-helper))
         - Notifications - The notification settings of the site are not on the card. They are set on the **Posts** sub-page of the Notifications page (see [Settings tab](#settings-tab))
 																																												  
@@ -1185,10 +1185,11 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - **Basic HTML scraper** - Reads the profile page as a visitor who is not logged in sees it, using the user agent from the site's arguments when one is set
     - **gallery-dl** - Runs gallery-dl on the profile with your Firefox cookies, so it can see accounts and posts that need a login
     - jj-dlp never switches from one helper to another by itself, so a gallery-dl problem is shown as an account error and the basic scraper is not tried
+    - The Twitter/X template uses **gallery-dl**. A Twitter/X site that existed before this setting was added is switched to **gallery-dl** once, and its **Check every** is set to 900 seconds (see [Settings resets](#settings-resets))
 - Finding posts - The newest posts are looked at, newest first, and only the posts of the account are kept
     - Posts of other accounts, such as reposts, are left out
     - With **Basic HTML scraper**, the posts are the ones linked on the profile page. A pinned post is looked at like any other post, so an older pinned post can be found on the first check
-    - With **gallery-dl**, the posts are the first files of the profile's media, which are listed with `--range 1-30` in the default arguments. A post that is only text is never listed
+    - With **gallery-dl**, the posts are the first files of the profile's media, which are listed with `--range 1-5` in the default arguments, so about the newest five files are looked at. A post that is only text is never listed
     - A post that is not known yet is checked once, and a post that was skipped is not checked again until jj-dlp restarts
 - Videos - Each post with a video that is not known yet is checked with yt-dlp, using the site's **Checker arguments** on the post's own address
     - A post that has a video is added to the list. A post that only has pictures is skipped, unless the **gallery-dl** helper is on and **Download X photos** is on
@@ -1201,8 +1202,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Cards, files, limits and failures work as for TikTok photo posts, and the pictures are named `account_date_postid_N.ext` (see [TikTok photos scraper](#tiktok-photos-scraper))
     - Needs no login to download. The pictures are loaded from X's image servers as a visitor sees them
     - A photo post that was skipped before the switch was turned on is looked at again after jj-dlp restarts
-- gallery-dl run - One gallery-dl command is run for each account at each check, using **gallery-dl arguments**, and it is given the profile address
-    - The default arguments are `--cookies-from-browser firefox -j --range 1-30 {url}`. jj-dlp reads the JSON that `-j` prints, so keep `-j` in the arguments
+- gallery-dl run - One gallery-dl command is run for each account at each check, using **gallery-dl arguments**, and it is given the profile address followed by `/tweets`
+    - The default arguments are `--cookies-from-browser firefox -j --range 1-5 {url}`, and `{url}` is the profile address with `/tweets` added, so the command lists the account's own posts. jj-dlp reads the JSON that `-j` prints, so keep `-j` in the arguments
     - The command is stopped after 180 seconds. A rate limit from X can make gallery-dl wait, so it can run into that limit
     - The stdout and stderr logs of the account's checker also hold gallery-dl's output (see [Posts](#posts))
 - Problems - Shown as an account error, in the same way as other check problems (see [Posts](#posts))

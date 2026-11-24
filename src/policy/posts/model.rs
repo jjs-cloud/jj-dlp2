@@ -20,8 +20,8 @@ pub const MIN_INTERVAL_SECS: u64 = 15;
 pub const DEFAULT_CHECKER_ARGS: &str = "--no-warnings --ignore-errors --flat-playlist --dump-json --playlist-end 5 {url}";
 /// Download arguments used when a site's own are blank; `{url}` is the post URL and `{dir}` the download folder.
 pub const DEFAULT_DOWNLOAD_ARGS: &str = r#"--no-warnings --ignore-errors --no-playlist --no-simulate --no-part -P "{dir}" -o "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" {url}"#;
-/// gallery-dl arguments used when a site's own are blank; `{url}` is the profile URL.
-pub const DEFAULT_GALLERY_DL_ARGS: &str = "--cookies-from-browser firefox -j --range 1-30 {url}";
+/// gallery-dl arguments used when a site's own are blank; `{url}` is the profile URL with `/tweets` added.
+pub const DEFAULT_GALLERY_DL_ARGS: &str = "--cookies-from-browser firefox -j --range 1-5 {url}";
 /// gallery-dl path used when a site's own is blank: the bundled binary on Windows/Linux, else PATH.
 pub const DEFAULT_GALLERY_DL_EXE: &str = if cfg!(windows) {
     r"bin\gallery-dl\windows\gallery-dl.exe"
@@ -586,9 +586,11 @@ pub fn checker_cmd(site: &PostSite, url: &str) -> Vec<String> {
     expand(site.checker_or_default(), url, "")
 }
 
-/// gallery-dl arguments that list a profile URL.
+/// gallery-dl arguments that list the tweets of a profile URL.
 pub fn gallery_cmd(site: &PostSite, url: &str) -> Vec<String> {
-    expand(site.gallery_dl_args_or_default(), url, "")
+    let base = url.trim().trim_end_matches('/');
+    let tweets = if base.ends_with("/tweets") { base.to_string() } else { format!("{base}/tweets") };
+    expand(site.gallery_dl_args_or_default(), &tweets, "")
 }
 
 /// The `--user-agent` value in the site's checker arguments, if it has one.
@@ -815,10 +817,13 @@ mod tests {
         assert_eq!(site.gallery_dl_exe_or_default(), DEFAULT_GALLERY_DL_EXE);
         assert_eq!(site.gallery_dl_args_or_default(), DEFAULT_GALLERY_DL_ARGS);
         let args = gallery_cmd(&site, "https://x.com/a");
-        assert_eq!(args.last().map(String::as_str), Some("https://x.com/a"));
+        assert_eq!(args.last().map(String::as_str), Some("https://x.com/a/tweets"));
+        assert_eq!(gallery_cmd(&site, "https://x.com/a/").last(), args.last());
+        assert_eq!(gallery_cmd(&site, "https://x.com/a/tweets").last(), args.last());
+        assert!(args.contains(&"1-5".to_string()));
         assert!(args.contains(&"-j".to_string()));
         site.gallery_dl_args = "-j {url} --range 1-5".into();
-        assert_eq!(gallery_cmd(&site, "u"), ["-j", "u", "--range", "1-5"]);
+        assert_eq!(gallery_cmd(&site, "u"), ["-j", "u/tweets", "--range", "1-5"]);
     }
 
     #[test]
