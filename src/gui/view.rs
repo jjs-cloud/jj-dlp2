@@ -2025,9 +2025,15 @@ impl App {
             switch("Posts", SettingsTab::Posts),
             switch("Priority", SettingsTab::Priority),
             switch("Notifications", SettingsTab::Notifications),
-            switch("General", SettingsTab::General)
+            switch("General", SettingsTab::General),
+            Space::new().width(Length::Fill),
+            button(t(&s, "Open settings folder").size(13))
+                .on_press(Msg::OpenConfigDir)
+                .padding([6.0, 14.0])
+                .style(skin::btn(s, BtnKind::Ghost)),
         ]
-        .spacing(8);
+        .spacing(8)
+        .align_y(Alignment::Center);
         let body = match self.settings_tab {
             SettingsTab::Sites => self.settings_sites(s),
             SettingsTab::Posts => self.posts_settings(s),
@@ -2075,15 +2081,7 @@ impl App {
         });
 
         let folders = column![
-            row![
-                self.section_title(s, "FOLDERS"),
-                Space::new().width(Length::Fill),
-                button(t(&s, "Open settings folder").size(13))
-                    .on_press(Msg::OpenConfigDir)
-                    .padding([8.0, 14.0])
-                    .style(skin::btn(s, BtnKind::Ghost)),
-            ]
-            .align_y(Alignment::Center),
+            self.section_title(s, "FOLDERS"),
             muted(&s, "Global output folder, used by any site that has no output folder of its own."),
             row![
                 text_input(&self.default_out, &self.global_out)

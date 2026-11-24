@@ -1399,7 +1399,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 
 ## Settings tab
 
-- Page switch - **Livestreams**, **Posts**, **Priority**, **Notifications** and **General** buttons at the top of the tab.
+- Page switch - **Livestreams**, **Posts**, **Priority**, **Notifications** and **General** buttons at the top of the tab, with the **Open settings folder** button at the far right of the same row, shown on every page (see [Settings](#settings)).
 
 - Posts page - Holds the settings of the Posts sites (see [Posts site settings](#posts-site-settings))
 
@@ -1569,7 +1569,6 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
             - **Open** button - Shown beside the **Browse** button. Opens the folder in your file manager, and creates it if it does not exist. It opens the folder that is used while the field is blank
             - Spaces before and after the path are ignored
             - The folder cannot be blank. Saving a blank field puts the standard output folder back
-        - Open settings folder button - Opens the config folder (see [Settings](#settings))
     - Disk space card - Lists the drives that are tracked and lets you add more (see [Disk space](#disk-space)). Shown under the Folders card. Changes apply immediately
         - A short description is shown under the card title
         - **Show percentage** - Adds the percentage free to the header chips and to the notifications
@@ -1932,7 +1931,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - Linux - `~/.config/jj-dlp/`
     - Windows - `%APPDATA%\jj-dlp\config\`
 - `--config-dir=<path>` - Uses `<path>` in place of the OS config folder (see [Command-line modes](#command-line-modes))
-- Open settings folder button - On the General page of the Settings tab, in the Folders card, opens the config folder
+- Open settings folder button - On the Settings tab, at the far right of the sub-tab row and shown on every sub-tab, opens the config folder
 - Files in the config folder
     - `settings.json` - Holds the global output folder, the recording limit and the global notification settings
     - `sites.json` - Holds the sites, including each site's **Stream ended after (minutes)** setting, restart warning settings, command output setting, interrupt and error warning switches, flash switches, interrupt and error patterns, site color, recording subfolder layout, recording file check times, split settings, upgrade quality setting, restart stalled recordings setting, quick check settings and notification settings. A field left blank is saved blank, and its default is applied when it is needed. Each site also has a `site_key` (see [Settings resets](#settings-resets))

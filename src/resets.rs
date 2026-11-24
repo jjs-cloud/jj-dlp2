@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Config revision of this build; bump it whenever entries are added to `RESETS`.
-pub const CONFIG_REV: u32 = 3;
+pub const CONFIG_REV: u32 = 4;
 
 /// Resets to apply; each entry's `rev` is the `CONFIG_REV` it was added at (always above 1).
 ///
@@ -58,6 +58,9 @@ pub const RESETS: &[Reset] = &[
     Reset::always(3, Key::Posts(PostsField::XHelper)).site(SiteKey::TwitterX),
     // Sets the Twitter/X posts site to check every 900 seconds.
     Reset::always(3, Key::Posts(PostsField::IntervalSecs)).site(SiteKey::TwitterX),
+    // Sets the Twitter/X posts site's checker and downloader arguments to the template values.
+    Reset::always(4, Key::Posts(PostsField::CheckerArgs)).site(SiteKey::TwitterX),
+    Reset::always(4, Key::Posts(PostsField::DownloadArgs)).site(SiteKey::TwitterX),
 ];
 
 /// A previously stored value to match; `Unset` matches a blank (`None`) field.
@@ -780,6 +783,24 @@ mod tests {
         assert_eq!((cfg.sites[0].x_helper, cfg.sites[0].interval_secs), (posts::XHelper::GalleryDl, Some(900)));
         assert_eq!((cfg.sites[1].x_helper, cfg.sites[1].interval_secs), (posts::XHelper::Off, Some(60)));
         assert_eq!((cfg.sites[2].x_helper, cfg.sites[2].interval_secs), (posts::XHelper::Off, Some(60)));
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn x_args_resets_restore_template_args_only_on_the_twitter_x_site() {
+        let tpl = PostSite::from_preset(PostsPreset::TwitterX);
+        let mut x = post_site("Twitter/X");
+        x.checker_args = "custom".into();
+        x.download_args = "custom".into();
+        let mut tiktok = post_site("TikTok");
+        tiktok.checker_args = "custom".into();
+        tiktok.download_args = "custom".into();
+        let mut cfg = PostsConfig { sites: vec![x, tiktok] };
+        let r1 = Reset::always(4, Key::Posts(PostsField::CheckerArgs)).site(SiteKey::TwitterX);
+        let r2 = Reset::always(4, Key::Posts(PostsField::DownloadArgs)).site(SiteKey::TwitterX);
+        let log = reset_posts(&mut cfg, &[&r1, &r2]);
+        assert_eq!((&cfg.sites[0].checker_args, &cfg.sites[0].download_args), (&tpl.checker_args, &tpl.download_args));
+        assert_eq!((cfg.sites[1].checker_args.as_str(), cfg.sites[1].download_args.as_str()), ("custom", "custom"));
         assert_eq!(log.len(), 2);
     }
 
