@@ -150,7 +150,10 @@ pub struct Account {
 }
 
 /// Shown when TikTok will not resolve a username and no channel ID is stored.
-pub const ID_RESOLUTION_FAILED: &str = "Account ID resolution failed. To add this account, please enter a URL from any video from this TikTok channel.";
+/// Notice shown when a username or profile URL cannot be parsed.
+pub const INVALID_ACCOUNT_INPUT: &str = "Enter a new username or profile URL";
+
+pub const ID_RESOLUTION_FAILED: &str = "Account ID resolution failed. To add this account, remove the account first, and enter a URL from any video from this TikTok channel.";
 
 /// Part of yt-dlp's error when it cannot resolve a TikTok username.
 pub const ID_ERROR_MARKER: &str = "Unable to extract secondary user ID";
@@ -396,6 +399,18 @@ impl PostSite {
 
     /// An account from a username or profile URL; `None` when blank, malformed or already added.
     pub fn account_from_input(&self, input: &str) -> Option<Account> {
+        let (name, url) = self.parse_input(input)?;
+        let dup = self.accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name) || a.url == url);
+        (!dup).then_some(Account { name, url, enabled: true, baselined: false, log_stdout: false, log_stderr: false, channel_id: None })
+    }
+
+    /// The notice for input `account_from_input` rejected: already added, or not a valid username or URL.
+    pub fn input_error(&self, input: &str) -> &'static str {
+        if self.parse_input(input).is_some() { "Username has already been added." } else { INVALID_ACCOUNT_INPUT }
+    }
+
+    /// The name and URL a username or profile URL stands for; `None` when blank or malformed.
+    fn parse_input(&self, input: &str) -> Option<(String, String)> {
         let input = input.trim();
         let (name, url) = if let Some(owner) = tiktok_video_owner(input) {
             owner
@@ -418,8 +433,7 @@ impl PostSite {
         if name.is_empty() || name.chars().any(char::is_whitespace) {
             return None;
         }
-        let dup = self.accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name) || a.url == url);
-        (!dup).then_some(Account { name, url, enabled: true, baselined: false, log_stdout: false, log_stderr: false, channel_id: None })
+        Some((name, url))
     }
 }
 

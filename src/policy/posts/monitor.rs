@@ -636,7 +636,8 @@ impl PostsMonitor {
             return;
         }
         let Some(account) = self.cfg.site(site_id).and_then(|s| s.account_from_input(input)) else {
-            self.notice("Enter a new username or profile URL");
+            let msg = self.cfg.site(site_id).map_or(super::model::INVALID_ACCOUNT_INPUT, |s| s.input_error(input));
+            self.notice(msg);
             return;
         };
         let name = account.name.clone();
@@ -674,7 +675,8 @@ impl PostsMonitor {
             return;
         }
         let Some(mut account) = site.account_from_input(profile) else {
-            self.notice("Enter a new username or profile URL");
+            let msg = site.input_error(profile);
+            self.notice(msg);
             return;
         };
         account.channel_id = Some(id);
@@ -695,7 +697,7 @@ impl PostsMonitor {
             Some(id) => id,
             None => {
                 if template.account_from_input(input).is_none() {
-                    self.notice("Enter a new username or profile URL");
+                    self.notice(template.input_error(input));
                     return;
                 }
                 match self.cfg.add_site(template) {

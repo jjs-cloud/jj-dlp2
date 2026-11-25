@@ -673,12 +673,16 @@ impl App {
     /// Sends the typed username or profile URL for the site chosen under the posts grid.
     fn posts_add_account(&mut self) {
         let Some(choice) = self.posts.add_choice() else { return };
-        let valid = match choice.target {
-            AddTarget::Site(id) => self.posts.cfg.site(id).and_then(|s| s.account_from_input(&self.posts.add_name)).is_some(),
-            AddTarget::Template(preset) => PostSite::from_preset(preset).account_from_input(&self.posts.add_name).is_some(),
+        let add_name = &self.posts.add_name;
+        let rejected = match choice.target {
+            AddTarget::Site(id) => self.posts.cfg.site(id).filter(|s| s.account_from_input(add_name).is_none()).map(|s| s.input_error(add_name)),
+            AddTarget::Template(preset) => {
+                let site = PostSite::from_preset(preset);
+                site.account_from_input(add_name).is_none().then(|| site.input_error(add_name))
+            }
         };
-        if !valid {
-            self.posts.say("Enter a new username or profile URL");
+        if let Some(msg) = rejected {
+            self.posts.say(msg);
             return;
         }
         let input = std::mem::take(&mut self.posts.add_name);
