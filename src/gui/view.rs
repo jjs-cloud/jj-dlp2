@@ -2335,8 +2335,9 @@ impl App {
         let window = card_box(s, window);
         let log_card = card_box(s, log_card);
         if self.win_w >= 1000.0 {
-            let right = column![display, updates, window, log_card].spacing(12).width(Length::Fill);
-            col = col.push(row![compact, right].spacing(12));
+            let left = column![compact, log_card].spacing(12).width(Length::Fill);
+            let right = column![display, updates, window].spacing(12).width(Length::Fill);
+            col = col.push(row![left, right].spacing(12));
         } else {
             col = col.push(compact).push(display).push(updates).push(window).push(log_card);
         }
