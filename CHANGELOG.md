@@ -9,6 +9,8 @@
 - Added "gallery-dl". This tool is used to scrape twitter/x profiles, using your cookies from firefox to access private/restricted accounts.
 - Photos are now downloaded for TikTok and Twitter/X posts by jj-dlp directly, since yt-dlp does not download photo posts.
 - Adding a new streamer no longer triggers the full site checker to run. Now, only a single check runs for the new streamer.
+- Un-pausing a streamer no longer triggers the full site checker to run. Now, only a single check runs for the streamer.
+- Adding a new posts account no longer triggers the full site checker to run. Now, only a single check runs for the new posts account.
 - Viewed posts now stay in the unviewed tab for 30 seconds (by default), before moving to the viewed tab.
 - moved "Open Settings folder" button
 - changed default "Quick check" to 30 seconds

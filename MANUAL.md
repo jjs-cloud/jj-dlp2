@@ -817,8 +817,13 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - New streamers - A streamer that is added is checked once with the same one-streamer check, and the site's regular check does not run at once because of it
     - The streamer joins the site's regular checks from their next scheduled run
     - Made whether or not quick check is on for the streamer, and it does not count towards the limit below
-    - Also made for a streamer added by editing the config file by hand
     - Not made when the site's checking or the streamer's checking is paused. A site that is created by adding its first streamer checks that streamer in its own first check
+    - A message that the check failed is written to the Log tab as `<streamer>: quick check failed: <reason>`
+- Unpaused and re-timed streamers - A streamer whose **Pause checking** is turned off, or whose **Check every** is changed, is checked once with the same one-streamer check, and the site's regular check does not run at once because of it (see [Streamer settings](#streamer-settings))
+    - The streamer joins the site's regular checks from their next scheduled run
+    - Made whether or not quick check is on for the streamer, and it does not count towards the limit below
+    - Not made when the site's checking or the streamer's checking is paused, or when the streamer is recording. A **Check every** value that no other streamer of the site uses starts that call with its first check, which checks the streamer instead
+    - Pausing a streamer, and removing one, does not run any check
     - A message that the check failed is written to the Log tab as `<streamer>: quick check failed: <reason>`
 - Limit - At most 20 quick checks are made for a streamer during one live time (see [Live time](#live-time))
     - A check counts when it is made, whether or not the streamer is seen live
@@ -1011,7 +1016,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - A subfolder change applies to the next recording. A recording that is already running keeps its folder
 - An intro delay change never stops a recording that is already running (see [Intro delay](#intro-delay))
 - A schedule change applies as soon as the streamer's settings are saved (see [Schedule](#schedule))
-- A split change applies to a recording that is already running (see [Split recordings](#split-recordings)). An auto-suffix change applies the next time a recorder starts. An upgrade quality change applies from the next check (see [Upgrade quality](#upgrade-quality)). A quick check change applies from the next recording that ends, and turning it off cancels a quick check that is waiting (see [Quick check](#quick-check)). A check interval change applies as soon as it is saved, and the streamer is checked again right away. A **Pause checking** change applies as soon as it is saved, and turning it off checks the streamer again right away
+- A split change applies to a recording that is already running (see [Split recordings](#split-recordings)). An auto-suffix change applies the next time a recorder starts. An upgrade quality change applies from the next check (see [Upgrade quality](#upgrade-quality)). A quick check change applies from the next recording that ends, and turning it off cancels a quick check that is waiting (see [Quick check](#quick-check)). A check interval change applies as soon as it is saved, and the streamer is checked once on its own right away. A **Pause checking** change applies as soon as it is saved, and turning it off checks the streamer once on its own right away, without checking the site's other streamers (see [Quick check](#quick-check))
 																																										   
 
 ## Posts

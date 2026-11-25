@@ -44,14 +44,19 @@ pub(crate) enum Internal {
     Preflight { notices: Vec<Notice>, manual: bool },
 }
 
-/// True when `new` differs from `cur` only by added URLs that are all in `fresh`.
-fn only_fresh_added(cur: &SiteSnapshot, new: &SiteSnapshot, fresh: &HashSet<String>) -> bool {
-    let added: Vec<&String> = new.urls.iter().filter(|u| !cur.urls.contains(u)).collect();
-    cur.site == new.site
-        && cur.group == new.group
-        && !added.is_empty()
-        && added.iter().all(|u| fresh.contains(*u))
-        && cur.urls.iter().all(|u| new.urls.contains(u))
+/// True when a worker must run at once: its site settings or interval group changed, not just its URLs.
+fn needs_wake(cur: &SiteSnapshot, new: &SiteSnapshot) -> bool {
+    cur.site != new.site || cur.group != new.group
+}
+
+/// Streamers in both lists that were unpaused or given another check interval, and are not paused now.
+fn streamers_to_recheck<'a>(old: &[Streamer], new: &'a [Streamer]) -> Vec<&'a Streamer> {
+    new.iter()
+        .filter(|n| !n.options.pause_checking)
+        .filter(|n| {
+            old.iter().find(|o| o.id == n.id).is_some_and(|o| o.options.pause_checking || o.options.interval_secs != n.options.interval_secs)
+        })
+        .collect()
 }
 
 /// Prevents a console window from flashing up on Windows.
@@ -294,14 +299,16 @@ impl Engine {
         }
         let known: HashSet<StreamerId> = self.settings.streamers.iter().map(|s| s.id).collect();
         let added: Vec<Streamer> = new.streamers.iter().filter(|s| kept.contains(&s.id) && !known.contains(&s.id)).cloned().collect();
-        let fresh: HashSet<String> = added.iter().map(|s| s.url.clone()).collect();
         // A streamer whose worker does not exist yet is checked by that worker's first run instead.
         let first_run: HashSet<StreamerId> = added.iter().filter(|s| !self.has_worker(s)).map(|s| s.id).collect();
+        // Unpaused or re-timed streamers get a one-streamer check, unless a new worker's first run covers them.
+        let rechecks: Vec<StreamerId> =
+            streamers_to_recheck(&self.settings.streamers, &new.streamers).into_iter().filter(|s| self.has_worker(s)).map(|s| s.id).collect();
         self.settings = new;
         self.checker_overrides.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
         self.recorder_overrides.retain(|id, _| self.settings.streamers.iter().any(|s| s.id == *id));
         self.site_problems.retain(|id, _| self.settings.sites.iter().any(|s| s.id == *id));
-        self.sync_workers_quiet(&fresh);
+        self.sync_workers();
         self.clear_paused_states();
         self.start_preflight(false);
         let streamers = self.settings.streamers.clone();
@@ -312,6 +319,9 @@ impl Engine {
         }
         for s in added.iter().filter(|s| !first_run.contains(&s.id)) {
             self.queue_quick_check(s.id);
+        }
+        for id in rechecks {
+            self.queue_quick_check(id);
         }
     }
 
@@ -384,11 +394,6 @@ impl Engine {
 
     /// Creates, updates and removes the per-site and per-streamer workers to match the settings.
     fn sync_workers(&mut self) {
-        self.sync_workers_quiet(&HashSet::new());
-    }
-
-    /// Like `sync_workers`, but a worker is not woken when the only change is URLs listed in `fresh`.
-    fn sync_workers_quiet(&mut self, fresh: &HashSet<String>) {
         let gone: Vec<SiteId> = self
             .workers
             .keys()
@@ -402,7 +407,7 @@ impl Engine {
         }
         for site in self.settings.sites.clone() {
             let snap = self.snapshot_for(&site);
-            Self::sync_worker(&mut self.workers, site.id, snap, fresh, &self.internal_tx);
+            Self::sync_worker(&mut self.workers, site.id, snap, &self.internal_tx);
         }
         let groups: Vec<((SiteId, u64), SiteSnapshot)> = self.group_keys().into_iter().filter_map(|(site_id, secs)| {
             let site = self.settings.sites.iter().find(|x| x.id == site_id)?;
@@ -416,7 +421,7 @@ impl Engine {
             }
         }
         for (key, snap) in groups {
-            Self::sync_worker(&mut self.group_workers, key, snap, fresh, &self.internal_tx);
+            Self::sync_worker(&mut self.group_workers, key, snap, &self.internal_tx);
         }
     }
 
@@ -425,12 +430,11 @@ impl Engine {
         self.settings.streamers.iter().filter_map(|s| Some((s.site_id, s.options.interval_secs?))).collect()
     }
 
-    /// Pushes the snapshot to the worker stored under `key`, spawning the worker when it is missing.
+    /// Pushes the snapshot to the worker stored under `key`, waking it only for site or group changes, and spawns it when missing.
     fn sync_worker<K: std::hash::Hash + Eq>(
         workers: &mut HashMap<K, SiteWorker>,
         key: K,
         snap: SiteSnapshot,
-        fresh: &HashSet<String>,
         internal: &UnboundedSender<Internal>,
     ) {
         match workers.get(&key) {
@@ -439,9 +443,9 @@ impl Engine {
                     if *cur == snap {
                         return false;
                     }
-                    let quiet = only_fresh_added(cur, &snap, fresh);
+                    let wake = needs_wake(cur, &snap);
                     *cur = snap;
-                    !quiet
+                    wake
                 });
             }
             None => {
@@ -1016,18 +1020,37 @@ mod e2e {
     }
 
     #[test]
-    fn only_new_urls_are_added_quietly() {
+    fn only_site_or_group_changes_wake_a_worker() {
         use crate::policy::{new_site, Preset};
         let site = new_site(Preset::Tiktok).into_site(1);
         let snap = |urls: &[&str]| SiteSnapshot { site: site.clone(), urls: urls.iter().map(|u| u.to_string()).collect(), group: None };
-        let fresh: HashSet<String> = ["c".to_string()].into();
-        assert!(only_fresh_added(&snap(&["a", "b"]), &snap(&["a", "b", "c"]), &fresh));
-        assert!(!only_fresh_added(&snap(&["a", "b"]), &snap(&["a", "b", "d"]), &fresh));
-        assert!(!only_fresh_added(&snap(&["a", "b"]), &snap(&["a"]), &fresh));
-        assert!(!only_fresh_added(&snap(&["a"]), &snap(&["a"]), &fresh));
-        let mut paused = snap(&["a", "c"]);
+        assert!(!needs_wake(&snap(&["a", "b"]), &snap(&["a", "b", "c"])));
+        assert!(!needs_wake(&snap(&["a", "b"]), &snap(&["a"])));
+        assert!(!needs_wake(&snap(&["a"]), &snap(&["a"])));
+        let mut paused = snap(&["a"]);
         paused.site.paused = true;
-        assert!(!only_fresh_added(&snap(&["a"]), &paused, &fresh));
+        assert!(needs_wake(&snap(&["a"]), &paused));
+        let mut grouped = snap(&["a"]);
+        grouped.group = Some(30);
+        assert!(needs_wake(&snap(&["a"]), &grouped));
+    }
+
+    #[test]
+    fn unpaused_or_retimed_streamers_are_rechecked() {
+        let streamer = |id: u64, pause: bool, secs: Option<u64>| Streamer {
+            id,
+            site_id: 1,
+            name: format!("s{id}"),
+            url: format!("https://x.test/s{id}"),
+            enabled: true,
+            options: StreamerOptions { pause_checking: pause, interval_secs: secs, ..Default::default() },
+            schedule_runs: Default::default(),
+        };
+        let ids = |old: &[Streamer], new: &[Streamer]| streamers_to_recheck(old, new).iter().map(|s| s.id).collect::<Vec<_>>();
+        let old = [streamer(1, true, None), streamer(2, false, None), streamer(3, false, Some(30)), streamer(4, false, None), streamer(5, true, None)];
+        let new = [streamer(1, false, None), streamer(2, true, None), streamer(3, false, None), streamer(4, false, None), streamer(5, true, Some(60)), streamer(6, false, None)];
+        assert_eq!(ids(&old, &new), [1, 3]);
+        assert!(ids(&old, &old).is_empty());
     }
 
     #[test]
