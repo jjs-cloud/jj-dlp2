@@ -97,7 +97,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Posts tab - Checks the accounts you add for new posts and downloads them, shown with thumbnails (see [Posts](#posts))
 - Library lists - **Unviewed**, **Viewed**, **Starred** and **Failed** lists in the sidebar, with a search box, a sort order and a card size (see [Posts](#posts))
 - Background checking - Checks and downloads carry on on every tab, and also with `--no-gui` (see [Posts](#posts) and [Command-line modes](#command-line-modes))
-- Add and remove accounts - Add an account from the bar at the bottom of the Posts tab, and remove the selected account, along with its posts, with the button at the bottom of the sidebar
+- Add and remove accounts - Add an account from the bar at the bottom of the Posts tab, and remove the selected account, along with its posts, with the button at the bottom of the sidebar. A new account is checked on its own, without checking the site's other accounts
 - Account ID lookup - Adds an account from the URL of one of its videos, and keeps the account's ID for checks that cannot find the account from its profile address alone (see [Account ID lookup](#account-id-lookup))
 - Site settings - Every Posts setting is set per site on the Settings tab, with **Save changes**, **Revert** and **Defaults** buttons (see [Posts site settings](#posts-site-settings))
 - Cancel - Stops a post that is queued or downloading, and goes back to **Save** (see [Posts](#posts))
@@ -1044,7 +1044,11 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Username - The account's username, or its profile URL. A typed username is added in lowercase letters. The profile URL is built from the site's **Profile URL template** (see [Posts site settings](#posts-site-settings))
             - A profile URL that ends in `/videos` is named after the part before it
             - Video URL - For a site that supports it, the URL of any video the account posted can be entered instead. The account is named after the user in the URL, not after the video (see [Account ID lookup](#account-id-lookup))
-        - **Add** button - Adds the account and starts checking it right away. Unavailable while the box is blank. Pressing Enter in the box does the same
+        - **Add** button - Adds the account and checks only that account right away. Unavailable while the box is blank. Pressing Enter in the box does the same
+            - The site's other accounts are not checked, and the time to the site's next check does not change
+            - Accounts added one after another are checked one at a time
+            - Not made while the site's checking is paused. The account is then checked with the site's next check
+            - A site that had no accounts to check waits a full **Check every** time before its next check
         - Accounts can no longer be added on the Settings tab
         - Pulse - While no account has been added yet, the **Username** box pulses so it is easier to find. It stops pulsing once the box is clicked or an account has been added
     - Empty page

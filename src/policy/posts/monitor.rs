@@ -6,7 +6,7 @@ use super::{key_for_name, photo_id, photo_title, AccountError, LogTarget, Post, 
 use crate::api::{now_secs, GlobalNotify, DEFAULT_NOTIFY_TIMEOUT_SECS};
 use crate::filemgr::ops::{self, DeleteMode};
 use crate::policy::{notify, uilog, PolicyEvent};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -36,6 +36,10 @@ pub struct PostsMonitor {
     /// Sites whose check is running.
     checking: HashSet<SiteId>,
     next_check: HashMap<SiteId, Instant>,
+    /// Accounts waiting for a single-account check, per site.
+    account_queue: HashMap<SiteId, VecDeque<String>>,
+    /// The account whose single-account check is running, per site.
+    account_running: HashMap<SiteId, String>,
     errors: HashMap<AccountKey, String>,
     /// Ids of X posts found to have no video; not saved.
     no_video: HashSet<String>,
@@ -55,6 +59,8 @@ impl PostsMonitor {
         let soon = Instant::now() + FIRST_CHECK_DELAY;
         PostsMonitor {
             next_check: cfg.sites.iter().map(|s| (s.id, soon)).collect(),
+            account_queue: HashMap::new(),
+            account_running: HashMap::new(),
             cfg,
             posts: store::load_library(),
             events,
@@ -209,6 +215,7 @@ impl PostsMonitor {
         for site in due {
             self.start_check(site);
         }
+        self.start_account_checks();
         while self.downloads < MAX_DOWNLOADS {
             let Some(next) = self.next_queued() else { break };
             self.start_download(next);
@@ -268,6 +275,53 @@ impl PostsMonitor {
         self.emit_status();
     }
 
+    /// Queues a check of one account; it runs on its own and leaves the site's schedule alone.
+    fn queue_account_check(&mut self, site_id: SiteId, name: &str) {
+        let queue = self.account_queue.entry(site_id).or_default();
+        if !queue.iter().any(|n| n == name) {
+            queue.push_back(name.to_string());
+        }
+    }
+
+    /// Queues the check of a newly added account; a site that had nothing to check waits a full interval for its next full check.
+    fn check_new_account(&mut self, site_id: SiteId, name: &str, idle: bool) {
+        if let Some(secs) = self.cfg.site(site_id).filter(|_| idle).map(|s| s.interval_or_default()) {
+            self.next_check.insert(site_id, Instant::now() + Duration::from_secs(secs));
+        }
+        self.queue_account_check(site_id, name);
+    }
+
+    /// Starts the next queued single-account check on each site that has none running.
+    fn start_account_checks(&mut self) {
+        let sites: Vec<SiteId> = self.account_queue.keys().copied().filter(|id| !self.account_running.contains_key(id)).collect();
+        for site_id in sites {
+            while let Some(name) = self.account_queue.get_mut(&site_id).and_then(|q| q.pop_front()) {
+                if self.begin_account_check(site_id, &name) {
+                    break;
+                }
+            }
+        }
+        self.account_queue.retain(|_, q| !q.is_empty());
+    }
+
+    /// Runs a check of one enabled account on an active site; false when there is nothing to check.
+    fn begin_account_check(&mut self, site_id: SiteId, name: &str) -> bool {
+        let Some(mut site) = self.cfg.site(site_id).filter(|s| Self::active(s)).cloned() else { return false };
+        site.accounts.retain(|a| a.enabled && a.name == name);
+        if site.accounts.is_empty() {
+            return false;
+        }
+        self.account_running.insert(site_id, name.to_string());
+        let known: HashSet<String> = self.posts.iter().map(|p| p.id.clone()).collect();
+        let (no_video, tx) = (self.no_video.clone(), self.tx.clone());
+        tokio::spawn(async move {
+            let mut report = runner::check_cycle(vec![site], known, no_video).await;
+            report.site_ids.clear();
+            let _ = tx.send(PostsMsg::Checked(report));
+        });
+        true
+    }
+
     /// The id of the newest queued post.
     fn next_queued(&self) -> Option<String> {
         self.posts.iter().filter(|p| p.state == PostState::Queued).max_by_key(|p| p.sort_time()).map(|p| p.id.clone())
@@ -319,6 +373,11 @@ impl PostsMonitor {
     fn on_checked(&mut self, report: CycleReport) {
         let now = Instant::now();
         let mut changed: Vec<String> = Vec::new();
+        if report.site_ids.is_empty() {
+            for a in &report.accounts {
+                self.account_running.remove(&a.site_id);
+            }
+        }
         for sid in &report.site_ids {
             self.checking.remove(sid);
             if let Some(site) = self.cfg.site(*sid) {
@@ -641,10 +700,11 @@ impl PostsMonitor {
             return;
         };
         let name = account.name.clone();
+        let idle = self.cfg.site(site_id).is_some_and(|s| !s.paused && !s.has_enabled_accounts());
         if let Some(site) = self.cfg.site_mut(site_id) {
             site.accounts.push(account);
         }
-        self.next_check.insert(site_id, Instant::now());
+        self.check_new_account(site_id, &name, idle);
         self.save_cfg();
         self.emit_config();
         self.emit_status();
@@ -661,13 +721,14 @@ impl PostsMonitor {
                 return;
             }
         };
+        let idle = self.cfg.site(site_id).is_some_and(|s| !s.paused && !s.has_enabled_accounts());
         let Some(site) = self.cfg.site_mut(site_id) else { return };
         if let Some(acct) = site.accounts.iter_mut().find(|a| a.name.eq_ignore_ascii_case(user)) {
             acct.channel_id = Some(id);
             acct.enabled = true;
             let name = acct.name.clone();
             self.errors.remove(&(site_id, name.clone()));
-            self.next_check.insert(site_id, Instant::now());
+            self.check_new_account(site_id, &name, idle);
             self.save_cfg();
             self.emit_config();
             self.emit_status();
@@ -682,7 +743,7 @@ impl PostsMonitor {
         account.channel_id = Some(id);
         let name = account.name.clone();
         site.accounts.push(account);
-        self.next_check.insert(site_id, Instant::now());
+        self.check_new_account(site_id, &name, idle);
         self.save_cfg();
         self.emit_config();
         self.emit_status();
@@ -714,6 +775,9 @@ impl PostsMonitor {
             site.accounts.retain(|a| a.name != name);
         }
         self.errors.remove(&(site_id, name.to_string()));
+        if let Some(queue) = self.account_queue.get_mut(&site_id) {
+            queue.retain(|n| n != name);
+        }
         let removed = self.take_posts(|p| p.site_id == site_id && p.account.eq_ignore_ascii_case(name));
         self.save_cfg();
         self.save_lib();
@@ -881,6 +945,22 @@ mod tests {
 
     fn paused_site(name: &str) -> PostSite {
         PostSite { name: name.into(), url_template: "https://x.test/@{username}".into(), paused: true, ..Default::default() }
+    }
+
+    #[test]
+    fn queuing_an_account_check_skips_duplicates_and_removal_drops_it() {
+        let _sb = Sandbox::new("posts-acct-queue");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let (mut m, _rx) = monitor();
+        m.handle(PostsCommand::AddSite(paused_site("Test")));
+        let site_id = m.cfg.sites[0].id;
+        m.handle(PostsCommand::AddAccount { site_id, input: "alice".into() });
+        m.queue_account_check(site_id, "alice");
+        m.queue_account_check(site_id, "alice");
+        assert_eq!(m.account_queue.get(&site_id).map(|q| q.len()), Some(1));
+        m.handle(PostsCommand::RemoveAccount { site_id, name: "alice".into() });
+        assert!(m.account_queue.get(&site_id).is_none_or(|q| q.is_empty()));
     }
 
     #[test]
