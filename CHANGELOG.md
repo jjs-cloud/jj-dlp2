@@ -1,5 +1,5 @@
 ## 2.0.4
-- Added this changelog popup after each update
+- Added this changelog
 - yt-dlp checker calls are now batched for streamers with the same "Check every". (only applies when "Check every" is set on the streamer settings)
 - Added the "Youtube Videos" template in the Posts tab.
 - Added the ability to remove failed posts via the x button in the top right corner of the thumbnail.
