@@ -216,7 +216,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Last live - `last live` and how long ago the streamer was last live, shown after the stream URL under the streamer name (example: `last live 3h ago`). Hidden while the streamer is live, and when no time is known yet (see [Last live](#last-live))
         - Status dot - Glows green when live and recording is on, and glows grey when live but paused
         - Record toggle - Turn off to pause recording for that streamer
-        - Settings button - Opens the settings for that streamer, and is highlighted while they are open (see [Streamer settings](#streamer-settings))
+        - Settings button - Opens the settings for that streamer, and is highlighted while they are open. Its text is brighter while any streamer setting is not **Inherit**, **Check every** is not blank, or **Intro Delay**, **Schedule** or **Pause checking** is on (see [Streamer settings](#streamer-settings))
 																																																																							 
         - Remove button - Deletes the streamer
 - Offline panel - Shown in place of the site panels while **Group by site** is off (see [Sorting](#sorting))
@@ -1194,7 +1194,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - **Basic HTML scraper** - Reads the profile page as a visitor who is not logged in sees it, using the user agent from the site's arguments when one is set
     - **gallery-dl** - Runs gallery-dl on the profile with your Firefox cookies, so it can see accounts and posts that need a login
     - jj-dlp never switches from one helper to another by itself, so a gallery-dl problem is shown as an account error and the basic scraper is not tried
-    - The Twitter/X template uses **gallery-dl**. A Twitter/X site that existed before this setting was added is switched to **gallery-dl** once, and its **Check every** is set to 900 seconds (see [Settings resets](#settings-resets))
+    - The Twitter/X template uses **gallery-dl**. A Twitter/X site that existed before this setting was added is switched to **gallery-dl** once, and its **Check every** is set to 900 seconds. Its checker and downloader arguments are also set back to the template's values once (see [Settings resets](#settings-resets))
 - Finding posts - The newest posts are looked at, newest first, and only the posts of the account are kept
     - Posts of other accounts, such as reposts, are left out
     - With **Basic HTML scraper**, the posts are the ones linked on the profile page. A pinned post is looked at like any other post, so an older pinned post can be found on the first check

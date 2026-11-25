@@ -32,6 +32,20 @@ pub(super) fn btn_label<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font)
 }
 
+/// Whether any streamer setting differs from inheriting the site's, or a timing option is on.
+fn streamer_has_overrides(o: &StreamerOptions) -> bool {
+    o.folder_layout.is_some()
+        || o.notify.is_some()
+        || o.auto_suffix.is_some()
+        || o.upgrade_quality.is_some()
+        || o.quick_check.is_some()
+        || o.split.is_some()
+        || o.interval_secs.is_some()
+        || o.intro_delay_enabled
+        || o.schedule.enabled
+        || o.pause_checking
+}
+
 pub(super) fn muted<'a>(s: &Skin, v: impl IntoFragment<'a>) -> Text<'a> {
     iced::widget::text(v).font(s.font).color(s.muted).size(12)
 }
@@ -1580,10 +1594,18 @@ impl App {
             button(btn_label(&s, "Settings").size(12))
                 .on_press(Msg::ToggleStreamerSettings(id))
                 .padding([5.0, 10.0])
-                .style(skin::btn(
-                    s,
-                    if self.open_streamer_settings.contains(&id) { BtnKind::Primary } else { BtnKind::Ghost }
-                )),
+                .style({
+                    let open = self.open_streamer_settings.contains(&id);
+                    let base = skin::btn(s, if open { BtnKind::Primary } else { BtnKind::Ghost });
+                    let lit = !open && streamer_has_overrides(&st.options);
+                    move |theme: &iced::Theme, status: button::Status| {
+                        let mut style = base(theme, status);
+                        if lit && status == button::Status::Active {
+                            style.text_color = s.text;
+                        }
+                        style
+                    }
+                }),
             button(t(&s, "Remove").size(12))
                 .on_press(Msg::RemoveStreamer(id))
                 .padding([5.0, 10.0])
