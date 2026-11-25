@@ -2669,10 +2669,6 @@ impl App {
             switch("Engine", LogTab::Engine),
             switch("Output", LogTab::Output),
             Space::new().width(Length::Fill),
-            button(btn_label(&s, "Open Changelog").size(12))
-                .on_press(Msg::ShowChangelog)
-                .padding([5.0, 12.0])
-                .style(skin::btn(s, BtnKind::Ghost)),
             button(btn_label(&s, "Open Log").size(12))
                 .on_press(Msg::Logs(LogsMsg::OpenUiLog))
                 .padding([5.0, 12.0])

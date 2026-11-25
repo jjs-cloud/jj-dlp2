@@ -76,7 +76,6 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - Output sub-tab - Lists the log files of every site and streamer, and of the checkers and downloaders of the Posts sites, with a switch to turn each one on or off and a viewer that shows the newest lines of a file and follows it as it grows (see [Output sub-tab](#output-sub-tab))
 - Log tab history - Messages are also saved to `ui.log.txt` and shown again after jj-dlp restarts, with times in your local time (see [Log tab](#log-tab))
 - Open Log button - Opens `ui.log.txt` in your default app, from the top right of the Log tab (see [Log tab](#log-tab))
-- Open Changelog button - Opens the What's new window, from the top right of the Log tab, beside the Open Log button (see [Changelog](#changelog))
 - Crash log - A panic on any thread is written to `crash.log` with its location and a backtrace, and the next launch reports a previous session that did not exit cleanly. The watcher also writes how jj-dlp ended each time it was started again (see [Crash log](#crash-log) and [Watcher](#watcher))
 - Restart entry - The Log tab shows when jj-dlp was started again by the watcher, and when recorders left running by a crash were stopped (see [Log tab](#log-tab))
 - Performance log - `--perf` writes slow operations, message counts and window stalls to `perf.log` (see [Command-line modes](#command-line-modes))
@@ -1776,7 +1775,6 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - It opens for release candidates too
 - **Close** button - Closes the window and records that this version's changelog was shown. If jj-dlp is closed without pressing it, the window opens again at the next launch
 - What's new button - In the Updates card in Settings. Opens the window again at any time
-- Open Changelog button - In the Log tab, beside the Open Log button. Opens the same window
 - `changelog_seen.json` - Holds `version`, the version whose changelog was last shown. Deleting it while the other files exist makes the window open at the next launch (see [Settings](#settings))
 
 ## Settings resets
@@ -2015,7 +2013,6 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 
 - Sub-tabs - **Engine** and **Output**, shown as buttons at the top of the tab
 - Open Log button - Shown at the top right of the tab, on both sub-tabs. Opens `ui.log.txt` in the settings folder in your default app (see [Settings](#settings))
-- Open Changelog button - Shown beside the Open Log button, on both sub-tabs. Opens the What's new window (see [Changelog](#changelog))
     - **Engine** - The messages described below
     - **Output** - The log files of the sites and streamers (see [Output sub-tab](#output-sub-tab))
 - Messages - The most recent engine messages, with times in your local time. The number kept is the **Buffer Length** in the Log card on the Settings tab, 500 by default (see [Settings tab](#settings-tab)): 
