@@ -3,6 +3,7 @@
 mod drives;
 mod files;
 mod files_view;
+mod logcolor;
 mod logs;
 mod logs_view;
 mod notify_view;
@@ -865,6 +866,8 @@ pub enum Msg {
     SaveNameClip,
     SetLogLines(f32),
     SaveLogLines,
+    SetLogWords(logcolor::WordList, String),
+    ResetLogWords,
     SetRememberSize(bool),
     ResetWindowSize,
     ResetRowRange,
@@ -1049,6 +1052,8 @@ pub struct App {
     auto_scale: f32,
     name_clip: f32,
     log_lines: f32,
+    log_words: prefs::LogWords,
+    log_match: logcolor::Matcher,
     remember_size: bool,
     win_w: f32,
     win_h: f32,
@@ -1084,6 +1089,7 @@ impl App {
         let (row_min, row_max) = prefs::load_row_range();
         let (win_w, win_h) = prefs::startup_window_size();
         let (ui_scale_auto, ui_scale, auto_scale) = prefs::load_ui_scale();
+        let log_words = prefs::load_log_words();
         let mut app = App {
             client,
             settings: crate::settings::default_settings(),
@@ -1142,6 +1148,8 @@ impl App {
             auto_scale,
             name_clip: prefs::load_name_clip(),
             log_lines: prefs::load_log_lines(),
+            log_words: log_words.clone(),
+            log_match: logcolor::Matcher::new(&log_words),
             remember_size: prefs::load_remember_size(),
             win_w,
             win_h,
@@ -1809,6 +1817,20 @@ impl App {
             Msg::SaveLogLines => {
                 prefs::save_log_lines(self.log_lines);
                 self.log.truncate(self.log_lines as usize);
+            }
+            Msg::SetLogWords(which, v) => {
+                match which {
+                    logcolor::WordList::Error => self.log_words.error = v,
+                    logcolor::WordList::Warn => self.log_words.warn = v,
+                    logcolor::WordList::Good => self.log_words.good = v,
+                }
+                self.log_match = logcolor::Matcher::new(&self.log_words);
+                prefs::save_log_words(&self.log_words);
+            }
+            Msg::ResetLogWords => {
+                self.log_words = prefs::LogWords::default();
+                self.log_match = logcolor::Matcher::new(&self.log_words);
+                prefs::save_log_words(&self.log_words);
             }
             Msg::SetRememberSize(on) => {
                 self.remember_size = on;

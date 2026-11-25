@@ -13,3 +13,4 @@
 - moved "Open Settings folder" button
 - changed default "Quick check" to 30 seconds
 - When any streamer setting is changed, the "Settings" button text becomes brighter to let you know that the streamer's settings are different from the site's settings.
+- Added color coding to the Log > Engine tab

@@ -1,5 +1,6 @@
 //! GUI-only preferences stored in gui.json.
 
+use super::logcolor::{DEFAULT_ERROR, DEFAULT_GOOD, DEFAULT_WARN};
 use super::skin::ThemeKind;
 use crate::resets::{reset_field, GuiField, Key, Reset};
 use serde::{Deserialize, Serialize};
@@ -123,6 +124,7 @@ struct Prefs {
     auto_scale: f32,
     name_clip: f32,
     log_lines: f32,
+    log_words: LogWords,
     remember_size: bool,
     win_w: f32,
     win_h: f32,
@@ -133,6 +135,21 @@ struct Prefs {
     extra_drives: Vec<String>,
     drive_order: Vec<String>,
     disk_limits: crate::policy::disks::Limits,
+}
+
+/// Keyword lists (separated by `|`) that colour Engine log messages.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogWords {
+    pub error: String,
+    pub warn: String,
+    pub good: String,
+}
+
+impl Default for LogWords {
+    fn default() -> Self {
+        LogWords { error: DEFAULT_ERROR.to_string(), warn: DEFAULT_WARN.to_string(), good: DEFAULT_GOOD.to_string() }
+    }
 }
 
 /// Preferences of the Files tab.
@@ -176,6 +193,7 @@ impl Default for Prefs {
             auto_scale: UI_SCALE_DEFAULT,
             name_clip: NAME_CLIP_DEFAULT,
             log_lines: LOG_LINES_DEFAULT,
+            log_words: LogWords::default(),
             remember_size: false,
             win_w: WIN_DEFAULT_W,
             win_h: WIN_DEFAULT_H,
@@ -453,6 +471,18 @@ pub fn load_log_lines() -> f32 {
 pub fn save_log_lines(lines: f32) {
     let mut prefs = read();
     prefs.log_lines = lines;
+    write(&prefs);
+}
+
+/// Reads the keyword lists that colour Engine log messages.
+pub fn load_log_words() -> LogWords {
+    read().log_words
+}
+
+/// Saves the keyword lists that colour Engine log messages.
+pub fn save_log_words(words: &LogWords) {
+    let mut prefs = read();
+    prefs.log_words = words.clone();
     write(&prefs);
 }
 

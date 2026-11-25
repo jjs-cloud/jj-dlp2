@@ -1,5 +1,6 @@
 //! View functions for every screen.
 
+use super::logcolor::{self, WordList};
 use super::logs::LogsMsg;
 use super::skin::{self, BtnKind, Skin, ThemeKind, pulse};
 use super::{
@@ -2257,9 +2258,22 @@ impl App {
         .spacing(8);
 
         let log_card = column![
-            self.section_title(s, "LOG"),
+            row![
+                self.section_title(s, "LOG"),
+                Space::new().width(Length::Fill),
+                button(t(&s, "Reset colors").size(12))
+                    .on_press(Msg::ResetLogWords)
+                    .padding([5.0, 10.0])
+                    .style(skin::btn(s, BtnKind::Ghost)),
+            ]
+            .align_y(Alignment::Center),
             muted(&s, "Lines shown in the Log tab. Recent history is saved to ui.log.txt and reloaded at startup."),
             log_lines,
+            Space::new().height(4),
+            muted(&s, "Engine log messages containing a word are colored. Words are not case sensitive; red wins over amber, and amber over green."),
+            self.log_word_row(s, "Red words", s.danger, WordList::Error),
+            self.log_word_row(s, "Amber words", s.warn, WordList::Warn),
+            self.log_word_row(s, "Green words", s.live, WordList::Good),
         ]
         .spacing(8);
 
@@ -2672,6 +2686,26 @@ impl App {
         column![switcher, body].spacing(12).height(Length::Fill).into()
     }
 
+    /// One keyword field of the Log card in Settings.
+    fn log_word_row(&self, s: Skin, label: &'static str, color: Color, which: WordList) -> Element<'_, Msg> {
+        let value = match which {
+            WordList::Error => &self.log_words.error,
+            WordList::Warn => &self.log_words.warn,
+            WordList::Good => &self.log_words.good,
+        };
+        row![
+            t(&s, label).size(13).color(color).width(150),
+            text_input("words separated by |", value)
+                .on_input(move |v| Msg::SetLogWords(which, v))
+                .padding(5)
+                .size(13)
+                .style(skin::input(s)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .into()
+    }
+
     fn log_view(&self, s: Skin) -> Element<'_, Msg> {
         // Rows are keyed by line number so a new line does not make every older line re-lay out.
         let body: Element<'_, Msg> = if self.log.is_empty() {
@@ -2682,9 +2716,14 @@ impl App {
                 .iter()
                 .enumerate()
                 .map(|(i, line)| {
-                    let row: Element<'_, Msg> =
-                        iced::widget::text(line.as_str()).font(iced::Font::MONOSPACE).size(12).color(s.text).into();
-                    (self.log_seq.wrapping_sub(i as u64), row)
+                    let (stamp, msg) = logcolor::split_stamp(line);
+                    let color = self.log_match.level(msg).color(s);
+                    let mut row = Row::new().spacing(14);
+                    if !stamp.is_empty() {
+                        row = row.push(iced::widget::text(stamp).font(iced::Font::MONOSPACE).size(12).color(s.muted));
+                    }
+                    let msg = iced::widget::text(msg).font(iced::Font::MONOSPACE).size(12).color(color).width(Length::Fill);
+                    (self.log_seq.wrapping_sub(i as u64), row.push(msg).into())
                 })
                 .collect();
             iced::widget::keyed_column(rows).spacing(4).into()

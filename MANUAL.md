@@ -1618,10 +1618,14 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
         - Only the size is remembered, not the position, so the window always opens centered on the screen
         - A window that would not fit the screen, such as with a large display scale setting, opens smaller, leaving room for the title bar and the taskbar, and stays centered
         - Reset button - Shown in the card header. Resizes the window to the standard size right away. If **Remember window size** is on, that size is also saved
-    - Log card - Sets how many messages the Log tab keeps (see [Log tab](#log-tab)). Changes apply immediately
+    - Log card - Sets how many messages the Log tab keeps and which words color them (see [Log tab](#log-tab)). Changes apply immediately
         - Buffer Length - How many messages the Log tab shows, from 100 to 5000 in steps of 100 (default 500)
         - Values are saved when you release the slider
         - Lowering it removes the oldest messages from the tab. The saved history in `ui.log.txt` is not changed
+        - Red words, Amber words and Green words - Lists of words, separated by `|`, that color the messages of the Engine sub-tab (see [Log tab](#log-tab)). Changes apply and are saved as you type
+        - A message that contains any word of a list is colored with it. The match is not case sensitive. If a message matches more than one list, red wins over amber and amber over green
+        - Empty entries are ignored, and an empty list colors nothing
+        - Reset colors button - Shown in the card header. Sets the three lists back to their defaults
     - The Compact view card is shown beside the Display, Updates, Window and Log cards when the window is at least 1000 px wide. When it is narrower, the cards are stacked
 
 		   
@@ -1937,7 +1941,7 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
     - `sites.json` - Holds the sites, including each site's **Stream ended after (minutes)** setting, restart warning settings, command output setting, interrupt and error warning switches, flash switches, interrupt and error patterns, site color, recording subfolder layout, recording file check times, split settings, upgrade quality setting, restart stalled recordings setting, quick check settings and notification settings. A field left blank is saved blank, and its default is applied when it is needed. Each site also has a `site_key` (see [Settings resets](#settings-resets))
     - `streamers.json` - Holds the streamers, including each streamer's log, subfolder, notification, split, auto-suffix, upgrade quality, quick check, intro delay, schedule and always record options, and the time each schedule last switched the streamer on and off. The order of the streamers in the file is the priority order (see [Priority](#priority))
     - `state.json` - Holds the number used for the next site or streamer you add
-    - `gui.json` - Holds the theme, the Compact view settings, the Full view column width, the UI scale settings, the **Live first** setting, the **Group by site** setting, the sort option and the sort direction, the remembered window size, the Log tab buffer length, the **Wrap** setting of the Processes tab output, the **Wrap** setting of the Output sub-tab of the Log tab, the Files tab settings, the **Newest first** and card size settings of the Posts page, and the drives added to the Disk space card, their order and the Disk space display settings
+    - `gui.json` - Holds the theme, the Compact view settings, the Full view column width, the UI scale settings, the **Live first** setting, the **Group by site** setting, the sort option and the sort direction, the remembered window size, the Log tab buffer length, the Log tab color word lists, the **Wrap** setting of the Processes tab output, the **Wrap** setting of the Output sub-tab of the Log tab, the Files tab settings, the **Newest first** and card size settings of the Posts page, and the drives added to the Disk space card, their order and the Disk space display settings
     - `file_owners.json` - Holds the streamer and the site that each recorded file came from, used to group the files on the Files tab (see [Files tab](#files-tab))
     - `posts.json` - Holds the Posts sites, with their settings, their `site_key` and their accounts (see [Posts](#posts))
     - `posts_library.json` - Holds the posts that have been found, with whether each is viewed, starred or downloaded and where its file is (see [Posts](#posts))
@@ -2050,6 +2054,8 @@ A desktop app written in Rust that watches streamers with [yt-dlp](https://githu
 - jj-dlp being started again by the watcher after it exited unexpectedly, with how it ended (see [Watcher](#watcher))
 - recorder processes left running by a previous session that are stopped (see [Recorder cleanup](#recorder-cleanup))
 - `jj-dlp vX is up to date` after Check now
+- Colors - The time of each message is dimmed. The message is red, amber or green when it contains a word from the Red words, Amber words or Green words lists in the Log card on the Settings tab (see [Settings tab](#settings-tab)), and is shown in the normal color otherwise
+    - Colors are worked out from the message text when it is shown, so messages saved in `ui.log.txt` are colored too, and changing a list recolors every message at once
 - History - Messages are saved to `ui.log.txt` in the settings folder with the full local date and time, and the Log tab shows the saved messages again after jj-dlp restarts (see [Settings](#settings))
     - Each launch adds a `--- session started (vX) ---` message, so the messages of different sessions can be told apart
     - When `ui.log.txt` grows past 4 MB it is cut back to its newest 5000 lines
