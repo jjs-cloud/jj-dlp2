@@ -804,7 +804,7 @@ impl Engine {
         };
         match recorder::spawn_recorder(spec, &self.tracked) {
             Ok(handle) => {
-                self.log(format!("recording {}", streamer.name));
+                self.log(format!("recording started for {}", streamer.name));
                 self.recorders.insert(id, handle);
                 self.emit_status(streamer_id);
             }

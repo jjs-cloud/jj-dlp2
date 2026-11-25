@@ -6,7 +6,7 @@ use iced::Color;
 
 pub const DEFAULT_ERROR: &str = "failed|could not|error|not found|unknown|broken|crash|problem:|unexpectedly|interrupt|denied";
 pub const DEFAULT_WARN: &str = "stalled|inactive|ignored|limit|warning|not armed|cannot|already monitored|unmatched|restarting|lower priority";
-pub const DEFAULT_GOOD: &str = "is live|new from|ready|up to date|enabled|cleared|no problems";
+pub const DEFAULT_GOOD: &str = "is live|recording started|new from|ready|up to date|enabled|cleared|no problems";
 
 /// Which keyword list a Settings field edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
